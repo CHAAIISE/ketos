@@ -11,6 +11,7 @@ const DEPTH_MS = 15_000;
 
 export const perpsKeys = {
   all: ["perps"] as const,
+  config: () => ["perps", "config"] as const,
   markets: () => ["perps", "markets"] as const,
   prices: () => ["perps", "prices"] as const,
   account: (accountId: string | null) => ["perps", "account", accountId] as const,
@@ -20,6 +21,12 @@ export const perpsKeys = {
   depth: (marketId: MarketId | null) => ["perps", "depth", marketId] as const,
   liquidations: (limit: number) => ["perps", "liquidations", limit] as const,
 };
+
+/** Token, oracle and keeper accounts; fixed at deployment. */
+export function useConfig() {
+  const { views } = useNear();
+  return useQuery({ queryKey: perpsKeys.config(), queryFn: () => views.config(), staleTime: Infinity });
+}
 
 export function useMarkets() {
   const { views } = useNear();

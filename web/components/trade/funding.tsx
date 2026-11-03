@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useNow } from "@/components/landing/live-time";
 import { useTxToast } from "@/components/app/tx-toast";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel, FieldMessage, Input } from "@/components/ui/input";
 import type { AccountSummary } from "@/hooks/use-perps-queries";
-import { useDepositMargin, useFaucet } from "@/hooks/use-perps-mutations";
+import { useDepositMargin, useFaucet, useWithdrawMargin } from "@/hooks/use-perps-mutations";
 import { formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
 
 /** Wait in whole minutes, rounded up, e.g. "42 min". */
@@ -61,6 +61,7 @@ export function FaucetButton({
 export function DepositMarginForm({ account, primary }: { account: AccountSummary; primary: boolean }) {
   const deposit = useDepositMargin();
   const { track } = useTxToast();
+  const inputId = useId();
   const [input, setInput] = useState("");
   const amount = parseUsdc(input);
   const error =
@@ -89,7 +90,7 @@ export function DepositMarginForm({ account, primary }: { account: AccountSummar
     >
       <Field>
         <div className="flex items-baseline justify-between">
-          <FieldLabel htmlFor="deposit-margin">Amount (tUSDC)</FieldLabel>
+          <FieldLabel htmlFor={inputId}>Amount (tUSDC)</FieldLabel>
           <button
             type="button"
             onClick={() => setInput(formatUsdc(account.usdcBalance, { grouping: false }))}
@@ -99,7 +100,7 @@ export function DepositMarginForm({ account, primary }: { account: AccountSummar
           </button>
         </div>
         <Input
-          id="deposit-margin"
+          id={inputId}
           name="deposit-margin"
           inputMode="decimal"
           autoComplete="off"
@@ -119,6 +120,72 @@ export function DepositMarginForm({ account, primary }: { account: AccountSummar
         disabled={!amount || Boolean(error) || deposit.isPending}
       >
         {deposit.isPending ? "Depositing…" : "Deposit margin"}
+      </Button>
+    </form>
+  );
+}
+
+/** Sends free margin (not locked in a position) back to the tUSDC wallet. */
+export function WithdrawMarginForm({ account }: { account: AccountSummary }) {
+  const withdraw = useWithdrawMargin();
+  const { track } = useTxToast();
+  const inputId = useId();
+  const [input, setInput] = useState("");
+  const amount = parseUsdc(input);
+  const error =
+    input.trim() === ""
+      ? null
+      : amount === null
+        ? "Enter an amount like 200 or 12.50."
+        : amount === 0n
+          ? "Enter an amount above zero."
+          : amount > account.margin
+            ? `Your free margin is ${formatUsd(account.margin)}. Close a position to free more.`
+            : null;
+
+  return (
+    <form
+      className="flex flex-col gap-3"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (!amount || error) return;
+        const done = await track(() => withdraw.mutateAsync(amount), {
+          pending: `Withdrawing ${formatUsd(amount)} to your wallet…`,
+          success: `${formatUsd(amount)} sent back to your wallet`,
+        });
+        if (done) setInput("");
+      }}
+    >
+      <Field>
+        <div className="flex items-baseline justify-between">
+          <FieldLabel htmlFor={inputId}>Amount (tUSDC)</FieldLabel>
+          <button
+            type="button"
+            onClick={() => setInput(formatUsdc(account.margin, { grouping: false }))}
+            className="rounded-sm text-label text-tertiary tabular-nums hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            Free {formatUsd(account.margin)} · Max
+          </button>
+        </div>
+        <Input
+          id={inputId}
+          name="withdraw-margin"
+          inputMode="decimal"
+          autoComplete="off"
+          placeholder="100"
+          value={input}
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => setInput(event.target.value)}
+        />
+        {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
+      </Field>
+      <Button
+        type="submit"
+        variant="secondary"
+        className="w-full"
+        disabled={!amount || Boolean(error) || withdraw.isPending || account.margin === 0n}
+      >
+        {withdraw.isPending ? "Withdrawing…" : "Withdraw to wallet"}
       </Button>
     </form>
   );
