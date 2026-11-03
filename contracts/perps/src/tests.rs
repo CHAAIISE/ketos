@@ -265,6 +265,20 @@ fn open_locks_margin_and_charges_fee_to_vault() {
 }
 
 #[test]
+fn open_positions_are_listed_page_by_page() {
+    let mut perps = trading_setup();
+    let a = open(&mut perps, "NEAR", Side::Long, 10 * USD, 2);
+    let b = open(&mut perps, "ZEC", Side::Short, 10 * USD, 2);
+    let c = open(&mut perps, "NEAR", Side::Short, 10 * USD, 2);
+    assert_eq!(perps.get_open_positions(None, None), vec![a.clone(), b.clone(), c.clone()]);
+    assert_eq!(perps.get_open_positions(Some(1), Some(1)), vec![b.clone()]);
+    assert!(perps.get_open_positions(Some(3), None).is_empty());
+    ctx_at("alice.test", T0_MS);
+    perps.close_position(a.id);
+    assert_eq!(perps.get_open_positions(None, None).len(), 2);
+}
+
+#[test]
 fn winning_long_is_paid_by_the_vault() {
     let mut perps = trading_setup();
     let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);

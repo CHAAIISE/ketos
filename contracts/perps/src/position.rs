@@ -342,4 +342,16 @@ impl Perps {
             .filter_map(|id| self.positions.get(id).map(|p| self.position_view(*id, p)))
             .collect()
     }
+
+    /// All open positions, `limit` (≤ 100, default 50) at a time from `from_index`: lets a
+    /// keeper find under-margined positions without knowing their owners.
+    pub fn get_open_positions(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<PositionView> {
+        let limit = limit.unwrap_or(50).min(100) as usize;
+        self.positions
+            .iter()
+            .skip(from_index.unwrap_or(0) as usize)
+            .take(limit)
+            .map(|(id, p)| self.position_view(*id, p))
+            .collect()
+    }
 }
