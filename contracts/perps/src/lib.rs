@@ -2,13 +2,14 @@
 //! and leverage capped by exit liquidity measured on NEAR Intents.
 //!
 //! There is no admin method that can pause markets or move user funds: the only privileged
-//! account is the keeper, limited to publishing depth samples and refreshing prices.
+//! account is the keeper, limited to publishing depth samples. Prices come from the oracle.
 
 pub mod account;
 pub mod depth;
 pub mod liquidation;
 pub mod market;
 pub mod math;
+pub mod oracle;
 pub mod position;
 pub mod vault;
 

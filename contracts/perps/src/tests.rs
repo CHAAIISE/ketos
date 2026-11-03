@@ -803,3 +803,148 @@ fn cannot_withdraw_more_shares_than_held() {
     ctx("bob.test", 1);
     let _ = perps.withdraw_vault(U128(1));
 }
+
+// Oracle
+
+use crate::oracle::{to_price8, AssetOptionalPrice, OraclePrice, PriceData};
+use near_sdk::json_types::U64;
+
+const ORACLE: &str = "oracle.test";
+
+fn price_data(at_ms: u64, prices: &[(&str, Option<(u128, u8)>)]) -> PriceData {
+    PriceData {
+        timestamp: U64(at_ms * 1_000_000),
+        recency_duration_sec: 300,
+        prices: prices
+            .iter()
+            .map(|(asset_id, price)| AssetOptionalPrice {
+                asset_id: asset_id.to_string(),
+                price: price.map(|(multiplier, decimals)| OraclePrice {
+                    multiplier: U128(multiplier),
+                    decimals,
+                }),
+            })
+            .collect(),
+    }
+}
+
+fn push_prices(perps: &mut Perps, from: &str, now_ms: u64, data: PriceData) {
+    ctx_at(from, now_ms);
+    perps.oracle_on_call(id(CONTRACT), data, String::new());
+}
+
+fn stored_price(perps: &Perps, market: &str) -> (u128, u64) {
+    let m = perps.get_market(market.into()).unwrap().market;
+    (m.price.0, m.price_timestamp_ms)
+}
+
+#[test]
+fn refresh_asks_the_oracle_to_push_all_market_prices() {
+    let mut perps = setup();
+    ctx("anyone.test", 0);
+    let _ = perps.refresh_prices();
+    let receipts = get_created_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].receiver_id, id(ORACLE));
+    let MockAction::FunctionCallWeight {
+        method_name,
+        args,
+        attached_deposit,
+        ..
+    } = &receipts[0].actions[0]
+    else {
+        panic!("expected oracle_call");
+    };
+    assert_eq!(method_name.as_slice(), b"oracle_call");
+    assert_eq!(*attached_deposit, NearToken::from_millinear(20));
+    let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+    assert_eq!(args["receiver_id"], CONTRACT);
+    assert_eq!(
+        args["asset_ids"],
+        near_sdk::serde_json::json!(["nbtc.bridge.near", "aurora", "wrap.near", "zec.omft.near"])
+    );
+}
+
+#[test]
+#[should_panic(expected = "ERR_ORACLE_FUNDS_LOW")]
+fn refresh_needs_the_oracle_deposit_in_free_balance() {
+    let mut perps = setup();
+    testing_env!(VMContextBuilder::new()
+        .current_account_id(id(CONTRACT))
+        .predecessor_account_id(id("anyone.test"))
+        .account_balance(NearToken::from_millinear(19))
+        .storage_usage(0)
+        .build());
+    let _ = perps.refresh_prices();
+}
+
+#[test]
+#[should_panic(expected = "ERR_NOT_ORACLE")]
+fn price_push_from_another_account_is_refused() {
+    let mut perps = setup();
+    let data = price_data(T0_MS, &[("wrap.near", Some((1, 8)))]);
+    push_prices(&mut perps, "mallory.test", T0_MS, data);
+}
+
+#[test]
+fn oracle_push_stores_8_decimal_prices_and_enables_trading() {
+    let mut perps = setup();
+    deposit(&mut perps, "alice.test", 200 * USD);
+    perps.vault_usdc = 10_000 * USD;
+    set_depth_at(&mut perps, "NEAR", measured_curve(), T0_MS);
+
+    // Shapes seen on testnet (8 decimals), another precision, a missing price, an unlisted asset.
+    let data = price_data(
+        T0_MS - 1_500,
+        &[
+            ("nbtc.bridge.near", Some((7_756_150_000_000, 8))),
+            ("aurora", Some((2_292_595_000_000_000, 12))),
+            ("wrap.near", Some((382_231_700, 8))),
+            ("zec.omft.near", None),
+            ("doge.near", Some((1, 8))),
+        ],
+    );
+    push_prices(&mut perps, ORACLE, T0_MS, data);
+    assert_eq!(stored_price(&perps, "BTC"), (7_756_150_000_000, T0_MS - 1_500));
+    assert_eq!(stored_price(&perps, "ETH"), (229_259_500_000, T0_MS - 1_500));
+    assert_eq!(stored_price(&perps, "NEAR"), (382_231_700, T0_MS - 1_500));
+    assert_eq!(stored_price(&perps, "ZEC"), (0, 0));
+
+    let prices = perps.get_prices();
+    assert_eq!(prices.len(), 4);
+    assert!(prices.iter().find(|p| p.market_id == "NEAR").unwrap().is_fresh);
+    assert!(!prices.iter().find(|p| p.market_id == "ZEC").unwrap().is_fresh);
+
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    assert_eq!(p.entry_price.0, 382_231_700);
+}
+
+#[test]
+fn older_push_is_ignored_and_future_timestamps_are_clamped() {
+    let mut perps = setup();
+    let future = price_data(T0_MS + 60_000, &[("wrap.near", Some((400_000_000, 8)))]);
+    push_prices(&mut perps, ORACLE, T0_MS, future);
+    assert_eq!(stored_price(&perps, "NEAR"), (400_000_000, T0_MS));
+
+    let older = price_data(T0_MS - 1, &[("wrap.near", Some((300_000_000, 8)))]);
+    push_prices(&mut perps, ORACLE, T0_MS + 10, older);
+    assert_eq!(stored_price(&perps, "NEAR"), (400_000_000, T0_MS));
+
+    let zero = price_data(T0_MS + 20, &[("wrap.near", Some((0, 8)))]);
+    push_prices(&mut perps, ORACLE, T0_MS + 20, zero);
+    assert_eq!(stored_price(&perps, "NEAR"), (400_000_000, T0_MS));
+
+    // The price ages out for trading after 120 s.
+    ctx_at("anyone.test", T0_MS + 120_001);
+    assert!(!perps.get_prices().iter().any(|p| p.is_fresh));
+}
+
+#[test]
+fn oracle_prices_convert_to_8_decimals() {
+    let p = |multiplier, decimals| to_price8(&OraclePrice { multiplier: U128(multiplier), decimals });
+    assert_eq!(p(382_231_700, 8), Some(382_231_700));
+    assert_eq!(p(38_223, 4), Some(382_230_000));
+    assert_eq!(p(123_456_789, 10), Some(1_234_567));
+    assert_eq!(p(u128::MAX, 0), None);
+    assert_eq!(p(u128::MAX, 255), Some(0));
+}
