@@ -7,7 +7,11 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "contracts:build": "bash scripts/build-contracts.sh",
-    "contracts:test": "pnpm contracts:build && cd contracts && cargo test --workspace"
+    "contracts:test": "pnpm contracts:build && cd contracts && cargo test --workspace",
+    "depth:sample": "tsx scripts/depth-sample.ts"
   },
-  "packageManager": "pnpm@12.16.1"
+  "packageManager": "pnpm@12.16.1",
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
 }
