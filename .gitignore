@@ -50,3 +50,11 @@ cache/
 broadcast/
 
 .DS_Store
+
+# Rust / NEAR
+target/
+contracts/res/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts

@@ -1,0 +1,15 @@
+[package]
+name = "perps"
+version = "0.1.0"
+description = "Ketos perpetual futures markets with exit-liquidity-sized open interest"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = { workspace = true }
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }

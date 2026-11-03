@@ -1,0 +1,15 @@
+[package]
+name = "mock-oracle"
+version = "0.1.0"
+description = "Local price oracle exposing the OutLayer price-oracle interface"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = { workspace = true }
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }
