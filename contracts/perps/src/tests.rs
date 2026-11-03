@@ -4,6 +4,7 @@ use near_sdk::mock::MockAction;
 use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
 use near_sdk::{testing_env, AccountId, Gas, NearToken, PromiseError, PromiseOrValue};
 
+use crate::depth::DepthSample;
 use crate::market::USD;
 use crate::math;
 use crate::position::{PositionView, Side};
@@ -51,7 +52,7 @@ fn lists_four_markets_with_oracle_ids() {
     let markets = perps.get_markets();
     let ids: Vec<_> = markets
         .iter()
-        .map(|m| (m.id.as_str(), m.oracle_asset_id.as_str()))
+        .map(|m| (m.market.id.as_str(), m.market.oracle_asset_id.as_str()))
         .collect();
     assert_eq!(
         ids,
@@ -62,7 +63,11 @@ fn lists_four_markets_with_oracle_ids() {
             ("ZEC", "zec.omft.near")
         ]
     );
-    assert_eq!(perps.get_market("ZEC".into()).unwrap().oi_short, U128(0));
+    let zec = perps.get_market("ZEC".into()).unwrap();
+    assert_eq!(zec.market.oi_short, U128(0));
+    // No depth sample yet: closed, no capacity.
+    assert!(!zec.is_open);
+    assert_eq!(zec.max_oi_per_side, U128(0));
     assert!(perps.get_market("DOGE".into()).is_none());
     assert_eq!(perps.get_config().usdc_id, id(USDC));
 }
@@ -191,13 +196,38 @@ fn set_price(perps: &mut Perps, market: &str, price: u128, at_ms: u64) {
     m.price_timestamp_ms = at_ms;
 }
 
-/// NEAR market at $4 with 5x allowed, trader with 200 USDC margin, vault with 10,000 USDC.
+/// Curve shaped like the 2026-11-03 1Click measurement: ~25 bps up to $100k, then no liquidity.
+fn measured_curve() -> Vec<DepthSample> {
+    [
+        (1_000, Some(20)),
+        (10_000, Some(20)),
+        (50_000, Some(25)),
+        (100_000, Some(31)),
+        (250_000, None),
+        (500_000, None),
+        (1_000_000, None),
+    ]
+    .into_iter()
+    .map(|(size_usd, impact_bps)| DepthSample {
+        size_usd,
+        impact_bps,
+    })
+    .collect()
+}
+
+fn set_depth_at(perps: &mut Perps, market: &str, samples: Vec<DepthSample>, at_ms: u64) {
+    ctx_at("keeper.test", at_ms);
+    perps.set_depth(market.into(), samples, at_ms);
+}
+
+/// NEAR and ZEC at $4 with the measured $100k exit capacity (5x, $100k OI per side), trader
+/// with 200 USDC margin, vault with 10,000 USDC.
 fn trading_setup() -> Perps {
     let mut perps = setup();
     deposit(&mut perps, "alice.test", 200 * USD);
     perps.vault_usdc = 10_000 * USD;
     for m in ["NEAR", "ZEC"] {
-        perps.markets.get_mut(&m.to_string()).unwrap().max_leverage = 5;
+        set_depth_at(&mut perps, m, measured_curve(), T0_MS);
         set_price(&mut perps, m, P4, T0_MS);
     }
     perps
@@ -224,7 +254,7 @@ fn open_locks_margin_and_charges_fee_to_vault() {
     assert_eq!(margin(&perps, "alice.test"), 100 * USD);
     assert_eq!(perps.vault_usdc, 10_000 * USD + 500_000);
     assert_eq!(
-        perps.get_market("NEAR".into()).unwrap().oi_long.0,
+        perps.get_market("NEAR".into()).unwrap().market.oi_long.0,
         500 * USD
     );
     assert_eq!(perps.get_positions(id("alice.test")), vec![p.clone()]);
@@ -239,8 +269,9 @@ fn winning_long_is_paid_by_the_vault() {
     let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
     // +10%: PnL +50 USDC, closing fee 0.5, borrow fee over 1 minute.
     let payout = close_at(&mut perps, p.id, 440_000_000, T0_MS + 60_000);
-    // Index grows by ceil(10_090_000 / 60) = 168_167; fee = ceil(500e6 × 168_167 / 1e12) = 85.
-    assert_eq!(payout, 99_500_000 + 50 * USD - 500_000 - 85);
+    // Utilization 500 / 100,000: rate = 10_000_000 + 450_000 per hour; the index grows by
+    // ceil(10_450_000 / 60) = 174_167; fee = ceil(500e6 × 174_167 / 1e12) = 88.
+    assert_eq!(payout, 99_500_000 + 50 * USD - 500_000 - 88);
     assert_eq!(margin(&perps, "alice.test"), 100 * USD + payout);
     // Vault + trader balances are conserved.
     assert_eq!(
@@ -249,7 +280,7 @@ fn winning_long_is_paid_by_the_vault() {
     );
     assert!(perps.get_position(p.id).is_none());
     assert!(perps.get_positions(id("alice.test")).is_empty());
-    assert_eq!(perps.get_market("NEAR".into()).unwrap().oi_long.0, 0);
+    assert_eq!(perps.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
 }
 
 #[test]
@@ -293,14 +324,14 @@ fn loss_beyond_margin_is_absorbed_by_the_vault_floor_at_zero() {
 fn borrow_fee_accrues_hourly_with_utilization() {
     let mut perps = trading_setup();
     let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
-    // Utilization 500 / 500,000 of the hard cap: rate = base + slope × 0.001 per hour.
-    let rate = math::BORROW_BASE_PER_HOUR + math::BORROW_SLOPE_PER_HOUR / 1_000;
+    // Utilization 500 / 100,000 of the exit capacity: rate = base + slope × 0.005 per hour.
+    let rate = math::BORROW_BASE_PER_HOUR + math::BORROW_SLOPE_PER_HOUR / 200;
     let expected = (500 * USD * rate * 10).div_ceil(math::RATE_PRECISION);
     set_price(&mut perps, "NEAR", P4, T0_MS + 10 * HOUR_MS);
     ctx_at("bob.test", T0_MS + 10 * HOUR_MS);
     let view = perps.get_position(p.id).unwrap();
     assert_eq!(view.borrow_fee.0, expected);
-    assert_eq!(expected, 50_450); // ~0.01% of notional over 10 hours
+    assert_eq!(expected, 52_250); // ~0.01% of notional over 10 hours
     assert_eq!(view.equity.0, (p.margin.0 - expected) as i128);
 
     let payout = close_at(&mut perps, p.id, P4, T0_MS + 10 * HOUR_MS);
@@ -314,11 +345,12 @@ fn borrow_rate_is_charged_at_the_utilization_in_force() {
     // A second, bigger position opened 5 hours later must not raise the first one's fee
     // for the hours already elapsed.
     set_price(&mut perps, "NEAR", P4, T0_MS + 5 * HOUR_MS);
+    set_depth_at(&mut perps, "NEAR", measured_curve(), T0_MS + 5 * HOUR_MS);
     ctx_at("alice.test", T0_MS + 5 * HOUR_MS);
     perps.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5);
     ctx_at("alice.test", T0_MS + 5 * HOUR_MS);
     let fee = perps.get_position(first.id).unwrap().borrow_fee.0;
-    let rate = math::borrow_rate_per_hour(100 * USD, 500_000 * USD);
+    let rate = math::borrow_rate_per_hour(100 * USD, 100_000 * USD);
     assert_eq!(fee, (100 * USD * (rate * 5)).div_ceil(math::RATE_PRECISION));
 }
 
@@ -343,11 +375,7 @@ fn close_with_stale_price_is_refused() {
 #[should_panic(expected = "ERR_NO_PRICE")]
 fn missing_price_is_refused() {
     let mut perps = trading_setup();
-    perps
-        .markets
-        .get_mut(&"BTC".to_string())
-        .unwrap()
-        .max_leverage = 5;
+    set_depth_at(&mut perps, "BTC", measured_curve(), T0_MS);
     ctx_at("alice.test", T0_MS);
     perps.open_position("BTC".into(), Side::Long, U128(100 * USD), 2);
 }
@@ -373,4 +401,143 @@ fn only_owner_can_close() {
     let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
     ctx_at("bob.test", T0_MS);
     perps.close_position(p.id);
+}
+
+// Exit-liquidity caps
+
+fn curve_up_to(capacity_usd: u64) -> Vec<DepthSample> {
+    [1_000, 10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+        .into_iter()
+        .map(|size_usd| DepthSample {
+            size_usd,
+            impact_bps: (size_usd <= capacity_usd).then_some(40),
+        })
+        .collect()
+}
+
+#[test]
+fn depth_sets_leverage_tier_and_cap() {
+    let mut perps = setup();
+    // (measured capacity, max leverage, max OI per side): OI is also bounded by the hard cap.
+    let tiers = [
+        (1_000_000, 20, 500_000),
+        (500_000, 10, 500_000),
+        (250_000, 10, 250_000),
+        (100_000, 5, 100_000),
+        (50_000, 5, 50_000),
+        (10_000, 2, 10_000),
+    ];
+    for (i, (capacity, leverage, max_oi)) in tiers.into_iter().enumerate() {
+        let at = T0_MS + i as u64 * 60_000;
+        set_depth_at(&mut perps, "BTC", curve_up_to(capacity), at);
+        let m = perps.get_market("BTC".into()).unwrap();
+        assert_eq!(m.market.max_leverage, leverage, "capacity {capacity}");
+        assert_eq!(m.market.exit_capacity.0, capacity as u128 * USD);
+        assert_eq!(m.max_oi_per_side.0, max_oi * USD);
+        assert!(m.is_open);
+    }
+    // Under $10k the market stays listed but closed.
+    set_depth_at(&mut perps, "BTC", curve_up_to(1_000), T0_MS + HOUR_MS);
+    let m = perps.get_market("BTC".into()).unwrap();
+    assert_eq!(m.market.max_leverage, 2);
+    assert!(!m.is_open);
+}
+
+#[test]
+fn size_beyond_exit_capacity_is_refused_with_remaining_cap() {
+    let mut perps = trading_setup();
+    deposit(&mut perps, "whale.test", 30_000 * USD);
+    ctx_at("whale.test", T0_MS);
+    perps.open_position("ZEC".into(), Side::Short, U128(12_000 * USD), 5);
+    ctx_at("whale.test", T0_MS);
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        perps.open_position("ZEC".into(), Side::Short, U128(8_001 * USD), 5);
+    }))
+    .unwrap_err();
+    let msg = err.downcast_ref::<String>().unwrap();
+    assert!(msg.contains("ERR_EXCEEDS_EXIT_LIQUIDITY: cap 40000000000"), "{msg}");
+    // Exactly the remaining cap fits; the other side has its own cap.
+    ctx_at("whale.test", T0_MS);
+    perps.open_position("ZEC".into(), Side::Short, U128(8_000 * USD), 5);
+    ctx_at("whale.test", T0_MS);
+    perps.open_position("ZEC".into(), Side::Long, U128(2_000 * USD), 5);
+    let zec = perps.get_market("ZEC".into()).unwrap().market;
+    assert_eq!((zec.oi_short.0, zec.oi_long.0), (100_000 * USD, 10_000 * USD));
+}
+
+#[test]
+fn market_closes_when_depth_is_older_than_30_minutes() {
+    let mut perps = trading_setup();
+    let limit = T0_MS + 30 * 60_000;
+    set_price(&mut perps, "NEAR", P4, limit);
+    ctx_at("alice.test", limit);
+    assert!(perps.get_market("NEAR".into()).unwrap().is_open);
+    let p = perps.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5);
+
+    set_price(&mut perps, "NEAR", P4, limit + 1);
+    ctx_at("alice.test", limit + 1);
+    assert!(!perps.get_market("NEAR".into()).unwrap().is_open);
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        perps.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5);
+    }))
+    .unwrap_err();
+    assert!(err
+        .downcast_ref::<String>()
+        .unwrap()
+        .contains("ERR_MARKET_CLOSED: depth sample older than 30 minutes"));
+    // Closing is never blocked by stale depth.
+    ctx_at("alice.test", limit + 1);
+    perps.close_position(p.id);
+}
+
+#[test]
+#[should_panic(expected = "ERR_MARKET_CLOSED: exit liquidity below $10,000")]
+fn market_with_thin_exit_liquidity_takes_no_positions() {
+    let mut perps = trading_setup();
+    set_depth_at(&mut perps, "NEAR", curve_up_to(1_000), T0_MS + 1);
+    set_price(&mut perps, "NEAR", P4, T0_MS + 1);
+    ctx_at("alice.test", T0_MS + 1);
+    perps.open_position("NEAR".into(), Side::Long, U128(10 * USD), 2);
+}
+
+#[test]
+fn depth_history_keeps_the_last_48_samples() {
+    let mut perps = setup();
+    for i in 0..50u64 {
+        set_depth_at(&mut perps, "ETH", curve_up_to(50_000), T0_MS + i * 60_000);
+    }
+    let depth = perps.get_depth("ETH".into()).unwrap();
+    assert_eq!(depth.history.len(), 48);
+    assert_eq!(depth.history[0].measured_at_ms, T0_MS + 2 * 60_000);
+    assert_eq!(depth.history[47].measured_at_ms, T0_MS + 49 * 60_000);
+    assert_eq!(depth.history[47].exit_capacity_usd, 50_000);
+    assert_eq!(depth.history[47].samples.len(), 7);
+    assert_eq!(depth.market.market.depth_measured_at_ms, T0_MS + 49 * 60_000);
+    assert!(perps.get_depth("DOGE".into()).is_none());
+    assert!(perps.get_depth("BTC".into()).unwrap().history.is_empty());
+}
+
+#[test]
+#[should_panic(expected = "ERR_NOT_KEEPER")]
+fn only_keeper_sets_depth() {
+    let mut perps = setup();
+    ctx_at("alice.test", T0_MS);
+    perps.set_depth("BTC".into(), curve_up_to(1_000_000), T0_MS);
+}
+
+#[test]
+#[should_panic(expected = "ERR_DEPTH_NOT_NEWER")]
+fn older_depth_sample_is_refused() {
+    let mut perps = setup();
+    set_depth_at(&mut perps, "BTC", curve_up_to(100_000), T0_MS);
+    set_depth_at(&mut perps, "BTC", curve_up_to(1_000_000), T0_MS);
+}
+
+#[test]
+#[should_panic(expected = "ERR_INVALID_SAMPLES: sizes must be strictly increasing")]
+fn unsorted_samples_are_refused() {
+    let mut perps = setup();
+    let mut samples = curve_up_to(100_000);
+    samples.swap(0, 1);
+    set_depth_at(&mut perps, "BTC", samples, T0_MS);
 }

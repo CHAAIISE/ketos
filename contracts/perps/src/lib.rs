@@ -5,6 +5,7 @@
 //! account is the keeper, limited to publishing depth samples and refreshing prices.
 
 pub mod account;
+pub mod depth;
 pub mod market;
 pub mod math;
 pub mod position;
@@ -18,6 +19,7 @@ use near_sdk::{
 };
 
 use account::Account;
+use depth::DepthRecord;
 use market::{default_markets, Market, MarketId};
 use position::{Position, PositionId};
 
@@ -29,6 +31,7 @@ enum StorageKey {
     Markets,
     Accounts,
     Positions,
+    Depth,
 }
 
 #[near(serializers = [json])]
@@ -49,6 +52,8 @@ pub struct Perps {
     accounts: LookupMap<AccountId, Account>,
     positions: IterableMap<PositionId, Position>,
     next_position_id: PositionId,
+    /// Depth history per market, oldest first.
+    depth: LookupMap<MarketId, Vec<DepthRecord>>,
     /// USDC owned by the LP vault: fees, trader losses, minus trader gains paid out.
     vault_usdc: u128,
 }
@@ -69,6 +74,7 @@ impl Perps {
             accounts: LookupMap::new(StorageKey::Accounts),
             positions: IterableMap::new(StorageKey::Positions),
             next_position_id: 0,
+            depth: LookupMap::new(StorageKey::Depth),
             vault_usdc: 0,
         }
     }

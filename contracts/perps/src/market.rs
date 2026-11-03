@@ -1,6 +1,7 @@
 use near_sdk::json_types::U128;
 use near_sdk::{env, near, require};
 
+use crate::depth::MAX_DEPTH_AGE_MS;
 use crate::math::{borrow_index_delta, borrow_rate_per_hour};
 use crate::position::Side;
 use crate::{Perps, PerpsExt};
@@ -13,6 +14,9 @@ pub const DEFAULT_HARD_CAP: u128 = 500_000 * USD;
 
 /// Leverage allowed before any depth sample: the lowest tier.
 pub const DEFAULT_MAX_LEVERAGE: u32 = 2;
+
+/// Below this exit capacity a market takes no new positions.
+pub const MIN_OPEN_CAPACITY: u128 = 10_000 * USD;
 
 /// Prices older than this are refused for opening and closing positions.
 pub const MAX_PRICE_AGE_MS: u64 = 120_000;
@@ -28,6 +32,10 @@ pub struct Market {
     pub oracle_asset_id: String,
     /// Maximum open interest per side in USDC units, before the exit-liquidity cap.
     pub hard_cap: U128,
+    /// Largest size (USDC units) that exits to USDC on NEAR Intents within 100 bps of impact.
+    pub exit_capacity: U128,
+    /// When the depth behind `exit_capacity` was measured; zero before the first sample.
+    pub depth_measured_at_ms: u64,
     pub oi_long: U128,
     pub oi_short: U128,
     pub max_leverage: u32,
@@ -40,12 +48,25 @@ pub struct Market {
     pub last_accrual_ms: u64,
 }
 
+/// Market with the limits derived from its latest depth sample at the current block time.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarketView {
+    #[serde(flatten)]
+    pub market: Market,
+    pub max_oi_per_side: U128,
+    /// False when exit capacity is under $10k or the depth sample is older than 30 minutes.
+    pub is_open: bool,
+}
+
 impl Market {
     pub fn new(id: &str, oracle_asset_id: &str, hard_cap: u128) -> Self {
         Self {
             id: id.to_string(),
             oracle_asset_id: oracle_asset_id.to_string(),
             hard_cap: U128(hard_cap),
+            exit_capacity: U128(0),
+            depth_measured_at_ms: 0,
             oi_long: U128(0),
             oi_short: U128(0),
             max_leverage: DEFAULT_MAX_LEVERAGE,
@@ -58,7 +79,28 @@ impl Market {
     }
 
     pub fn max_oi_per_side(&self) -> u128 {
-        self.hard_cap.0
+        self.hard_cap.0.min(self.exit_capacity.0)
+    }
+
+    /// Why the market refuses new positions at `now_ms`, if it does.
+    pub fn closed_reason(&self, now_ms: u64) -> Option<&'static str> {
+        if self.depth_measured_at_ms == 0
+            || now_ms.saturating_sub(self.depth_measured_at_ms) > MAX_DEPTH_AGE_MS
+        {
+            Some("ERR_MARKET_CLOSED: depth sample older than 30 minutes")
+        } else if self.exit_capacity.0 < MIN_OPEN_CAPACITY {
+            Some("ERR_MARKET_CLOSED: exit liquidity below $10,000")
+        } else {
+            None
+        }
+    }
+
+    pub fn view(&self, now_ms: u64) -> MarketView {
+        MarketView {
+            market: self.clone(),
+            max_oi_per_side: U128(self.max_oi_per_side()),
+            is_open: self.closed_reason(now_ms).is_none(),
+        }
     }
 
     pub fn oi(&self, side: Side) -> u128 {
@@ -86,8 +128,8 @@ impl Market {
         stored + borrow_index_delta(rate, elapsed)
     }
 
-    /// Writes accrued borrow growth to state. Must run before any open-interest change so the
-    /// elapsed period is charged at the utilization that was actually in force.
+    /// Writes accrued borrow growth to state. Must run before any change of open interest or
+    /// cap so the elapsed period is charged at the utilization that was actually in force.
     pub fn accrue(&mut self, now_ms: u64) {
         self.borrow_index_long = U128(self.borrow_index_at(Side::Long, now_ms));
         self.borrow_index_short = U128(self.borrow_index_at(Side::Short, now_ms));
@@ -120,11 +162,14 @@ pub fn default_markets() -> Vec<Market> {
 
 #[near]
 impl Perps {
-    pub fn get_markets(&self) -> Vec<Market> {
-        self.markets.values().cloned().collect()
+    pub fn get_markets(&self) -> Vec<MarketView> {
+        let now_ms = env::block_timestamp_ms();
+        self.markets.values().map(|m| m.view(now_ms)).collect()
     }
 
-    pub fn get_market(&self, market_id: MarketId) -> Option<Market> {
-        self.markets.get(&market_id).cloned()
+    pub fn get_market(&self, market_id: MarketId) -> Option<MarketView> {
+        self.markets
+            .get(&market_id)
+            .map(|m| m.view(env::block_timestamp_ms()))
     }
 }

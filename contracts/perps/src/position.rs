@@ -197,6 +197,9 @@ impl Perps {
         );
 
         let market = self.market_mut(&market_id);
+        if let Some(reason) = market.closed_reason(now_ms) {
+            env::panic_str(reason);
+        }
         require!(leverage >= 1, "ERR_LEVERAGE_TOO_LOW");
         if leverage > market.max_leverage {
             env::panic_str(&format!(
@@ -207,6 +210,11 @@ impl Perps {
         let price = market.fresh_price(now_ms);
         let size = margin * leverage as u128;
         let fee = trade_fee(size);
+        // `cap` is the notional (USDC units) still available on this side.
+        let room = market.max_oi_per_side().saturating_sub(market.oi(side));
+        if size > room {
+            env::panic_str(&format!("ERR_EXCEEDS_EXIT_LIQUIDITY: cap {room}"));
+        }
 
         market.accrue(now_ms);
         let entry_borrow_index = market.borrow_index_at(side, now_ms);
