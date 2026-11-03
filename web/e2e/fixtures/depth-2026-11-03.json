@@ -1,0 +1,139 @@
+{
+  "measured_at_ms": 1793725547713,
+  "source": "1Click dry quotes (mainnet)",
+  "fee_bps": 20,
+  "assets": {
+    "BTC": {
+      "asset_id": "nep141:btc.omft.near",
+      "samples": [
+        {
+          "size_usd": 1000,
+          "impact_bps": 20
+        },
+        {
+          "size_usd": 10000,
+          "impact_bps": 20
+        },
+        {
+          "size_usd": 50000,
+          "impact_bps": 20
+        },
+        {
+          "size_usd": 100000,
+          "impact_bps": 20
+        },
+        {
+          "size_usd": 250000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 500000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 1000000,
+          "impact_bps": null
+        }
+      ]
+    },
+    "ETH": {
+      "asset_id": "nep141:eth.omft.near",
+      "samples": [
+        {
+          "size_usd": 1000,
+          "impact_bps": 19
+        },
+        {
+          "size_usd": 10000,
+          "impact_bps": 19
+        },
+        {
+          "size_usd": 50000,
+          "impact_bps": 20
+        },
+        {
+          "size_usd": 100000,
+          "impact_bps": 20
+        },
+        {
+          "size_usd": 250000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 500000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 1000000,
+          "impact_bps": null
+        }
+      ]
+    },
+    "NEAR": {
+      "asset_id": "nep141:wrap.near",
+      "samples": [
+        {
+          "size_usd": 1000,
+          "impact_bps": 25
+        },
+        {
+          "size_usd": 10000,
+          "impact_bps": 25
+        },
+        {
+          "size_usd": 50000,
+          "impact_bps": 28
+        },
+        {
+          "size_usd": 100000,
+          "impact_bps": 31
+        },
+        {
+          "size_usd": 250000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 500000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 1000000,
+          "impact_bps": null
+        }
+      ]
+    },
+    "ZEC": {
+      "asset_id": "nep141:zec.omft.near",
+      "samples": [
+        {
+          "size_usd": 1000,
+          "impact_bps": 15
+        },
+        {
+          "size_usd": 10000,
+          "impact_bps": 34
+        },
+        {
+          "size_usd": 50000,
+          "impact_bps": 25
+        },
+        {
+          "size_usd": 100000,
+          "impact_bps": 26
+        },
+        {
+          "size_usd": 250000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 500000,
+          "impact_bps": null
+        },
+        {
+          "size_usd": 1000000,
+          "impact_bps": null
+        }
+      ]
+    }
+  }
+}

@@ -1,91 +1,100 @@
-// Measures exit liquidity on NEAR Intents: dry 1Click quotes selling each market's
-// asset into USDC on NEAR at increasing USD sizes, reported as price impact in bps.
+// Measures exit liquidity on NEAR Intents (dry 1Click quotes into USDC on NEAR) and derives the market caps.
+// Usage: pnpm depth:sample [--fixture]
+import { mkdirSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { optionalEnv } from "./lib/env.ts";
+import { getTokens, ORIGIN_ASSETS, type MarketSymbol } from "../web/lib/intents/oneclick.ts";
+import {
+  exitCapacityUsd,
+  isMarketOpen,
+  maxLeverage,
+  maxOiPerSide,
+  sampleAsset,
+  SAMPLE_SIZES_USD,
+  type AssetDepth,
+} from "../web/lib/intents/depth.ts";
 
-const ONECLICK = "https://1click.chaindefuser.com/v0";
-const USER_AGENT = "ketos-depth-sampler/0.1 (+https://github.com)";
-const USDC_NEAR = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
-const MARKETS = {
-  BTC: "nep141:btc.omft.near",
-  ETH: "nep141:eth.omft.near",
-  NEAR: "nep141:wrap.near",
-  ZEC: "nep141:zec.omft.near",
-} as const;
-const SIZES_USD = [1_000, 10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000];
-// Without a partner key 1Click charges a 25 bps platform fee inside the quote.
-const UNAUTHENTICATED_FEE_BPS = 25;
+// Mirrors DEFAULT_HARD_CAP in the perps contract.
+const HARD_CAP_USD = 500_000;
+const SOURCE = "1Click dry quotes (mainnet)";
 
-type Token = { assetId: string; decimals: number; price: number };
-type Sample = { sizeUsd: number; impactBps: number | null; note?: string };
+const writeFixture = process.argv.includes("--fixture");
+const jwt = optionalEnv("ONECLICK_JWT");
 
-const apiKey = optionalEnv("ONECLICK_JWT");
-const headers: Record<string, string> = { "content-type": "application/json", "user-agent": USER_AGENT };
-if (apiKey) headers["x-api-key"] = apiKey;
+const tokens = await getTokens({ jwt });
+const measuredAtMs = Date.now();
+const measuredAt = new Date(measuredAtMs).toISOString();
+console.log(`${SOURCE} → USDC (NEAR), ${jwt ? "partner key" : "no key"}, ${measuredAt}\n`);
 
-async function getTokens(): Promise<Map<string, Token>> {
-  const res = await fetch(`${ONECLICK}/tokens`, { headers });
-  if (!res.ok) throw new Error(`GET /tokens → HTTP ${res.status}`);
-  const list = (await res.json()) as Token[];
-  return new Map(list.map((t) => [t.assetId, t]));
-}
+const symbols = Object.keys(ORIGIN_ASSETS) as MarketSymbol[];
+const depths = await Promise.all(symbols.map((symbol) => sampleAsset(ORIGIN_ASSETS[symbol], { tokens, jwt })));
+const results = symbols.map((symbol, i) => ({ symbol, depth: depths[i] }));
 
-function toBaseUnits(amount: number, decimals: number): string {
-  const [whole, frac = ""] = amount.toFixed(Math.min(decimals, 12)).split(".");
-  return BigInt(whole + frac.padEnd(decimals, "0").slice(0, decimals)).toString();
-}
-
-async function quote(token: Token, sizeUsd: number): Promise<Sample> {
-  const body = {
-    dry: true,
-    swapType: "EXACT_INPUT",
-    slippageTolerance: 100,
-    originAsset: token.assetId,
-    depositType: "INTENTS",
-    destinationAsset: USDC_NEAR,
-    amount: toBaseUnits(sizeUsd / token.price, token.decimals),
-    refundTo: "intents.near",
-    refundType: "INTENTS",
-    recipient: "intents.near",
-    recipientType: "INTENTS",
-    deadline: new Date(Date.now() + 10 * 60_000).toISOString(),
-  };
-  const res = await fetch(`${ONECLICK}/quote`, { method: "POST", headers, body: JSON.stringify(body) });
-  const json = (await res.json().catch(() => ({}))) as {
-    message?: string;
-    quote?: { amountInUsd: string; amountOutUsd: string };
-    quoteRequest?: { appFees?: { fee: number }[] };
-  };
-  if (!res.ok || !json.quote) {
-    return { sizeUsd, impactBps: null, note: json.message ?? `HTTP ${res.status}` };
-  }
-  const inUsd = Number(json.quote.amountInUsd);
-  const outUsd = Number(json.quote.amountOutUsd);
-  const feeBps = json.quoteRequest?.appFees?.reduce((sum, f) => sum + f.fee, 0) ?? (apiKey ? 0 : UNAUTHENTICATED_FEE_BPS);
-  const grossBps = ((inUsd - outUsd) / inUsd) * 10_000;
-  return { sizeUsd, impactBps: Math.max(0, Math.round(grossBps - feeBps)), note: `gross ${grossBps.toFixed(1)} bps, fee ${feeBps} bps` };
-}
-
-const tokens = await getTokens();
-const measuredAt = new Date().toISOString();
-console.log(`1Click dry quotes → USDC (NEAR), ${apiKey ? "partner key" : "no key"}, ${measuredAt}\n`);
-
-const results = await Promise.all(
-  Object.entries(MARKETS).map(async ([symbol, assetId]) => {
-    const token = tokens.get(assetId);
-    if (!token) throw new Error(`${assetId} not listed by 1Click`);
-    const samples: Sample[] = [];
-    for (const size of SIZES_USD) samples.push(await quote(token, size));
-    return { symbol, assetId, priceUsd: token.price, samples };
-  }),
+const usd = (n: number) => (n >= 1e6 ? `$${n / 1e6}M` : n >= 1e3 ? `$${n / 1e3}k` : `$${n}`);
+const col = 14;
+console.log(
+  "asset".padEnd(6) +
+    SAMPLE_SIZES_USD.map((s) => usd(s).padStart(col)).join("") +
+    "capacity".padStart(col) +
+    "max lev".padStart(9) +
+    "max OI".padStart(col) +
+    "open".padStart(6),
 );
-
-const sizeHeader = SIZES_USD.map((s) => `$${s >= 1e6 ? `${s / 1e6}M` : `${s / 1e3}k`}`.padStart(15)).join("");
-console.log(`${"asset".padEnd(6)}${sizeHeader}`);
-for (const r of results) {
-  const cells = r.samples.map((s) => (s.impactBps === null ? "No liquidity" : `${s.impactBps} bps`).padStart(15)).join("");
-  console.log(`${r.symbol.padEnd(6)}${cells}`);
+for (const { symbol, depth } of results) {
+  const capacity = exitCapacityUsd(depth.samples);
+  const cells = depth.samples.map((s) => (s.impact_bps === null ? "No liquidity" : `${s.impact_bps} bps`).padStart(col)).join("");
+  console.log(
+    symbol.padEnd(6) +
+      cells +
+      usd(capacity).padStart(col) +
+      `${maxLeverage(capacity)}x`.padStart(9) +
+      usd(maxOiPerSide(HARD_CAP_USD, capacity)).padStart(col) +
+      (isMarketOpen(capacity, measuredAtMs, measuredAtMs) ? "yes" : "no").padStart(6),
+  );
 }
-console.log("\nDetails:");
-for (const r of results) {
-  for (const s of r.samples) console.log(`  ${r.symbol.padEnd(5)} $${String(s.sizeUsd).padEnd(8)} ${s.impactBps ?? "null"}  (${s.note})`);
+
+console.log(`\nGross impact (fee of ${depths[0].fee_bps} bps included):`);
+for (const { symbol, depth } of results) {
+  const cells = depth.details.map((d) => (d.gross_bps === null ? "-" : `${d.gross_bps} bps`).padStart(col)).join("");
+  console.log(symbol.padEnd(6) + cells);
+}
+
+const assetsRecord = (pick: (depth: AssetDepth) => object) =>
+  Object.fromEntries(results.map(({ symbol, depth }) => [symbol, { asset_id: depth.asset_id, ...pick(depth) }]));
+
+const outDir = fileURLToPath(new URL("./out/", import.meta.url));
+mkdirSync(outDir, { recursive: true });
+const outFile = `${outDir}depth-${measuredAt.replaceAll(":", "-")}.json`;
+const full = {
+  measured_at_ms: measuredAtMs,
+  source: SOURCE,
+  fee_bps: depths[0].fee_bps,
+  hard_cap_usd: HARD_CAP_USD,
+  assets: assetsRecord((depth) => {
+    const capacity = exitCapacityUsd(depth.samples);
+    return {
+      price_usd: depth.price_usd,
+      samples: depth.samples,
+      details: depth.details,
+      exit_capacity_usd: capacity,
+      max_leverage: maxLeverage(capacity),
+      max_oi_per_side_usd: maxOiPerSide(HARD_CAP_USD, capacity),
+    };
+  }),
+};
+writeFileSync(outFile, `${JSON.stringify(full, null, 2)}\n`);
+console.log(`\nWrote ${outFile}`);
+
+if (writeFixture) {
+  const fixtureDir = fileURLToPath(new URL("../web/e2e/fixtures/", import.meta.url));
+  mkdirSync(fixtureDir, { recursive: true });
+  const fixtureFile = `${fixtureDir}depth-${measuredAt.slice(0, 10)}.json`;
+  const fixture = {
+    measured_at_ms: measuredAtMs,
+    source: SOURCE,
+    fee_bps: depths[0].fee_bps,
+    assets: assetsRecord((depth) => ({ samples: depth.samples })),
+  };
+  writeFileSync(fixtureFile, `${JSON.stringify(fixture, null, 2)}\n`);
+  console.log(`Wrote ${fixtureFile}`);
 }
