@@ -25,7 +25,9 @@ export class PerpsViews {
     readonly perpsContract: string,
     readonly usdcContract: string,
   ) {
-    this.provider = new JsonRpcProvider({ url: rpcUrl });
+    // near-api-js retries 12 times with backoff by default (minutes when the RPC is down);
+    // callers already retry (TanStack Query, the keeper's next tick), so fail fast here.
+    this.provider = new JsonRpcProvider({ url: rpcUrl }, { retries: 2, wait: 500, backoff: 1.5 });
   }
 
   private async view<S extends z.ZodType>(
