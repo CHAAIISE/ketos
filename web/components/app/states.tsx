@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { networkName } from "@/lib/near/config";
 import { cn } from "@/lib/utils";
 
 /** Loading placeholder; size it to the final content so nothing jumps when data arrives. */
@@ -17,7 +18,7 @@ export function Skeleton({ className, ...props }: ComponentProps<"div">) {
 
 /** A read that failed: what happened and a retry. */
 export function ErrorState({
-  title = "Could not reach NEAR testnet.",
+  title = `Could not reach ${networkName()}.`,
   error,
   onRetry,
   className,

@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/app/states";
 import { useWallet } from "@/hooks/near-provider";
 import type { AccountSummary } from "@/hooks/use-perps-queries";
 import { useOpenPosition } from "@/hooks/use-perps-mutations";
+import { networkName } from "@/lib/near/config";
 import { formatPrice, formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
 import type { Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -124,7 +125,7 @@ export function OrderTicket({
   } else if (step === "connect") {
     action = (
       <div className="flex flex-col gap-2">
-        <p className="text-ui text-muted-foreground">Connect a NEAR testnet wallet to start.</p>
+        <p className="text-ui text-muted-foreground">Connect a {networkName()} wallet to start.</p>
         <Button
           data-primary=""
           size="lg"

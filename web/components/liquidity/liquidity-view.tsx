@@ -160,7 +160,7 @@ function Parameters({ view, record, now }: { view: DepthView; record: DepthRecor
         <Row
           label="Max open interest per side"
           value={formatUsd(market.max_oi_per_side, { maxFractionDigits: 0 })}
-          hint={`min(hard cap ${formatUsd(market.hard_cap, { maxFractionDigits: 0 })}, capacity)`}
+          hint={`Lower of exit capacity and the ${formatUsd(market.hard_cap, { maxFractionDigits: 0 })} hard cap`}
         />
         <Row label="Max leverage" value={`${market.max_leverage}×`} />
         <Row

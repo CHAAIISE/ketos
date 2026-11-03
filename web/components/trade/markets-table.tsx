@@ -41,7 +41,7 @@ export function MarketsTable({
           Markets
         </h2>
         <p className="text-label text-tertiary">
-          Caps per side = min(hard cap, size that sells within 1% on NEAR Intents)
+          Each side is capped at what NEAR Intents can sell within 1%
         </p>
       </div>
       <div className="overflow-x-auto">

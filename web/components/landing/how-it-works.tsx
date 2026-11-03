@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Container, Eyebrow } from "@/components/ui/page-shell";
-import { nearConfig } from "@/lib/near/config";
+import { nearConfig, networkName } from "@/lib/near/config";
 import { cn } from "@/lib/utils";
 
 function Block({ title, detail, className }: { title: string; detail: ReactNode; className?: string }) {
@@ -25,7 +25,7 @@ function Diagram({ perpsContract }: { perpsContract: string }) {
   const perps = <Block title="Perps contract" detail={perpsContract} />;
   const traders = <Block title="Traders" detail="long / short, isolated margin" />;
   const vault = <Block title="Vault" detail="LPs, counterparty to traders" />;
-  const oracleDetail = "price-oracle.testnet";
+  const oracleDetail = nearConfig().network === "testnet" ? "price-oracle.testnet" : `mock oracle, ${networkName()}`;
 
   return (
     <>

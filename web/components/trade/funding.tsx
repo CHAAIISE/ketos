@@ -9,9 +9,9 @@ import type { AccountSummary } from "@/hooks/use-perps-queries";
 import { useDepositMargin, useFaucet, useWithdrawMargin } from "@/hooks/use-perps-mutations";
 import { formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
 
-/** Wait in whole minutes, rounded up, e.g. "42 min". */
+/** Wait in whole minutes, rounded up and capped at the faucet's one-hour cooldown, e.g. "42 min". */
 function waitLabel(ms: number): string {
-  return `${Math.max(1, Math.ceil(ms / 60_000))} min`;
+  return `${Math.min(60, Math.max(1, Math.ceil(ms / 60_000)))} min`;
 }
 
 /** Claims 1,000 tUSDC; shows when the hourly faucet opens again. */

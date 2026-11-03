@@ -4,6 +4,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { STALE_AFTER_MS, formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { Badge } from "@/components/ui/badge";
+import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
 import { MARKET_IDS, type Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -75,7 +76,7 @@ export function ExposureTable({ query, className }: { query: UseQueryResult<Mark
       </div>
       {query.isError && !markets ? (
         <div className="px-4 pb-4">
-          <ErrorState title="Could not read the markets from NEAR testnet." error={query.error} onRetry={() => void query.refetch()} />
+          <ErrorState title={`Could not read the markets from ${networkName()}.`} error={query.error} onRetry={() => void query.refetch()} />
         </div>
       ) : (
         <div className="overflow-x-auto">

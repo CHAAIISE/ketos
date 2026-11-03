@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { Container } from "@/components/ui/page-shell";
+import { networkName } from "@/lib/near/config";
 
 const linkClass =
   "rounded-sm text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
@@ -50,7 +51,7 @@ export function LandingFooter() {
             </Link>
           ))}
         </nav>
-        <p className="text-label text-tertiary">Built at NEAR HACKATHON · NEAR testnet, test USDC only</p>
+        <p className="text-label text-tertiary">Built at NEAR HACKATHON · {networkName()}, test USDC only</p>
       </Container>
       <Container className="pt-16">
         <svg aria-hidden width="0" height="0" className="absolute">

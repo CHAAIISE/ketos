@@ -55,7 +55,8 @@ export function TxToastProvider({ children }: { children: ReactNode }) {
   const track = useCallback<TxToastValue["track"]>(
     async (run, labels) => {
       const id = nextId.current++;
-      setToasts((all) => [...all, { id, tone: "pending", title: labels.pending }]);
+      // A new action supersedes earlier confirmations; pending and failed ones stay until they settle or expire.
+      setToasts((all) => [...all.filter((t) => t.tone !== "success"), { id, tone: "pending", title: labels.pending }]);
       const settle = (toast: Omit<Toast, "id">, ms: number) => {
         setToasts((all) => all.map((t) => (t.id === id ? { id, ...toast } : t)));
         setTimeout(() => dismiss(id), ms);

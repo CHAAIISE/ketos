@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDepth } from "@/hooks/use-perps-queries";
+import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
 import type { DepthRecord, DepthView, MarketId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -219,7 +220,7 @@ export function ExitLiquidity() {
             >
               <span className="text-foreground">
                 Last measurement unavailable.{" "}
-                <span className="text-muted-foreground">The NEAR testnet RPC did not answer get_depth.</span>
+                <span className="text-muted-foreground">The {networkName()} RPC did not answer get_depth.</span>
               </span>
               <Button
                 variant="outline"
@@ -232,7 +233,7 @@ export function ExitLiquidity() {
             </div>
           ) : (
             <span className="sr-only" role="status">
-              Reading get_depth from NEAR testnet
+              Reading get_depth from {networkName()}
             </span>
           )}
         </div>

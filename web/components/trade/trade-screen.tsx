@@ -7,6 +7,7 @@ import { OnboardingSteps } from "@/components/ui/onboarding-steps";
 import { useAccountId } from "@/hooks/near-provider";
 import { useKeeperTick } from "@/hooks/use-keeper-tick";
 import { useAccount, useMarkets, usePositions } from "@/hooks/use-perps-queries";
+import { networkName } from "@/lib/near/config";
 import type { MarketId } from "@/lib/near/types";
 import { AccountPanel } from "./account-panel";
 import { LiquidityCapCard } from "./liquidity-cap-card";
@@ -49,7 +50,7 @@ export function TradeScreen() {
         <TradeSkeleton />
       ) : markets.isError || !market ? (
         <ErrorState
-          title="Markets are unavailable: the NEAR testnet RPC did not answer."
+          title={`Markets are unavailable: the ${networkName()} RPC did not answer.`}
           error={markets.error}
           onRetry={() => void markets.refetch()}
         />

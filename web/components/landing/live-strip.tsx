@@ -5,6 +5,7 @@ import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/hooks/near-provider";
 import { useMarkets, useVault } from "@/hooks/use-perps-queries";
+import { networkName } from "@/lib/near/config";
 import { formatUsd, usdcToNumber } from "@/lib/near/format";
 import { cn } from "@/lib/utils";
 import { FlashValue } from "./flash-value";
@@ -55,7 +56,7 @@ export function LiveStrip() {
         <span className="text-foreground">
           Live numbers unavailable.{" "}
           <span className="text-muted-foreground">
-            The NEAR testnet RPC did not answer get_markets or get_vault.
+            The {networkName(config.network)} RPC did not answer get_markets or get_vault.
           </span>
         </span>
         <Button
@@ -108,7 +109,7 @@ export function LiveStrip() {
         </Cell>
       </dl>
       <p className="text-label text-tertiary tabular-nums">
-        Read from {config.perpsContract} on NEAR testnet at {formatUtc(readAt, true)}, refreshed while this page is open.
+        Read from {config.perpsContract} on {networkName(config.network)} at {formatUtc(readAt, true)}, refreshed while this page is open.
       </p>
     </div>
   );

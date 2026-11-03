@@ -4,6 +4,7 @@ import { LandingFooter, LandingNav } from "@/components/landing/landing-chrome";
 import { LiveStrip } from "@/components/landing/live-strip";
 import { Why } from "@/components/landing/why";
 import { Container, Eyebrow } from "@/components/ui/page-shell";
+import { networkName } from "@/lib/near/config";
 import { NearProvider } from "@/hooks/near-provider";
 
 export default function Home() {
@@ -17,7 +18,7 @@ export default function Home() {
           <Why />
           <section aria-labelledby="live-title">
             <Container className="flex flex-col gap-8">
-              <Eyebrow id="live-title">Live on NEAR testnet</Eyebrow>
+              <Eyebrow id="live-title">Live on {networkName()}</Eyebrow>
               <LiveStrip />
             </Container>
           </section>

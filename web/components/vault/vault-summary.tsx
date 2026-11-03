@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { ErrorState, Skeleton } from "@/components/app/states";
+import { networkName } from "@/lib/near/config";
 import { formatBps, formatUsd } from "@/lib/near/format";
 import type { Vault } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -69,7 +70,7 @@ export function VaultSummary({ query, className }: { query: UseQueryResult<Vault
   if (query.isError) {
     return (
       <section className={className}>
-        <ErrorState title="Could not read the vault from NEAR testnet." error={query.error} onRetry={() => void query.refetch()} />
+        <ErrorState title={`Could not read the vault from ${networkName()}.`} error={query.error} onRetry={() => void query.refetch()} />
       </section>
     );
   }

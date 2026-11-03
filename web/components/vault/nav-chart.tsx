@@ -119,7 +119,7 @@ export function NavChart({ points, loading, className }: { points: NavPoint[]; l
     <section aria-label="NAV since you opened this page" className={cn("flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4", className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-sm font-medium text-foreground">NAV since you opened this page</h2>
-        <span className="text-label text-tertiary">one read of get_vault every 10 s while the page is open in this tab</span>
+        <span className="text-label text-tertiary">read from the contract every 10 s while this tab is open</span>
       </div>
       {points.length >= 2 ? (
         <Plot points={points} />

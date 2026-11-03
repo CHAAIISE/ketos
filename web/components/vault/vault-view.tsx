@@ -6,7 +6,7 @@ import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { PageHeader } from "@/components/ui/page-shell";
 import { useNear } from "@/hooks/near-provider";
 import { useMarkets, useVault } from "@/hooks/use-perps-queries";
-import type { NearNetwork } from "@/lib/near/config";
+import { networkName, type NearNetwork } from "@/lib/near/config";
 import { accountExplorerUrl } from "@/lib/near/explorer";
 import { cn } from "@/lib/utils";
 import { ExposureTable } from "./exposure-table";
@@ -20,7 +20,7 @@ function ReadAt({ at, failing }: { at: number; failing: boolean }) {
   const { config } = useNear();
   if (!at) return null;
   const age = formatAge(at, nowMs);
-  const source = config.network === "testnet" ? "NEAR testnet" : "the local sandbox";
+  const source = networkName(config.network);
   return (
     <span className={cn("flex items-center gap-2 text-label tabular-nums", failing ? "text-warning" : "text-tertiary")}>
       <span aria-hidden className={cn("size-1.5 rounded-pill", failing ? "bg-warning" : "bg-success")} />
