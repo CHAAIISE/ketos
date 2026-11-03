@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
@@ -19,9 +19,17 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ketos — Perps on NEAR, sized by real liquidity",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  title: {
+    default: "Ketos — Perps on NEAR, sized by real liquidity",
+    template: "%s — Ketos",
+  },
   description:
-    "Perpetual futures on NEAR whose open interest and leverage are capped by exit liquidity measured on NEAR Intents.",
+    "Perpetual futures on NEAR where open interest and leverage are capped by exit liquidity measured on NEAR Intents.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#000000",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

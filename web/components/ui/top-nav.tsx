@@ -3,6 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { Logo } from "@/components/logo"
 import { cn } from "@/lib/utils"
 
 const appLinks = [
@@ -29,9 +30,9 @@ function TopNav({
     >
       <Link
         href="/"
-        className="shrink-0 rounded-sm font-display text-subtitle font-medium tracking-wordmark text-foreground lowercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="shrink-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
-        ketos
+        <Logo height={14} />
       </Link>
       <nav
         aria-label="App"
