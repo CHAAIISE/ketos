@@ -6,6 +6,7 @@
 
 pub mod account;
 pub mod depth;
+pub mod liquidation;
 pub mod market;
 pub mod math;
 pub mod position;
@@ -13,13 +14,14 @@ pub mod position;
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::{json, Value};
-use near_sdk::store::{IterableMap, LookupMap};
+use near_sdk::store::{IterableMap, LookupMap, Vector};
 use near_sdk::{
     env, log, near, require, AccountId, BorshStorageKey, PanicOnDefault, PromiseOrValue,
 };
 
 use account::Account;
 use depth::DepthRecord;
+use liquidation::LiquidationRecord;
 use market::{default_markets, Market, MarketId};
 use position::{Position, PositionId};
 
@@ -32,6 +34,7 @@ enum StorageKey {
     Accounts,
     Positions,
     Depth,
+    Liquidations,
 }
 
 #[near(serializers = [json])]
@@ -54,6 +57,9 @@ pub struct Perps {
     next_position_id: PositionId,
     /// Depth history per market, oldest first.
     depth: LookupMap<MarketId, Vec<DepthRecord>>,
+    /// Ring of the last `LIQUIDATION_HISTORY_LEN` liquidations.
+    liquidations: Vector<LiquidationRecord>,
+    liquidation_count: u64,
     /// USDC owned by the LP vault: fees, trader losses, minus trader gains paid out.
     vault_usdc: u128,
 }
@@ -75,6 +81,8 @@ impl Perps {
             positions: IterableMap::new(StorageKey::Positions),
             next_position_id: 0,
             depth: LookupMap::new(StorageKey::Depth),
+            liquidations: Vector::new(StorageKey::Liquidations),
+            liquidation_count: 0,
             vault_usdc: 0,
         }
     }

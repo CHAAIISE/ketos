@@ -132,15 +132,13 @@ impl Perps {
             .unwrap_or_else(|| env::panic_str("ERR_UNKNOWN_MARKET"))
     }
 
-    /// Removes a position from the books and returns what is owed to the trader: margin plus
-    /// PnL minus borrow and closing fees, floored at zero. The vault takes the other side:
-    /// it keeps losses and fees, and pays gains up to its balance.
-    pub(crate) fn settle_position(
+    /// Takes a position off the books (open interest, owner's list) and marks it at `price`.
+    pub(crate) fn remove_position(
         &mut self,
         id: PositionId,
         price: u128,
         now_ms: u64,
-    ) -> (Position, Marked, u128) {
+    ) -> (Position, Marked) {
         let position = self
             .positions
             .remove(&id)
@@ -151,6 +149,24 @@ impl Perps {
         let oi = market.oi_mut(position.side);
         *oi = oi.saturating_sub(position.size);
 
+        let account = self
+            .accounts
+            .get_mut(&position.account_id)
+            .unwrap_or_else(|| env::panic_str("ERR_NO_ACCOUNT"));
+        account.positions.retain(|p| *p != id);
+        (position, marked)
+    }
+
+    /// Removes a position and returns what is owed to the trader: margin plus PnL minus
+    /// borrow and closing fees, floored at zero. The vault takes the other side: it keeps
+    /// losses and fees, and pays gains up to its balance.
+    pub(crate) fn settle_position(
+        &mut self,
+        id: PositionId,
+        price: u128,
+        now_ms: u64,
+    ) -> (Position, Marked, u128) {
+        let (position, marked) = self.remove_position(id, price, now_ms);
         let owed = marked.equity - to_i128(marked.close_fee);
         let mut payout = u128::try_from(owed.max(0)).unwrap_or(0);
         let available = self.vault_usdc + position.margin;
@@ -158,12 +174,6 @@ impl Perps {
             payout = available;
         }
         self.vault_usdc = available - payout;
-
-        let account = self
-            .accounts
-            .get_mut(&position.account_id)
-            .unwrap_or_else(|| env::panic_str("ERR_NO_ACCOUNT"));
-        account.positions.retain(|p| *p != id);
         (position, marked, payout)
     }
 

@@ -5,6 +5,7 @@ use near_sdk::test_utils::{get_created_receipts, VMContextBuilder};
 use near_sdk::{testing_env, AccountId, Gas, NearToken, PromiseError, PromiseOrValue};
 
 use crate::depth::DepthSample;
+use crate::liquidation::LiquidationRecord;
 use crate::market::USD;
 use crate::math;
 use crate::position::{PositionView, Side};
@@ -540,4 +541,112 @@ fn unsorted_samples_are_refused() {
     let mut samples = curve_up_to(100_000);
     samples.swap(0, 1);
     set_depth_at(&mut perps, "BTC", samples, T0_MS);
+}
+
+// Liquidations
+
+fn liquidate_at(perps: &mut Perps, position: u64, price: u128, now_ms: u64) -> LiquidationRecord {
+    set_price(perps, "NEAR", price, now_ms);
+    ctx_at("bob.test", now_ms);
+    perps.liquidate(position)
+}
+
+#[test]
+#[should_panic(expected = "ERR_POSITION_HEALTHY")]
+fn healthy_position_cannot_be_liquidated() {
+    let mut perps = trading_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    // -7.5%: equity 62 USDC, maintenance 50.
+    liquidate_at(&mut perps, p.id, 370_000_000, T0_MS);
+}
+
+#[test]
+#[should_panic(expected = "ERR_POSITION_HEALTHY")]
+fn one_tick_above_liquidation_price_is_still_healthy() {
+    let mut perps = trading_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    liquidate_at(&mut perps, p.id, p.liquidation_price.0 + 1, T0_MS);
+}
+
+#[test]
+fn liquidation_at_the_liquidation_price_pays_penalty_reward_and_remainder() {
+    let mut perps = trading_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    assert_eq!(p.liquidation_price.0, 360_400_000);
+    let r = liquidate_at(&mut perps, p.id, p.liquidation_price.0, T0_MS);
+    // Equity sits exactly on the 50 USDC maintenance: 1 to the liquidator, 5 to the vault.
+    assert_eq!(r.equity.0, 50 * USD as i128);
+    assert_eq!((r.reward.0, r.penalty.0, r.returned.0), (USD, 5 * USD, 44 * USD));
+    assert_eq!(r.liquidator, id("bob.test"));
+    assert_eq!(margin(&perps, "bob.test"), USD);
+    assert_eq!(margin(&perps, "alice.test"), 100 * USD + 44 * USD);
+    // Opening fee 0.5 + trader loss 49.5 + penalty 5.
+    assert_eq!(perps.vault_usdc, 10_055 * USD);
+    assert_eq!(
+        perps.vault_usdc + margin(&perps, "alice.test") + margin(&perps, "bob.test"),
+        10_200 * USD
+    );
+    assert!(perps.get_position(p.id).is_none());
+    assert!(perps.get_positions(id("alice.test")).is_empty());
+    assert_eq!(perps.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
+    assert!(near_sdk::test_utils::get_logs()
+        .iter()
+        .any(|l| l.starts_with("EVENT_JSON:") && l.contains("\"event\":\"liquidation\"")));
+    assert_eq!(perps.get_liquidations(None), vec![r]);
+}
+
+#[test]
+fn negative_equity_is_absorbed_by_the_vault() {
+    let mut perps = trading_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    // -25%: loss 125 USDC on 99.5 of margin.
+    let r = liquidate_at(&mut perps, p.id, 300_000_000, T0_MS);
+    assert_eq!(r.equity.0, -25_500_000);
+    assert_eq!((r.reward.0, r.penalty.0, r.returned.0), (0, 0, 0));
+    assert_eq!(perps.vault_usdc, 10_100 * USD);
+    assert!(perps.get_account(id("bob.test")).is_none());
+    assert_eq!(margin(&perps, "alice.test"), 100 * USD);
+}
+
+#[test]
+fn short_is_liquidated_when_price_rises() {
+    let mut perps = trading_setup();
+    ctx_at("alice.test", T0_MS);
+    let p = perps.open_position("NEAR".into(), Side::Short, U128(100 * USD), 5);
+    assert_eq!(p.liquidation_price.0, 439_600_000);
+    let r = liquidate_at(&mut perps, p.id, 439_600_000, T0_MS);
+    assert_eq!(r.side, Side::Short);
+    assert_eq!(r.returned.0, 44 * USD);
+}
+
+#[test]
+#[should_panic(expected = "ERR_STALE_PRICE")]
+fn liquidation_needs_a_fresh_price() {
+    let mut perps = trading_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    set_price(&mut perps, "NEAR", 300_000_000, T0_MS);
+    ctx_at("bob.test", T0_MS + 120_001);
+    perps.liquidate(p.id);
+}
+
+#[test]
+fn liquidation_history_keeps_the_last_20_newest_first() {
+    let mut perps = trading_setup();
+    let ids: Vec<u64> = (0..22)
+        .map(|_| open(&mut perps, "NEAR", Side::Long, 2 * USD, 5).id)
+        .collect();
+    for id in &ids {
+        liquidate_at(&mut perps, *id, 300_000_000, T0_MS);
+    }
+    let history = perps.get_liquidations(None);
+    assert_eq!(history.len(), 20);
+    assert_eq!(history[0].position_id, 21);
+    assert_eq!(history[19].position_id, 2);
+    let latest: Vec<u64> = perps
+        .get_liquidations(Some(3))
+        .iter()
+        .map(|r| r.position_id)
+        .collect();
+    assert_eq!(latest, [21, 20, 19]);
+    assert_eq!(perps.get_liquidations(Some(50)).len(), 20);
 }
