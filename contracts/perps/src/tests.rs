@@ -650,3 +650,156 @@ fn liquidation_history_keeps_the_last_20_newest_first() {
     assert_eq!(latest, [21, 20, 19]);
     assert_eq!(perps.get_liquidations(Some(50)).len(), 20);
 }
+
+// LP vault
+
+fn deposit_vault(perps: &mut Perps, lp: &str, amount: u128) {
+    ctx_at(USDC, T0_MS);
+    let PromiseOrValue::Value(unused) =
+        perps.ft_on_transfer(id(lp), U128(amount), "deposit_vault".into())
+    else {
+        panic!("vault deposit must resolve synchronously");
+    };
+    assert_eq!(unused, U128(0));
+}
+
+/// `trading_setup` with the vault funded by an LP deposit instead of a direct balance.
+fn vault_setup() -> Perps {
+    let mut perps = trading_setup();
+    perps.vault_usdc = 0;
+    deposit_vault(&mut perps, "lp.test", 10_000 * USD);
+    perps
+}
+
+fn vault_at(perps: &Perps, now_ms: u64) -> crate::vault::VaultView {
+    ctx_at("bob.test", now_ms);
+    perps.get_vault()
+}
+
+#[test]
+fn first_vault_deposit_mints_shares_at_par() {
+    let perps = vault_setup();
+    let v = vault_at(&perps, T0_MS);
+    assert_eq!(v.total_shares.0, 10_000 * USD);
+    assert_eq!(v.nav.0, 10_000 * USD);
+    assert_eq!(v.share_price.0, USD);
+    assert_eq!((v.reserved.0, v.available.0), (0, 10_000 * USD));
+    let lp = perps.get_vault_account(id("lp.test"));
+    assert_eq!((lp.shares.0, lp.value.0), (10_000 * USD, 10_000 * USD));
+    assert_eq!(perps.get_vault_account(id("bob.test")).shares.0, 0);
+}
+
+#[test]
+fn deposit_after_trader_gains_mints_more_shares_below_par() {
+    let mut perps = vault_setup();
+    open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    // NEAR +10%: traders are up 50 USDC, owed by the vault.
+    set_price(&mut perps, "NEAR", 440_000_000, T0_MS);
+    let v = vault_at(&perps, T0_MS);
+    assert_eq!(v.traders_unrealized_pnl.0, 50 * USD as i128);
+    assert_eq!(v.balance.0, 10_000 * USD + 500_000);
+    assert_eq!(v.nav.0, 9_950_500_000);
+    assert_eq!(v.share_price.0, 995_050);
+
+    deposit_vault(&mut perps, "lp2.test", 1_000 * USD);
+    let lp2 = perps.get_vault_account(id("lp2.test"));
+    assert_eq!(lp2.shares.0, 1_000 * USD * 10_000 * USD / 9_950_500_000);
+    assert!(lp2.shares.0 > 1_000 * USD);
+    // Rounding favors the vault: the new LP's stake is worth at most what was deposited.
+    assert!(lp2.value.0 <= 1_000 * USD && lp2.value.0 >= 1_000 * USD - 1);
+}
+
+#[test]
+fn nav_includes_borrow_fees_due() {
+    let mut perps = vault_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    set_price(&mut perps, "NEAR", P4, T0_MS + 10 * HOUR_MS);
+    ctx_at("bob.test", T0_MS + 10 * HOUR_MS);
+    let fee = perps.get_position(p.id).unwrap().borrow_fee.0;
+    let v = vault_at(&perps, T0_MS + 10 * HOUR_MS);
+    assert_eq!(v.borrow_fees_due.0, fee);
+    assert_eq!(v.nav.0, 10_000 * USD + 500_000 + fee);
+}
+
+#[test]
+fn vault_withdrawal_is_limited_to_unreserved_usdc() {
+    let mut perps = vault_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    let v = vault_at(&perps, T0_MS);
+    // The open long can win at most its 500 USDC notional.
+    assert_eq!(v.reserved.0, 500 * USD);
+    assert_eq!(v.available.0, 9_500_500_000);
+
+    testing_env!(VMContextBuilder::new()
+        .current_account_id(id(CONTRACT))
+        .predecessor_account_id(id("lp.test"))
+        .attached_deposit(NearToken::from_yoctonear(1))
+        .block_timestamp(T0_MS * 1_000_000)
+        .build());
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = perps.withdraw_vault(U128(10_000 * USD));
+    }))
+    .unwrap_err();
+    assert!(err
+        .downcast_ref::<String>()
+        .unwrap()
+        .contains("ERR_VAULT_RESERVED: available 9500500000"));
+
+    // A partial withdrawal within the unreserved balance goes through at NAV.
+    let _ = perps.withdraw_vault(U128(9_000 * USD));
+    let lp = perps.get_vault_account(id("lp.test"));
+    assert_eq!(lp.shares.0, 1_000 * USD);
+    assert_eq!(perps.vault_usdc, 10_000 * USD + 500_000 - 9_000_450_000);
+    let receipts = get_created_receipts();
+    let MockAction::FunctionCallWeight { args, .. } = &receipts[0].actions[0] else {
+        panic!("expected ft_transfer");
+    };
+    let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+    assert_eq!(args["amount"], "9000450000");
+
+    // Once the position is closed nothing is reserved any more.
+    close_at(&mut perps, p.id, P4, T0_MS);
+    let v = vault_at(&perps, T0_MS);
+    assert_eq!(v.reserved.0, 0);
+    assert_eq!(v.available.0, v.balance.0);
+}
+
+#[test]
+fn failed_vault_withdrawal_restores_shares() {
+    let mut perps = vault_setup();
+    ctx("lp.test", 1);
+    let _ = perps.withdraw_vault(U128(4_000 * USD));
+    assert_eq!(perps.get_vault_account(id("lp.test")).shares.0, 6_000 * USD);
+    ctx(CONTRACT, 0);
+    let sent = perps.on_vault_withdrawn(
+        id("lp.test"),
+        U128(4_000 * USD),
+        U128(4_000 * USD),
+        Err(PromiseError::Failed),
+    );
+    assert_eq!(sent, U128(0));
+    assert_eq!(perps.get_vault_account(id("lp.test")).shares.0, 10_000 * USD);
+    assert_eq!(perps.vault_usdc, 10_000 * USD);
+}
+
+#[test]
+fn fee_apr_annualizes_the_trailing_week() {
+    let mut perps = vault_setup();
+    let p = open(&mut perps, "NEAR", Side::Long, 100 * USD, 5);
+    let v = vault_at(&perps, T0_MS);
+    assert_eq!(v.fees_7d.0, 500_000);
+    // 0.5 USDC × 365 / 7 over a 10,000.5 USDC NAV.
+    assert_eq!(v.fee_apr_bps, 26);
+    // Liquidation adds its penalty; a fully underwater position pays no fee.
+    let r = liquidate_at(&mut perps, p.id, p.liquidation_price.0, T0_MS);
+    assert_eq!(vault_at(&perps, T0_MS).fees_7d.0, 500_000 + r.penalty.0);
+    assert_eq!(vault_at(&perps, T0_MS + 7 * 24 * HOUR_MS).fees_7d.0, 0);
+}
+
+#[test]
+#[should_panic(expected = "ERR_INSUFFICIENT_SHARES")]
+fn cannot_withdraw_more_shares_than_held() {
+    let mut perps = vault_setup();
+    ctx("bob.test", 1);
+    let _ = perps.withdraw_vault(U128(1));
+}

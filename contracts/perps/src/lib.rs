@@ -10,6 +10,7 @@ pub mod liquidation;
 pub mod market;
 pub mod math;
 pub mod position;
+pub mod vault;
 
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
@@ -24,8 +25,10 @@ use depth::DepthRecord;
 use liquidation::LiquidationRecord;
 use market::{default_markets, Market, MarketId};
 use position::{Position, PositionId};
+use vault::FeeLog;
 
 pub const MSG_DEPOSIT_MARGIN: &str = "deposit_margin";
+pub const MSG_DEPOSIT_VAULT: &str = "deposit_vault";
 
 #[near]
 #[derive(BorshStorageKey)]
@@ -35,6 +38,7 @@ enum StorageKey {
     Positions,
     Depth,
     Liquidations,
+    VaultShares,
 }
 
 #[near(serializers = [json])]
@@ -60,8 +64,11 @@ pub struct Perps {
     /// Ring of the last `LIQUIDATION_HISTORY_LEN` liquidations.
     liquidations: Vector<LiquidationRecord>,
     liquidation_count: u64,
-    /// USDC owned by the LP vault: fees, trader losses, minus trader gains paid out.
+    /// USDC owned by the LP vault: deposits, fees, trader losses, minus trader gains paid out.
     vault_usdc: u128,
+    vault_shares: LookupMap<AccountId, u128>,
+    vault_total_shares: u128,
+    fee_log: FeeLog,
 }
 
 #[near]
@@ -84,6 +91,9 @@ impl Perps {
             liquidations: Vector::new(StorageKey::Liquidations),
             liquidation_count: 0,
             vault_usdc: 0,
+            vault_shares: LookupMap::new(StorageKey::VaultShares),
+            vault_total_shares: 0,
+            fee_log: FeeLog::default(),
         }
     }
 
@@ -124,6 +134,7 @@ impl FungibleTokenReceiver for Perps {
         require!(amount.0 > 0, "ERR_ZERO_AMOUNT");
         match msg.as_str() {
             MSG_DEPOSIT_MARGIN => self.deposit_margin(&sender_id, amount.0),
+            MSG_DEPOSIT_VAULT => self.deposit_vault(&sender_id, amount.0),
             _ => env::panic_str("ERR_INVALID_MSG"),
         }
         PromiseOrValue::Value(U128(0))

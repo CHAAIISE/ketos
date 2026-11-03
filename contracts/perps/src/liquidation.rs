@@ -7,7 +7,7 @@ use near_sdk::{env, near, require, AccountId};
 
 use crate::market::MarketId;
 use crate::math::{mul_div_ceil, mul_div_floor, BPS};
-use crate::position::{PositionId, Side};
+use crate::position::{fees_covered, PositionId, Side};
 use crate::{emit_event, Perps, PerpsExt};
 
 /// Liquidation penalty paid to the vault: 1% of notional.
@@ -78,6 +78,8 @@ impl Perps {
         // The position's margin covers everything paid out here: equity never exceeds it once
         // under maintenance, so the vault keeps margin − reward − returned.
         self.vault_usdc = (self.vault_usdc + position.margin).saturating_sub(reward + returned);
+        let borrow_paid = fees_covered(&position, &marked, marked.borrow_fee);
+        self.record_fee(now_ms, penalty + borrow_paid);
         if returned > 0 {
             self.accounts
                 .get_mut(&position.account_id)

@@ -71,6 +71,13 @@ pub(crate) struct Marked {
     pub maintenance: u128,
 }
 
+/// Part of `fees` actually paid by a settled position: what is left of its margin after the
+/// trading loss. Fees an underwater position could not cover are not income.
+pub(crate) fn fees_covered(position: &Position, marked: &Marked, fees: u128) -> u128 {
+    let left = to_i128(position.margin) + marked.pnl;
+    u128::try_from(left.max(0)).unwrap_or(0).min(fees)
+}
+
 impl Position {
     pub fn is_long(&self) -> bool {
         self.side == Side::Long
@@ -148,6 +155,13 @@ impl Perps {
         let marked = position.mark(market, price, now_ms);
         let oi = market.oi_mut(position.side);
         *oi = oi.saturating_sub(position.size);
+        market.track(
+            position.side,
+            position.size,
+            position.entry_price,
+            position.entry_borrow_index,
+            false,
+        );
 
         let account = self
             .accounts
@@ -174,6 +188,8 @@ impl Perps {
             payout = available;
         }
         self.vault_usdc = available - payout;
+        let fees = fees_covered(&position, &marked, marked.borrow_fee + marked.close_fee);
+        self.record_fee(now_ms, fees);
         (position, marked, payout)
     }
 
@@ -230,6 +246,7 @@ impl Perps {
         let entry_borrow_index = market.borrow_index_at(side, now_ms);
         let max_leverage = market.max_leverage;
         *market.oi_mut(side) += size;
+        market.track(side, size, price, entry_borrow_index, true);
 
         let account = self
             .accounts
@@ -241,6 +258,7 @@ impl Perps {
         self.next_position_id += 1;
         account.positions.push(id);
         self.vault_usdc += fee;
+        self.record_fee(now_ms, fee);
 
         let position = Position {
             account_id: account_id.clone(),

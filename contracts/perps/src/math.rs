@@ -63,12 +63,13 @@ pub fn borrow_fee(notional: u128, index_entry: u128, index_now: u128) -> u128 {
 }
 
 /// Profit (positive) or loss (negative) in USDC units of a position of `notional` opened at
-/// `entry` and marked at `mark`.
+/// `entry` and marked at `mark`. Profit is capped at the notional (a +100% move for a long,
+/// the most a short can ever make), so the vault's worst case per position is its size.
 pub fn pnl(is_long: bool, notional: u128, entry: u128, mark: u128) -> i128 {
     let gain = if is_long { mark > entry } else { mark < entry };
     let diff = entry.abs_diff(mark);
     if gain {
-        to_i128(mul_div_floor(notional, diff, entry))
+        to_i128(mul_div_floor(notional, diff, entry).min(notional))
     } else {
         -to_i128(mul_div_ceil(notional, diff, entry))
     }
@@ -110,6 +111,15 @@ mod tests {
         assert_eq!(pnl(false, 1_000_000, 3, 4), -333_334);
         assert_eq!(pnl(false, 1_000_000, 3, 2), 333_333);
         assert_eq!(pnl(true, 500 * USD, 4 * PRICE, 4 * PRICE), 0);
+    }
+
+    #[test]
+    fn profit_is_capped_at_notional() {
+        assert_eq!(pnl(true, 500 * USD, 4 * PRICE, 8 * PRICE), to_i128(500 * USD));
+        assert_eq!(pnl(true, 500 * USD, 4 * PRICE, 12 * PRICE), to_i128(500 * USD));
+        assert_eq!(pnl(false, 500 * USD, 4 * PRICE, 0), to_i128(500 * USD));
+        // Losses are not capped: liquidation and the vault floor handle them.
+        assert_eq!(pnl(false, 500 * USD, 4 * PRICE, 12 * PRICE), -to_i128(1_000 * USD));
     }
 
     #[test]

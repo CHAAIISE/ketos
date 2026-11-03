@@ -2,7 +2,10 @@ use near_sdk::json_types::U128;
 use near_sdk::{env, near, require};
 
 use crate::depth::MAX_DEPTH_AGE_MS;
-use crate::math::{borrow_index_delta, borrow_rate_per_hour};
+use crate::math::{
+    borrow_index_delta, borrow_rate_per_hour, mul_div_ceil, mul_div_floor, to_i128,
+    RATE_PRECISION,
+};
 use crate::position::Side;
 use crate::{Perps, PerpsExt};
 
@@ -46,6 +49,22 @@ pub struct Market {
     pub borrow_index_long: U128,
     pub borrow_index_short: U128,
     pub last_accrual_ms: u64,
+    /// Per-side sums over open positions, so the vault can mark all of them in O(markets):
+    /// Σ size × ENTRY_UNIT_SCALE / entry_price, and Σ size × entry borrow index.
+    #[serde(skip)]
+    pub entry_units: [u128; 2],
+    #[serde(skip)]
+    pub borrow_weight: [u128; 2],
+}
+
+/// Scale of `entry_units`: keeps precision for 8-decimal prices of any magnitude.
+pub const ENTRY_UNIT_SCALE: u128 = 1_000_000_000_000_000_000;
+
+fn side_index(side: Side) -> usize {
+    match side {
+        Side::Long => 0,
+        Side::Short => 1,
+    }
 }
 
 /// Market with the limits derived from its latest depth sample at the current block time.
@@ -75,7 +94,43 @@ impl Market {
             borrow_index_long: U128(0),
             borrow_index_short: U128(0),
             last_accrual_ms: env::block_timestamp_ms(),
+            entry_units: [0; 2],
+            borrow_weight: [0; 2],
         }
+    }
+
+    /// Adds (`open = true`) or removes a position from the per-side exposure sums.
+    pub fn track(&mut self, side: Side, size: u128, entry: u128, entry_index: u128, open: bool) {
+        let i = side_index(side);
+        let units = mul_div_floor(size, ENTRY_UNIT_SCALE, entry);
+        let weight = size * entry_index;
+        if open {
+            self.entry_units[i] += units;
+            self.borrow_weight[i] += weight;
+        } else {
+            self.entry_units[i] = self.entry_units[i].saturating_sub(units);
+            self.borrow_weight[i] = self.borrow_weight[i].saturating_sub(weight);
+        }
+    }
+
+    /// Net unrealized PnL of all traders at the last oracle price (positive = traders win).
+    pub fn traders_pnl(&self) -> i128 {
+        let mark = self.price.0;
+        let long_value = mul_div_floor(self.entry_units[0], mark, ENTRY_UNIT_SCALE);
+        let short_value = mul_div_ceil(self.entry_units[1], mark, ENTRY_UNIT_SCALE);
+        to_i128(long_value) - to_i128(self.oi_long.0) + to_i128(self.oi_short.0)
+            - to_i128(short_value)
+    }
+
+    /// Borrow fees accrued by open positions and not yet paid, as of `now_ms`.
+    pub fn borrow_fees_due(&self, now_ms: u64) -> u128 {
+        [Side::Long, Side::Short]
+            .into_iter()
+            .map(|side| {
+                let accrued = self.borrow_index_at(side, now_ms) * self.oi(side);
+                accrued.saturating_sub(self.borrow_weight[side_index(side)]) / RATE_PRECISION
+            })
+            .sum()
     }
 
     pub fn max_oi_per_side(&self) -> u128 {
