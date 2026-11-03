@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { FlashValue } from "@/components/landing/flash-value";
 import { formatAge, useNow } from "@/components/landing/live-time";
 import { Badge } from "@/components/ui/badge";
+import { nearConfig } from "@/lib/near/config";
 import { formatPrice, formatUsd } from "@/lib/near/format";
 import type { Market, MarketId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -73,7 +74,7 @@ export function MarketHeader({
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 xl:flex xl:flex-1 xl:gap-8">
         <Stat
-          label="Oracle (OutLayer)"
+          label={nearConfig().network === "testnet" ? "Oracle (OutLayer)" : "Oracle (local mock)"}
           hint={
             <span className={cn(!fresh && "text-warning")}>
               {market.price_timestamp_ms ? `updated ${formatAge(market.price_timestamp_ms, nowMs)}` : "no price yet"}

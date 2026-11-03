@@ -68,14 +68,23 @@ export function TradeScreen() {
               ) : null
             }
           />
+          {/* Below lg the two columns dissolve so positions sit right under the ticket that creates them. */}
           <div className="grid items-start gap-1 lg:grid-cols-12">
-            <div className="order-2 flex min-w-0 flex-col gap-1 lg:order-1 lg:col-span-8">
-              <MarketsTable markets={markets.data} selected={market.id} onSelect={setMarketId} />
-              <AccountPanel keeper={keeper} />
+            <div className="contents lg:order-1 lg:col-span-8 lg:flex lg:min-w-0 lg:flex-col lg:gap-1 lg:self-stretch">
+              <div className="order-4 min-w-0 lg:order-none">
+                <MarketsTable markets={markets.data} selected={market.id} onSelect={setMarketId} />
+              </div>
+              <div className="order-2 min-w-0 lg:order-none lg:flex lg:flex-1 lg:flex-col lg:*:flex-1">
+                <AccountPanel keeper={keeper} />
+              </div>
             </div>
-            <div className="order-1 flex min-w-0 flex-col gap-1 lg:order-2 lg:col-span-4">
-              <OrderTicket key={market.id} market={market} step={step} account={account.data} />
-              <LiquidityCapCard market={market} />
+            <div className="contents lg:order-2 lg:col-span-4 lg:flex lg:min-w-0 lg:flex-col lg:gap-1">
+              <div className="order-1 min-w-0 lg:order-none">
+                <OrderTicket key={market.id} market={market} step={step} account={account.data} />
+              </div>
+              <div className="order-3 min-w-0 lg:order-none">
+                <LiquidityCapCard market={market} />
+              </div>
             </div>
           </div>
         </>
