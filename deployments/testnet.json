@@ -1,0 +1,8 @@
+{
+  "network": "testnet",
+  "perps": "perps.ketos-dev.testnet",
+  "usdc": "usdc.ketos-dev.testnet",
+  "oracle": "price-oracle.testnet",
+  "keeper": "keeper.ketos-dev.testnet",
+  "rpc": "https://test.rpc.fastnear.com"
+}

@@ -14,7 +14,7 @@ const assetIds = Object.values(ASSETS);
 
 const accountId = requireEnv("NEAR_ACCOUNT_ID");
 const privateKey = requireEnv("NEAR_PRIVATE_KEY");
-const provider = new JsonRpcProvider({ url: process.env.NEAR_RPC_URL ?? "https://rpc.testnet.near.org" });
+const provider = new JsonRpcProvider({ url: process.env.NEAR_RPC_URL ?? "https://test.rpc.fastnear.com" });
 const account = new Account(accountId, provider, privateKey);
 
 function formatPrice(price) {
