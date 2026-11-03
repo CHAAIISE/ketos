@@ -1,0 +1,33 @@
+/* The depth grid appears column by column once; later measurements swap in without motion. */
+.reveal {
+  animation: reveal 900ms steps(48, end) both;
+}
+
+@keyframes reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.flashUp {
+  animation: flash-up var(--duration-flash) ease-out;
+}
+
+.flashDown {
+  animation: flash-down var(--duration-flash) ease-out;
+}
+
+@keyframes flash-up {
+  from {
+    color: var(--success);
+  }
+}
+
+@keyframes flash-down {
+  from {
+    color: var(--destructive);
+  }
+}

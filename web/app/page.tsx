@@ -1,11 +1,29 @@
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { Hero } from "@/components/landing/hero";
+import { LandingFooter, LandingNav } from "@/components/landing/landing-chrome";
+import { LiveStrip } from "@/components/landing/live-strip";
+import { Why } from "@/components/landing/why";
+import { Container, Eyebrow } from "@/components/ui/page-shell";
+import { NearProvider } from "@/hooks/near-provider";
+
 export default function Home() {
   return (
-    <main className="flex flex-1 flex-col justify-center gap-4 px-6 py-24 md:px-16">
-      <h1 className="text-4xl font-medium tracking-tight">ketos</h1>
-      <p className="max-w-xl text-muted-foreground">
-        Perpetual futures on NEAR, with open interest and leverage capped by the exit
-        liquidity measured on NEAR Intents.
-      </p>
-    </main>
+    <NearProvider>
+      <div className="flex min-h-dvh flex-1 flex-col">
+        <LandingNav />
+        <main className="flex flex-1 flex-col gap-24 pb-24 md:gap-section md:pb-section">
+          <Hero />
+          <HowItWorks />
+          <Why />
+          <section aria-labelledby="live-title">
+            <Container className="flex flex-col gap-8">
+              <Eyebrow id="live-title">Live on NEAR testnet</Eyebrow>
+              <LiveStrip />
+            </Container>
+          </section>
+        </main>
+        <LandingFooter />
+      </div>
+    </NearProvider>
   );
 }
