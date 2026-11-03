@@ -5,6 +5,7 @@ use near_sdk::{
 };
 
 use crate::market::USD;
+use crate::position::PositionId;
 use crate::{Perps, PerpsExt};
 
 /// First margin deposit must be at least 1 USDC: the contract pays the account's storage.
@@ -18,6 +19,8 @@ const GAS_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
 pub struct Account {
     /// Free collateral in USDC units, not locked in any position.
     pub margin: u128,
+    /// Open position ids.
+    pub positions: Vec<PositionId>,
 }
 
 #[near(serializers = [json])]

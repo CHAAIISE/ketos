@@ -6,14 +6,20 @@
 
 pub mod account;
 pub mod market;
+pub mod math;
+pub mod position;
 
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
+use near_sdk::serde_json::{json, Value};
 use near_sdk::store::{IterableMap, LookupMap};
-use near_sdk::{env, near, require, AccountId, BorshStorageKey, PanicOnDefault, PromiseOrValue};
+use near_sdk::{
+    env, log, near, require, AccountId, BorshStorageKey, PanicOnDefault, PromiseOrValue,
+};
 
 use account::Account;
 use market::{default_markets, Market, MarketId};
+use position::{Position, PositionId};
 
 pub const MSG_DEPOSIT_MARGIN: &str = "deposit_margin";
 
@@ -22,6 +28,7 @@ pub const MSG_DEPOSIT_MARGIN: &str = "deposit_margin";
 enum StorageKey {
     Markets,
     Accounts,
+    Positions,
 }
 
 #[near(serializers = [json])]
@@ -40,6 +47,10 @@ pub struct Perps {
     keeper_id: AccountId,
     markets: IterableMap<MarketId, Market>,
     accounts: LookupMap<AccountId, Account>,
+    positions: IterableMap<PositionId, Position>,
+    next_position_id: PositionId,
+    /// USDC owned by the LP vault: fees, trader losses, minus trader gains paid out.
+    vault_usdc: u128,
 }
 
 #[near]
@@ -56,6 +67,9 @@ impl Perps {
             keeper_id,
             markets,
             accounts: LookupMap::new(StorageKey::Accounts),
+            positions: IterableMap::new(StorageKey::Positions),
+            next_position_id: 0,
+            vault_usdc: 0,
         }
     }
 
@@ -70,6 +84,14 @@ impl Perps {
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
     }
+}
+
+/// Logs a NEP-297 event.
+pub(crate) fn emit_event(event: &str, data: Value) {
+    log!(
+        "EVENT_JSON:{}",
+        json!({ "standard": "ketos", "version": "1.0.0", "event": event, "data": [data] })
+    );
 }
 
 #[near]
