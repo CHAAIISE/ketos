@@ -2,7 +2,6 @@ import { keeperChain, oneClickDepthSource } from "@/lib/keeper/chain";
 import { TickGate } from "@/lib/keeper/throttle";
 import { runTick } from "@/lib/keeper/tick";
 
-// At most eight seven-point curves per tick, then onchain maintenance.
 export const maxDuration = 300;
 
 const gate = new TickGate();

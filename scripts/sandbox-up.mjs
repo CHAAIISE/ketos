@@ -39,8 +39,9 @@ const PRICES = [
   ["AVAX", 3_000_000_000n],
   ["LINK", 1_500_000_000n],
 ];
-// Known to the oracle and to NEAR Intents but not in the registry: the permissionless listing candidate.
-const LISTABLE_PRICES = [["2260fac5e5542a773aa44fbcfedf7c193bc2c599.factory.bridge.near", 8_056_700_000_000n]];
+// Known to the oracle and to NEAR Intents but not in the registry: the permissionless listing
+// candidate. cNEAR is quoted well past the $10k opening threshold on 1Click, so it opens once measured.
+const LISTABLE_PRICES = [["cnear.assetize.near", 405_000_000n]];
 
 if (process.argv.includes("--node")) {
   await runNode();

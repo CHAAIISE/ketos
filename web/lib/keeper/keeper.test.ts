@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CrossAccount, Market, MarketId, Order, Position } from "../near/types";
 import { findLiquidatable, findTriggeredOrders } from "./scan";
 import { MIN_TICK_INTERVAL_MS, TickGate, retryAfterMs } from "./throttle";
-import { depthBatch, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
+import { depthBatch, MEASURING_PRIORITY, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
 
 const NOW = 1_762_190_000_000;
 const USD = 1_000_000n;
@@ -214,6 +214,23 @@ describe("keeper v2", () => {
     expect(new Set(batches.flat().map((m) => m.id))).toEqual(new Set(markets.map((m) => m.id)));
     expect(depthBatch(markets, 3 * MIN_TICK_INTERVAL_MS)).toEqual(batches[0]);
     expect(depthBatch([], NOW)).toEqual([]);
+  });
+
+  it("measures never-measured listings on the next tick, capped, without dropping the slot", () => {
+    const measured = Array.from({ length: 16 }, (_, i) => market(`LISTED${i}`));
+    const fresh = Array.from({ length: 6 }, (_, i) => ({ ...market(`NEW${i}`), depth_measured_at_ms: 0 }));
+    const markets = [...measured, ...fresh];
+    const batch = depthBatch(markets, 0);
+    // Minute 0 is the first slot: all 8 of it, plus the 4 oldest unmeasured listings.
+    expect(batch.map((m) => m.id)).toEqual([
+      ...measured.slice(0, 8).map((m) => m.id),
+      ...fresh.slice(0, MEASURING_PRIORITY).map((m) => m.id),
+    ]);
+    // An unmeasured listing already in the slot is not sampled twice.
+    const inSlot = depthBatch(markets, 2 * MIN_TICK_INTERVAL_MS).map((m) => m.id);
+    expect(inSlot.slice(0, 6)).toEqual(fresh.map((m) => m.id));
+    expect(new Set(inSlot).size).toBe(inSlot.length);
+    expect(inSlot).toHaveLength(6);
   });
 
   it("never liquidates a cross leg individually; uses aggregate cash, freshness and account health once", async () => {

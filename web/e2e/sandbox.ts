@@ -1,4 +1,5 @@
 import { Account, JsonRpcProvider, teraToGas } from "near-api-js";
+import { KetosViews } from "../lib/near/views";
 
 // Direct calls to the local sandbox for what the app deliberately cannot do: move the mock oracle
 // price and mint test USDC beyond the faucet. Accounts and keys come from web/.env.e2e, loaded by
@@ -17,6 +18,10 @@ function signer(variable: string): { accountId: string; privateKey: string } {
 }
 
 const provider = () => new JsonRpcProvider({ url: env("NEXT_PUBLIC_RPC_URL") });
+
+export function sandboxViews(): KetosViews {
+  return new KetosViews(env("NEXT_PUBLIC_RPC_URL"), env("NEXT_PUBLIC_KETOS_CONTRACT"), env("NEXT_PUBLIC_USDC_CONTRACT"));
+}
 
 function account(variable: string): Account {
   const { accountId, privateKey } = signer(variable);
@@ -44,11 +49,19 @@ export async function getMarket(marketId: string): Promise<MarketView> {
   }) as Promise<MarketView>;
 }
 
+export const traderAccountId = (): string => signer("NEXT_PUBLIC_E2E_SIGNER").accountId;
+
+/** Mints tUSDC into the test trader's wallet, beyond the faucet's hourly 1,000. */
+export async function mintTraderUsdc(units: bigint): Promise<void> {
+  const usdc = env("NEXT_PUBLIC_USDC_CONTRACT");
+  await call(account("E2E_ROOT_SIGNER"), usdc, "mint", { account_id: traderAccountId(), amount: units.toString() });
+}
+
 /** Mints tUSDC to the test trader and moves it into their margin account. */
 export async function fundTraderMargin(units: bigint): Promise<void> {
   const usdc = env("NEXT_PUBLIC_USDC_CONTRACT");
   const trader = account("NEXT_PUBLIC_E2E_SIGNER");
-  await call(account("E2E_ROOT_SIGNER"), usdc, "mint", { account_id: trader.accountId, amount: units.toString() });
+  await mintTraderUsdc(units);
   await call(
     trader,
     usdc,

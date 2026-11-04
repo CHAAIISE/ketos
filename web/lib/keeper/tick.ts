@@ -1,9 +1,10 @@
-import type { CrossAccount, DepthSample, Market, MarketId, Order, OrderExecution, Position } from "../near/types";
+import { isMeasuring, type CrossAccount, type DepthSample, type Market, type MarketId, type Order, type OrderExecution, type Position } from "../near/types";
 import { findLiquidatable, findTriggeredOrders, isFreshPrice } from "./scan";
 import { MIN_TICK_INTERVAL_MS } from "./throttle";
 
 export const MIN_KETOS_BALANCE_YOCTO = 2n * 10n ** 24n;
 export const DEPTH_BATCH_SIZE = 8;
+export const MEASURING_PRIORITY = 4;
 export const ORDER_BATCH_SIZE = 5;
 export const SNAPSHOT_INTERVAL_MS = 3_600_000;
 
@@ -57,12 +58,19 @@ export type TickSummary =
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
 
-/** Stable minute slots cover the entire registry, even when a market repeatedly fails measurement. */
+/**
+ * Stable minute slots cover the entire registry, even when a market repeatedly fails measurement.
+ * Markets never measured (just listed) are added on top of the slot, at most
+ * MEASURING_PRIORITY of them, so a new listing opens after the next tick instead of waiting for
+ * its slot, and assets 1Click cannot quote never push measured markets out of rotation.
+ */
 export function depthBatch(markets: readonly Market[], nowMs: number): Market[] {
   if (markets.length <= DEPTH_BATCH_SIZE) return [...markets];
   const batches = Math.ceil(markets.length / DEPTH_BATCH_SIZE);
   const start = (Math.floor(nowMs / MIN_TICK_INTERVAL_MS) % batches) * DEPTH_BATCH_SIZE;
-  return markets.slice(start, start + DEPTH_BATCH_SIZE);
+  const slot = markets.slice(start, start + DEPTH_BATCH_SIZE);
+  const extra = markets.filter((m) => isMeasuring(m) && !slot.includes(m)).slice(0, MEASURING_PRIORITY);
+  return [...slot, ...extra];
 }
 
 /** Transactions remain serial: one restricted signer, no overlapping nonce allocation. */
