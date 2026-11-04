@@ -7,7 +7,7 @@ fn pair(long_leverage: u32, short_leverage: u32) -> (Perps, PositionView, Positi
     deposit(&mut perps, "bob.test", 1_000 * USD);
     let long = open(&mut perps, "NEAR", Side::Long, 100 * USD, long_leverage);
     ctx_at("bob.test", T0_MS);
-    let short = perps.open_position("NEAR".into(), Side::Short, U128(100 * USD), short_leverage);
+    let short = perps.open_position("NEAR".into(), Side::Short, U128(100 * USD), short_leverage, None);
     (perps, long, short)
 }
 
@@ -97,7 +97,7 @@ fn a_new_position_never_inherits_funding_from_before_its_entry() {
     set_depth_at(&mut perps, "NEAR", measured_curve(), now);
     set_price(&mut perps, "NEAR", P4, now);
     ctx_at("alice.test", now);
-    let new = perps.open_position("NEAR".into(), Side::Short, U128(100 * USD), 1);
+    let new = perps.open_position("NEAR".into(), Side::Short, U128(100 * USD), 1, None);
     assert_eq!(new.funding_payment.0, 0);
     assert_eq!(perps.get_position(first.id).unwrap().funding_payment.0, 1_500_000);
     ctx_at("stranger.test", now + HOUR_MS);
@@ -112,7 +112,7 @@ fn funding_direction_changes_only_after_open_interest_changes() {
     set_depth_at(&mut perps, "NEAR", measured_curve(), now);
     set_price(&mut perps, "NEAR", P4, now);
     ctx_at("bob.test", now);
-    let new = perps.open_position("NEAR".into(), Side::Short, U128(800 * USD), 1);
+    let new = perps.open_position("NEAR".into(), Side::Short, U128(800 * USD), 1, None);
     assert_eq!(new.funding_received.0, 0);
     assert_eq!(perps.get_market("NEAR".into()).unwrap().funding_rate_per_hour.0, -250_000_000);
     ctx_at("stranger.test", now + HOUR_MS);

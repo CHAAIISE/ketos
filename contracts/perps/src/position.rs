@@ -5,6 +5,7 @@ use near_sdk::{env, near, require, AccountId};
 use crate::funding::side_index;
 use crate::market::{Market, MarketId, USD};
 use crate::math::{borrow_fee, liquidation_price, maintenance_margin, pnl, to_i128, trade_fee};
+use crate::orders::{Brackets, OrderId};
 use crate::{emit_event, Perps, PerpsExt};
 
 /// Smallest collateral a position can be opened with.
@@ -38,6 +39,8 @@ pub struct Position {
     pub entry_funding_paid_index: u128,
     pub entry_funding_received_index: u128,
     pub opened_at_ms: u64,
+    pub take_profit: Option<OrderId>,
+    pub stop_loss: Option<OrderId>,
 }
 
 /// Position marked at the current oracle price, with fees accrued so far.
@@ -68,6 +71,8 @@ pub struct PositionView {
     pub equity: I128,
     pub maintenance_margin: U128,
     pub liquidation_price: U128,
+    pub take_profit: Option<OrderId>,
+    pub stop_loss: Option<OrderId>,
 }
 
 /// Result of marking a position to a price at a given time.
@@ -146,6 +151,8 @@ impl Position {
             funding_payment: I128(to_i128(marked.funding_paid) - to_i128(marked.funding_received)),
             equity: I128(marked.equity),
             maintenance_margin: U128(marked.maintenance),
+            take_profit: self.take_profit,
+            stop_loss: self.stop_loss,
             liquidation_price: U128(liquidation_price(
                 self.is_long(),
                 self.size,
@@ -207,6 +214,7 @@ impl Perps {
             .get_mut(&position.account_id)
             .unwrap_or_else(|| env::panic_str("ERR_NO_ACCOUNT"));
         account.positions.retain(|p| *p != id);
+        self.cancel_position_orders(&position);
         (position, marked)
     }
 
@@ -241,45 +249,22 @@ impl Perps {
     }
 }
 
-#[near]
 impl Perps {
-    /// Opens an isolated-margin position: `margin` USDC is taken from the caller's free margin,
-    /// notional = margin × leverage at the oracle price. The market's opening fee is paid
-    /// out of the position's collateral to the vault.
-    pub fn open_position(
+    pub(crate) fn try_open_position_for(
         &mut self,
+        account_id: AccountId,
         market_id: MarketId,
         side: Side,
         margin: U128,
         leverage: u32,
-    ) -> PositionView {
-        let account_id = env::predecessor_account_id();
+        brackets: Option<Brackets>,
+    ) -> Result<PositionView, String> {
         let now_ms = env::block_timestamp_ms();
         let margin = margin.0;
-        require!(
-            margin >= MIN_POSITION_MARGIN,
-            "ERR_MIN_POSITION_MARGIN: 1 USDC"
-        );
-
+        let (price, size, fee) = self.opening_terms(
+            &account_id, &market_id, side, margin, leverage, brackets.as_ref(), now_ms,
+        )?;
         let market = self.market_mut(&market_id);
-        if let Some(reason) = market.closed_reason(now_ms) {
-            env::panic_str(reason);
-        }
-        require!(leverage >= 1, "ERR_LEVERAGE_TOO_LOW");
-        if leverage > market.max_leverage {
-            env::panic_str(&format!(
-                "ERR_LEVERAGE_TOO_HIGH: max {}",
-                market.max_leverage
-            ));
-        }
-        let price = market.fresh_price(now_ms);
-        let size = margin * leverage as u128;
-        let fee = trade_fee(size, market.fee_bps);
-        // `cap` is the notional (USDC units) still available on this side.
-        let room = market.max_oi_per_side().saturating_sub(market.oi(side));
-        if size > room {
-            env::panic_str(&format!("ERR_EXCEEDS_EXIT_LIQUIDITY: cap {room}"));
-        }
 
         market.accrue(now_ms);
         let entry_borrow_index = market.borrow_index_at(side, now_ms);
@@ -316,6 +301,8 @@ impl Perps {
             entry_funding_paid_index,
             entry_funding_received_index,
             opened_at_ms: now_ms,
+            take_profit: None,
+            stop_loss: None,
         };
         emit_event(
             "position_opened",
@@ -330,24 +317,14 @@ impl Perps {
                 "fee": U128(fee),
             }),
         );
-        let view = self.position_view(id, &position);
         self.positions.insert(id, position);
-        view
+        self.attach_brackets(id, brackets);
+        Ok(self.get_position(id).unwrap())
     }
 
-    /// Closes the caller's position at the oracle price; the result lands in free margin.
-    pub fn close_position(&mut self, position_id: PositionId) -> U128 {
-        let account_id = env::predecessor_account_id();
-        let now_ms = env::block_timestamp_ms();
-        let position = self
-            .positions
-            .get(&position_id)
-            .unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
-        require!(position.account_id == account_id, "ERR_NOT_OWNER");
-        let market_id = position.market_id.clone();
-        let price = self.market_mut(&market_id).fresh_price(now_ms);
-
+    pub(crate) fn close_position_at(&mut self, position_id: PositionId, price: u128, now_ms: u64) -> U128 {
         let (position, marked, payout) = self.settle_position(position_id, price, now_ms);
+        let account_id = position.account_id.clone();
         let account = self
             .accounts
             .get_mut(&account_id)
@@ -372,6 +349,32 @@ impl Perps {
             }),
         );
         U128(payout)
+    }
+}
+
+#[near]
+impl Perps {
+    /// Opens at the fresh oracle price, optionally attaching full-position TP/SL exits.
+    pub fn open_position(
+        &mut self,
+        market_id: MarketId,
+        side: Side,
+        margin: U128,
+        leverage: u32,
+        brackets: Option<Brackets>,
+    ) -> PositionView {
+        self.try_open_position_for(env::predecessor_account_id(), market_id, side, margin, leverage, brackets)
+            .unwrap_or_else(|reason| env::panic_str(&reason))
+    }
+
+    /// Closes the caller's position at the oracle price; the result lands in free margin.
+    pub fn close_position(&mut self, position_id: PositionId) -> U128 {
+        let position = self.positions.get(&position_id)
+            .unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
+        require!(position.account_id == env::predecessor_account_id(), "ERR_NOT_OWNER");
+        let now_ms = env::block_timestamp_ms();
+        let price = self.markets.get(&position.market_id).unwrap().fresh_price(now_ms);
+        self.close_position_at(position_id, price, now_ms)
     }
 
     pub fn get_position(&self, position_id: PositionId) -> Option<PositionView> {

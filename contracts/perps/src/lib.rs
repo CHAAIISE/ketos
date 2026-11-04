@@ -11,6 +11,7 @@ pub mod liquidation;
 pub mod market;
 pub mod math;
 pub mod oracle;
+pub mod orders;
 pub mod position;
 pub mod vault;
 
@@ -26,6 +27,7 @@ use account::Account;
 use depth::DepthRecord;
 use liquidation::LiquidationRecord;
 use market::{default_markets, Market, MarketId};
+use orders::{Order, OrderId};
 use position::{Position, PositionId};
 use vault::FeeLog;
 
@@ -42,6 +44,7 @@ enum StorageKey {
     Liquidations,
     VaultShares,
     OracleMarkets,
+    Orders,
 }
 
 #[near(serializers = [json])]
@@ -63,6 +66,8 @@ pub struct Perps {
     accounts: LookupMap<AccountId, Account>,
     positions: IterableMap<PositionId, Position>,
     next_position_id: PositionId,
+    orders: IterableMap<OrderId, Order>,
+    next_order_id: OrderId,
     /// Depth history per market, oldest first.
     depth: LookupMap<MarketId, Vec<DepthRecord>>,
     /// Ring of the last `LIQUIDATION_HISTORY_LEN` liquidations.
@@ -88,6 +93,8 @@ impl Perps {
             accounts: LookupMap::new(StorageKey::Accounts),
             positions: IterableMap::new(StorageKey::Positions),
             next_position_id: 0,
+            orders: IterableMap::new(StorageKey::Orders),
+            next_order_id: 0,
             depth: LookupMap::new(StorageKey::Depth),
             liquidations: Vector::new(StorageKey::Liquidations),
             liquidation_count: 0,
