@@ -1,0 +1,9 @@
+{
+  "project_id": "ketos.testnet/ketos-prices",
+  "network": "testnet",
+  "contract": "outlayer.testnet",
+  "endpoint": "https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices",
+  "wasm_url": "https://test.fastfs.io/ketos.testnet/outlayer.testnet/24893486ff4a1aba1445fbb1b083888fa47bab0837c99580869a82e322805f89.wasm",
+  "wasm_sha256": "24893486ff4a1aba1445fbb1b083888fa47bab0837c99580869a82e322805f89",
+  "build_target": "wasm32-wasip2"
+}
