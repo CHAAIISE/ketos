@@ -29,9 +29,12 @@ pub struct LiquidationRecord {
     pub size: U128,
     pub entry_price: U128,
     pub price: U128,
-    /// Equity at liquidation: margin + PnL − borrow fee. Negative when the vault absorbed a
+    /// Equity at liquidation: margin + PnL − borrow fee − net funding. Negative for a
     /// loss beyond the margin.
     pub equity: I128,
+    pub funding_paid: U128,
+    pub funding_received: U128,
+    pub funding_payment: I128,
     pub penalty: U128,
     pub reward: U128,
     /// Equity left after penalty and reward, credited back to the trader's free margin.
@@ -75,9 +78,9 @@ impl Perps {
 
         let (position, marked) = self.remove_position(position_id, price, now_ms);
         let (reward, penalty, returned) = split_equity(marked.equity, position.size);
-        // The position's margin covers everything paid out here: equity never exceeds it once
-        // under maintenance, so the vault keeps margin − reward − returned.
-        self.vault_usdc = (self.vault_usdc + position.margin).saturating_sub(reward + returned);
+        // Equity at or below maintenance is less than the position's original collateral.
+        let available = self.vault_usdc + position.margin;
+        self.vault_usdc = available - reward - returned;
         let borrow_paid = fees_covered(&position, &marked, marked.borrow_fee);
         self.record_fee(now_ms, penalty + borrow_paid);
         if returned > 0 {
@@ -102,6 +105,10 @@ impl Perps {
             entry_price: U128(position.entry_price),
             price: U128(price),
             equity: I128(marked.equity),
+            funding_paid: U128(marked.funding_paid),
+            funding_received: U128(marked.funding_received),
+            funding_payment: I128(crate::math::to_i128(marked.funding_paid)
+                - crate::math::to_i128(marked.funding_received)),
             penalty: U128(penalty),
             reward: U128(reward),
             returned: U128(returned),

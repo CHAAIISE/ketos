@@ -1,7 +1,8 @@
-use near_sdk::json_types::U128;
+use near_sdk::json_types::{I128, U128};
 use near_sdk::{env, near, require};
 
 use crate::depth::MAX_DEPTH_AGE_MS;
+use crate::funding::{funding_rate, Funding};
 use crate::math::{
     borrow_index_delta, borrow_rate_per_hour, mul_div_ceil, mul_div_floor, to_i128,
     RATE_PRECISION,
@@ -85,6 +86,7 @@ pub struct Market {
     pub borrow_index_long: U128,
     pub borrow_index_short: U128,
     pub last_accrual_ms: u64,
+    pub funding: Funding,
     /// Per-side sums over open positions, so the vault can mark all of them in O(markets):
     /// Σ size × ENTRY_UNIT_SCALE / entry_price, and Σ size × entry borrow index.
     #[serde(skip)]
@@ -112,10 +114,13 @@ pub struct MarketView {
     pub max_oi_per_side: U128,
     /// False when exit capacity is under $10k or the depth sample is older than 30 minutes.
     pub is_open: bool,
+    /// Signed hourly rate, RATE_PRECISION scale: positive means longs pay shorts.
+    pub funding_rate_per_hour: I128,
 }
 
 impl Market {
     pub fn new(config: MarketConfig) -> Self {
+        let now_ms = env::block_timestamp_ms();
         Self {
             id: config.symbol,
             oracle_asset_id: config.oracle_asset_id,
@@ -134,7 +139,8 @@ impl Market {
             price_timestamp_ms: 0,
             borrow_index_long: U128(0),
             borrow_index_short: U128(0),
-            last_accrual_ms: env::block_timestamp_ms(),
+            last_accrual_ms: now_ms,
+            funding: Funding::new(now_ms),
             entry_units: [0; 2],
             borrow_weight: [0; 2],
         }
@@ -196,6 +202,7 @@ impl Market {
             market: self.clone(),
             max_oi_per_side: U128(self.max_oi_per_side()),
             is_open: self.closed_reason(now_ms).is_none(),
+            funding_rate_per_hour: I128(funding_rate(self.oi_long.0, self.oi_short.0)),
         }
     }
 
@@ -224,9 +231,10 @@ impl Market {
         stored + borrow_index_delta(rate, elapsed)
     }
 
-    /// Writes accrued borrow growth to state. Must run before any change of open interest or
-    /// cap so the elapsed period is charged at the utilization that was actually in force.
+    /// Writes borrow and funding growth before any change of OI or cap, preserving the
+    /// utilization and imbalance that were in force during the elapsed period.
     pub fn accrue(&mut self, now_ms: u64) {
+        self.funding = self.funding_at(now_ms);
         self.borrow_index_long = U128(self.borrow_index_at(Side::Long, now_ms));
         self.borrow_index_short = U128(self.borrow_index_at(Side::Short, now_ms));
         self.last_accrual_ms = now_ms;

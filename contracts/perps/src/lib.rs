@@ -6,6 +6,7 @@
 
 pub mod account;
 pub mod depth;
+pub mod funding;
 pub mod liquidation;
 pub mod market;
 pub mod math;

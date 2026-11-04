@@ -72,8 +72,24 @@ Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA.
 
 The deployed demo still uses the four-market contract listed below. The new registry changes the serialized state: deploy it to a **fresh contract account**, not over that existing account. Core / Long-tail assignments are registry metadata; settlement currently uses the single LP vault.
 
+### Funding on fresh deployments
 
-All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/perps/src/) (`position.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
+[`funding.rs`](contracts/perps/src/funding.rs) adds hourly funding based on open interest:
+
+`rate = 0.05% × (long OI − short OI) / max(total OI, 1)`.
+
+Positive rates charge longs and credit shorts; negative rates reverse the direction. Both sides use the same notional rate, capped at ±0.05%/hour. The unmatched amount accrues to the vault. For example, $300 long and $100 short at unchanged OI produce a +0.025%/hour rate: over 10 hours the long pays $0.75, the short receives $0.25, and the vault earns $0.50 before rounding.
+
+Separate cumulative debit and credit indexes preserve past payments when the imbalance changes direction. Opening, closing and liquidating checkpoint the old OI before changing it; new positions never inherit prior funding. Anyone can call `settle_funding({ "market_id": "NEAR" })`, even with stale prices or depth. This checkpoints indexes, not every account: funding already affects equity and is transferred into free margin at close or liquidation. Repeated checkpoints preserve fractional index growth and do not change borrow accrual.
+
+- `get_market` returns `funding_rate_per_hour` as a signed integer string at 1e12 scale (`"250000000"` = +0.025%/hour).
+- `get_position` returns accrued `funding_paid`, `funding_received` and signed `funding_payment` in USDC units; positive payment reduces equity. These amounts also affect liquidation prices.
+- `get_vault` includes `funding_net_due` in NAV and reserves gross funding credits in addition to maximum price gains. Funding losses from insolvent positions are borne by the vault, like price losses. The fee APR still covers trading fees, borrow fees and liquidation penalties, not funding.
+- `funding_accrued` events report public checkpoints; `funding_settled` events and close/liquidation records report the assessed position debits and credits included in settlement.
+
+The deployed four-market demo does **not** have funding yet. The new fields change serialized state and require the same fresh-account deployment described above; the live keeper and funding UI have not been cut over.
+
+All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/perps/src/) (`position.rs`, `funding.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
 
 The keeper signs with a function-call key limited to `refresh_prices`, `set_depth` and `liquidate` ([`scripts/deploy-testnet.ts`](scripts/deploy-testnet.ts), [`web/lib/keeper/`](web/lib/keeper/)); it cannot move funds. The integration tests check that the key is refused on any other method.
 

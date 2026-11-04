@@ -55,17 +55,18 @@ impl FeeLog {
 pub struct VaultView {
     /// USDC held by the vault (deposits, fees, trader losses, minus gains paid).
     pub balance: U128,
-    /// balance − traders' unrealized PnL + borrow fees due.
+    /// balance − traders' unrealized PnL + borrow fees + net funding due.
     pub nav: U128,
     pub total_shares: U128,
     /// NAV per 1 share (1e6 share units), in USDC units; 1.000000 before the first deposit.
     pub share_price: U128,
-    /// Σ of the maximum gain of every open position (its size), capped at the balance.
+    /// Maximum price gains plus gross funding credits, capped at the balance.
     pub reserved: U128,
     /// Balance LPs can withdraw right now.
     pub available: U128,
     pub traders_unrealized_pnl: I128,
     pub borrow_fees_due: U128,
+    pub funding_net_due: I128,
     pub fees_7d: U128,
     /// Trailing 7-day fee income annualized over NAV, in basis points.
     pub fee_apr_bps: u32,
@@ -101,17 +102,23 @@ impl Perps {
         self.markets.values().map(|m| m.borrow_fees_due(now_ms)).sum()
     }
 
+    fn funding_net_due(&self, now_ms: u64) -> i128 {
+        self.markets.values().map(|m| m.funding_net_due(now_ms)).sum()
+    }
+
     pub(crate) fn vault_nav(&self, now_ms: u64) -> u128 {
         let nav = to_i128(self.vault_usdc) + to_i128(self.borrow_fees_due(now_ms))
-            - self.traders_pnl();
+            + self.funding_net_due(now_ms) - self.traders_pnl();
         u128::try_from(nav.max(0)).unwrap_or(0)
     }
 
     pub(crate) fn vault_reserved(&self) -> u128 {
+        let now_ms = env::block_timestamp_ms();
         let open_interest: u128 = self
             .markets
             .values()
-            .map(|m| m.oi_long.0 + m.oi_short.0)
+            .map(|m| m.oi_long.0 + m.oi_short.0
+                + m.funding_at(now_ms).received_due([m.oi_long.0, m.oi_short.0]))
             .sum();
         open_interest.min(self.vault_usdc)
     }
@@ -233,6 +240,7 @@ impl Perps {
             available: U128(self.vault_usdc - reserved),
             traders_unrealized_pnl: I128(self.traders_pnl()),
             borrow_fees_due: U128(self.borrow_fees_due(now_ms)),
+            funding_net_due: I128(self.funding_net_due(now_ms)),
             fees_7d: U128(fees_7d),
             fee_apr_bps,
         }

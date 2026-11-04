@@ -2,6 +2,7 @@ use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId};
 
+use crate::funding::side_index;
 use crate::market::{Market, MarketId, USD};
 use crate::math::{borrow_fee, liquidation_price, maintenance_margin, pnl, to_i128, trade_fee};
 use crate::{emit_event, Perps, PerpsExt};
@@ -34,6 +35,8 @@ pub struct Position {
     /// Market max leverage when opened: fixes the maintenance margin for the position's life.
     pub max_leverage: u32,
     pub entry_borrow_index: u128,
+    pub entry_funding_paid_index: u128,
+    pub entry_funding_received_index: u128,
     pub opened_at_ms: u64,
 }
 
@@ -56,7 +59,12 @@ pub struct PositionView {
     pub unrealized_pnl: I128,
     pub borrow_fee: U128,
     pub close_fee: U128,
-    /// margin + unrealized PnL − borrow fee.
+    /// Accrued USDC debits and credits; realized in free margin when the position exits.
+    pub funding_paid: U128,
+    pub funding_received: U128,
+    /// Positive = paid by this position, negative = received.
+    pub funding_payment: I128,
+    /// margin + unrealized PnL − borrow fee − net funding payment.
     pub equity: I128,
     pub maintenance_margin: U128,
     pub liquidation_price: U128,
@@ -67,6 +75,8 @@ pub(crate) struct Marked {
     pub pnl: i128,
     pub borrow_fee: u128,
     pub close_fee: u128,
+    pub funding_paid: u128,
+    pub funding_received: u128,
     pub equity: i128,
     pub maintenance: u128,
 }
@@ -74,7 +84,8 @@ pub(crate) struct Marked {
 /// Part of `fees` actually paid by a settled position: what is left of its margin after the
 /// trading loss. Fees an underwater position could not cover are not income.
 pub(crate) fn fees_covered(position: &Position, marked: &Marked, fees: u128) -> u128 {
-    let left = to_i128(position.margin) + marked.pnl;
+    let left = to_i128(position.margin) + marked.pnl
+        - (to_i128(marked.funding_paid) - to_i128(marked.funding_received));
     u128::try_from(left.max(0)).unwrap_or(0).min(fees)
 }
 
@@ -90,11 +101,20 @@ impl Position {
             self.entry_borrow_index,
             market.borrow_index_at(self.side, now_ms),
         );
+        let (funding_paid, funding_received) = market.funding_at(now_ms).amounts(
+            self.side,
+            self.size,
+            self.entry_funding_paid_index,
+            self.entry_funding_received_index,
+        );
         Marked {
             pnl,
             borrow_fee,
             close_fee: trade_fee(self.size, market.fee_bps),
-            equity: to_i128(self.margin) + pnl - to_i128(borrow_fee),
+            funding_paid,
+            funding_received,
+            equity: to_i128(self.margin) + pnl - to_i128(borrow_fee)
+                - to_i128(funding_paid) + to_i128(funding_received),
             maintenance: maintenance_margin(self.size, self.max_leverage),
         }
     }
@@ -103,7 +123,8 @@ impl Position {
         let price = market.price.0;
         let marked = self.mark(market, price, now_ms);
         let buffer =
-            to_i128(self.margin) - to_i128(marked.borrow_fee) - to_i128(marked.maintenance);
+            to_i128(self.margin) - to_i128(marked.borrow_fee) - to_i128(marked.maintenance)
+                - to_i128(marked.funding_paid) + to_i128(marked.funding_received);
         PositionView {
             id,
             account_id: self.account_id.clone(),
@@ -120,6 +141,9 @@ impl Position {
             unrealized_pnl: I128(marked.pnl),
             borrow_fee: U128(marked.borrow_fee),
             close_fee: U128(marked.close_fee),
+            funding_paid: U128(marked.funding_paid),
+            funding_received: U128(marked.funding_received),
+            funding_payment: I128(to_i128(marked.funding_paid) - to_i128(marked.funding_received)),
             equity: I128(marked.equity),
             maintenance_margin: U128(marked.maintenance),
             liquidation_price: U128(liquidation_price(
@@ -161,6 +185,21 @@ impl Perps {
             position.entry_price,
             position.entry_borrow_index,
             false,
+        );
+        market.funding.track(
+            position.side,
+            position.size,
+            position.entry_funding_paid_index,
+            position.entry_funding_received_index,
+            false,
+        );
+        self.emit_position_funding(
+            id,
+            &position.account_id,
+            &position.market_id,
+            marked.funding_paid,
+            marked.funding_received,
+            now_ms,
         );
 
         let account = self
@@ -244,9 +283,13 @@ impl Perps {
 
         market.accrue(now_ms);
         let entry_borrow_index = market.borrow_index_at(side, now_ms);
+        let funding_side = side_index(side);
+        let entry_funding_paid_index = market.funding.paid_index[funding_side].0;
+        let entry_funding_received_index = market.funding.received_index[funding_side].0;
         let max_leverage = market.max_leverage;
         *market.oi_mut(side) += size;
         market.track(side, size, price, entry_borrow_index, true);
+        market.funding.track(side, size, entry_funding_paid_index, entry_funding_received_index, true);
 
         let account = self
             .accounts
@@ -270,6 +313,8 @@ impl Perps {
             leverage,
             max_leverage,
             entry_borrow_index,
+            entry_funding_paid_index,
+            entry_funding_received_index,
             opened_at_ms: now_ms,
         };
         emit_event(
@@ -320,6 +365,9 @@ impl Perps {
                 "pnl": I128(marked.pnl),
                 "borrow_fee": U128(marked.borrow_fee),
                 "close_fee": U128(marked.close_fee),
+                "funding_paid": U128(marked.funding_paid),
+                "funding_received": U128(marked.funding_received),
+                "funding_payment": I128(to_i128(marked.funding_paid) - to_i128(marked.funding_received)),
                 "payout": U128(payout),
             }),
         );

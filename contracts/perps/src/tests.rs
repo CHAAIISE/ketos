@@ -11,6 +11,8 @@ use crate::math;
 use crate::position::{PositionView, Side};
 use crate::Perps;
 
+mod funding;
+
 const CONTRACT: &str = "perps.test";
 const USDC: &str = "usdc.test";
 
@@ -373,7 +375,8 @@ fn winning_long_is_paid_by_the_vault() {
     let payout = close_at(&mut perps, p.id, 440_000_000, T0_MS + 60_000);
     // Utilization 500 / 100,000: rate = 10_000_000 + 450_000 per hour; the index grows by
     // ceil(10_450_000 / 60) = 174_167; fee = ceil(500e6 × 174_167 / 1e12) = 88.
-    assert_eq!(payout, 99_500_000 + 50 * USD - 500_000 - 88);
+    // One-sided funding: ceil(500 USDC × 0.05% / 60) = 4,167 micro-USDC.
+    assert_eq!(payout, 99_500_000 + 50 * USD - 500_000 - 88 - 4_167);
     assert_eq!(margin(&perps, "alice.test"), 100 * USD + payout);
     // Vault + trader balances are conserved.
     assert_eq!(
@@ -434,10 +437,11 @@ fn borrow_fee_accrues_hourly_with_utilization() {
     let view = perps.get_position(p.id).unwrap();
     assert_eq!(view.borrow_fee.0, expected);
     assert_eq!(expected, 52_250); // ~0.01% of notional over 10 hours
-    assert_eq!(view.equity.0, (p.margin.0 - expected) as i128);
+    assert_eq!(view.funding_payment.0, 2_500_000);
+    assert_eq!(view.equity.0, (p.margin.0 - expected - 2_500_000) as i128);
 
     let payout = close_at(&mut perps, p.id, P4, T0_MS + 10 * HOUR_MS);
-    assert_eq!(payout, p.margin.0 - expected - 500_000);
+    assert_eq!(payout, p.margin.0 - expected - 500_000 - 2_500_000);
 }
 
 #[test]
@@ -819,7 +823,8 @@ fn nav_includes_borrow_fees_due() {
     let fee = perps.get_position(p.id).unwrap().borrow_fee.0;
     let v = vault_at(&perps, T0_MS + 10 * HOUR_MS);
     assert_eq!(v.borrow_fees_due.0, fee);
-    assert_eq!(v.nav.0, 10_000 * USD + 500_000 + fee);
+    assert_eq!(v.funding_net_due.0, 2_500_000);
+    assert_eq!(v.nav.0, 10_000 * USD + 500_000 + fee + 2_500_000);
 }
 
 #[test]
