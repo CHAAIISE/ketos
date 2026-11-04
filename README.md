@@ -30,14 +30,14 @@ Above $100k, no solver quotes the trade at all. A market that lets traders open 
 ### Try it (NEAR testnet)
 
 1. Open https://ketos-three.vercel.app - see live exit capacity for BTC, ETH, NEAR and ZEC, with the time of the last measurement.
-2. Click **Launch app**, then **Connect** with a NEAR testnet wallet - see the 4-step onboarding: Connect, Get test USDC, Deposit margin, Open a position.
-3. Click **Get 1,000 test USDC** - see the tUSDC balance in the ticket (faucet, once per hour).
-4. Deposit 200 tUSDC as margin - see free margin update.
-5. Pick NEAR, Long, 100 USDC, 5× - see max open interest "set by live exit liquidity" in the market header, then the position with PnL, liquidation price and fees.
-6. Pick ZEC, Short, a margin × leverage above the cap - the contract refuses the order and the app shows "Exceeds live exit liquidity … (cap $X)"; **Use max size** fits the order under the cap.
-7. Open `/vault` and deposit 500 tUSDC - see shares minted at the share price, NAV, fee APR, and the vault's net exposure per market next to each market's capacity.
-8. Open `/liquidity` - see the impact curve per asset (size against bps, 100 bps line, capacity marked) and the last 48 onchain samples.
-9. Back on `/trade`, close the position - see realized PnL return to margin; then withdraw margin to the wallet from the **Margin** tab.
+2. Click **Launch app**, then **Connect** in the top bar and pick a NEAR testnet wallet - see the 4-step onboarding row: Connect wallet, Fund wallet, Deposit margin, Open a position.
+3. Click **Fund** in the top bar - 1,000 test USDC land in the wallet (faucet, once per hour; the button then shows when it opens again).
+4. Click **Enable trading** in the order panel and deposit 200 as margin - see Available to Trade update.
+5. Pick NEAR-USD in the market selector, Buy / Long, size 500 USDC at 5× - see Max OI (set by live exit liquidity) in the market bar, the Exit Liquidity ladder with its 100 bps cap line, then the position with PnL, liquidation price and fees.
+6. Pick ZEC-USD, Sell / Short, a size above the cap - the contract refuses the order and the app shows "Exceeds live exit liquidity … (cap $X)"; **Use max size** fits the order under the cap.
+7. Open **Vaults** and deposit 500 - see shares minted at the share price, TVL, fee APR, and the vault's net exposure per market next to each market's capacity.
+8. Open **Liquidity** - see the impact curve per asset (size against bps, 100 bps line, capacity marked) and the last 48 onchain samples.
+9. Back on **Trade**, close the position - see realized PnL return to margin; then open the account menu in the top bar and **Withdraw** margin to the wallet.
 
 The page calls the keeper endpoint at most once a minute while it is open, so depth and prices stay fresh and unhealthy positions get liquidated; liquidations show up as "Liquidated by keeper" in the **Liquidations** tab.
 
@@ -86,6 +86,7 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 - **OutLayer price oracle** (`price-oracle.testnet`, a TEE oracle) — `oracle_call` / `oracle_on_call` for BTC, ETH, NEAR and ZEC prices: [`oracle.rs`](contracts/perps/src/oracle.rs).
 - **near-sdk 5.29** and `near-contract-standards` — the trading contract and the NEP-141 test USDC with a faucet: [`contracts/mock-usdc/src/lib.rs`](contracts/mock-usdc/src/lib.rs).
 - **@hot-labs/near-connect** — wallet connection and transaction signing in the app: [`web/lib/near/wallet.ts`](web/lib/near/wallet.ts).
+- **Coinbase Exchange public candles** (no key, proxied and cached 30 s server-side) and **TradingView Lightweight Charts** (Apache-2.0) — the spot price chart and 24h change on `/trade`: [`web/app/api/candles/route.ts`](web/app/api/candles/route.ts), [`web/components/trade/price-chart.tsx`](web/components/trade/price-chart.tsx).
 - near-workspaces (integration tests on a sandbox), Next.js 16, TanStack Query, Tailwind v4, Playwright.
 
 ### Testnet contracts
