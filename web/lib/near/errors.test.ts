@@ -90,6 +90,13 @@ describe("toNearActionError", () => {
     ["ERR_ZERO_SHARES", /too small/],
     ["ERR_VAULT_EMPTY", /deposits are paused/],
     ["ERR_INVALID_MSG", /refunded/],
+    ["ERR_NO_ORDER", /already filled or cancelled/],
+    ["ERR_INVALID_TAKE_PROFIT", /above the current price for a long/],
+    ["ERR_INVALID_STOP_LOSS", /below the current price for a long/],
+    ["ERR_CROSS_UNDERMARGINED", /maintenance margin/],
+    ["ERR_LISTING_FEE: exactly 5 USDC", /exactly 5 USDC.*refunded/],
+    ["ERR_MARKET_EXISTS", /already listed.*refunded/],
+    ["ERR_UNSUPPORTED_WORKER_ASSET", /refunded/],
   ])("maps %s", (panic, message) => {
     const error = toNearActionError(panicked(panic));
     expect(error.code).toBe(panic.split(":")[0]);

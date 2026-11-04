@@ -23,7 +23,7 @@ const th = "px-3 font-normal whitespace-nowrap";
 function Balances() {
   const account = useAccount();
   const positions = usePositions();
-  const vault = useVaultAccount();
+  const vault = useVaultAccount("core");
   const funding = useFundingDialog();
 
   if (account.isPending) return <Skeleton className="m-3 h-24" />;

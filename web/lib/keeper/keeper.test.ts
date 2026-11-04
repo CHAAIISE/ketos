@@ -12,6 +12,10 @@ function market(id: MarketId, priceAgeMs = 10_000): Market {
     id,
     oracle_asset_id: id,
     intents_asset_id: `nep141:${id.toLowerCase()}.near`,
+    price_source: "tee",
+    vault_id: "core",
+    fee_bps: 10,
+    max_leverage_cap: 20,
     hard_cap: 500_000n * USD,
     exit_capacity: 100_000n * USD,
     depth_measured_at_ms: NOW - 30_000,
@@ -23,8 +27,10 @@ function market(id: MarketId, priceAgeMs = 10_000): Market {
     borrow_index_long: 0n,
     borrow_index_short: 0n,
     last_accrual_ms: NOW,
+    funding: { paid_index: [0n, 0n], received_index: [0n, 0n], last_accrual_ms: NOW },
     max_oi_per_side: 100_000n * USD,
     is_open: true,
+    funding_rate_per_hour: 0n,
   };
 }
 
@@ -46,9 +52,14 @@ function position(id: number, market_id: MarketId, equity: bigint, maintenance =
     unrealized_pnl: equity - 99_500_000n,
     borrow_fee: 0n,
     close_fee: 500_000n,
+    funding_paid: 0n,
+    funding_received: 0n,
+    funding_payment: 0n,
     equity,
     maintenance_margin: maintenance,
     liquidation_price: 360_400_000n,
+    take_profit: null,
+    stop_loss: null,
   };
 }
 

@@ -2,9 +2,12 @@ import { JsonRpcProvider } from "near-api-js";
 import { z } from "zod";
 import {
   accountSchema,
+  accountStatsSchema,
   configSchema,
   crossAccountSchema,
   depthViewSchema,
+  historyEventSchema,
+  leaderboardEntrySchema,
   liquidationSchema,
   marketSchema,
   orderSchema,
@@ -13,8 +16,14 @@ import {
   vaultAccountSchema,
   vaultSchema,
   vaultSnapshotSchema,
+  type LeaderboardSort,
   type MarketId,
+  type VaultId,
 } from "./types";
+
+/** The contract keeps the last 200 events per account and ranks at most 500 accounts. */
+export const ACCOUNT_HISTORY_LEN = 200;
+export const LEADERBOARD_MAX = 500;
 
 /** Largest page `get_open_positions` returns. */
 export const OPEN_POSITIONS_PAGE = 100;
@@ -110,7 +119,35 @@ export class KetosViews {
     return this.view(crossAccountSchema, this.ketosContract, "get_cross_account", { account_id: accountId });
   }
 
-  vaultHistory(vaultId: "core" | "long-tail") {
+  /** Pending orders of one account: entries (limit, stop market) and exits (take profit, stop loss). */
+  orders(accountId: string) {
+    return this.view(z.array(orderSchema), this.ketosContract, "get_orders", { account_id: accountId });
+  }
+
+  /** Every event the contract still keeps for the account (last 200), oldest first. */
+  history(accountId: string) {
+    return this.view(z.array(historyEventSchema), this.ketosContract, "get_history", {
+      account_id: accountId,
+      limit: ACCOUNT_HISTORY_LEN,
+    });
+  }
+
+  /** All-time trading totals; null before the account's first trade. */
+  accountStats(accountId: string) {
+    return this.view(accountStatsSchema.nullable(), this.ketosContract, "get_account_stats", {
+      account_id: accountId,
+    });
+  }
+
+  leaderboard(sort: LeaderboardSort, limit = 100) {
+    return this.view(z.array(leaderboardEntrySchema), this.ketosContract, "get_leaderboard", {
+      sort,
+      limit: Math.min(limit, LEADERBOARD_MAX),
+    });
+  }
+
+  /** Hourly snapshots, oldest first, at most 168 (7 days). */
+  vaultHistory(vaultId: VaultId) {
     return this.view(z.array(vaultSnapshotSchema), this.ketosContract, "get_vault_history", { vault_id: vaultId });
   }
 
@@ -126,12 +163,19 @@ export class KetosViews {
     return this.view(z.array(priceSchema), this.ketosContract, "get_prices");
   }
 
-  vault() {
-    return this.view(vaultSchema, this.ketosContract, "get_vault", { vault_id: "core" });
+  vault(vaultId: VaultId) {
+    return this.view(vaultSchema, this.ketosContract, "get_vault", { vault_id: vaultId });
   }
 
-  vaultAccount(accountId: string) {
-    return this.view(vaultAccountSchema, this.ketosContract, "get_vault_account", { vault_id: "core", account_id: accountId });
+  vaults() {
+    return this.view(z.array(vaultSchema), this.ketosContract, "get_vaults");
+  }
+
+  vaultAccount(vaultId: VaultId, accountId: string) {
+    return this.view(vaultAccountSchema, this.ketosContract, "get_vault_account", {
+      vault_id: vaultId,
+      account_id: accountId,
+    });
   }
 
   /** tUSDC wallet balance (6 decimals). */

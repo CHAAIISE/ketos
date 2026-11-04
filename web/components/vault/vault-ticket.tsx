@@ -119,7 +119,7 @@ function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
 
   const submit = async () => {
     if (!amount || !ready) return;
-    const result = await track(() => deposit.mutateAsync(amount), {
+    const result = await track(() => deposit.mutateAsync({ vaultId: vault.id, amount }), {
       pending: `Depositing ${formatUsdc(amount)} USDC into the vault…`,
       success: `Deposited ${formatUsdc(amount)} USDC into the vault`,
       successDescription: () => `About ${formatShares(shares)} shares minted at ${formatUsd(vault.share_price, { maxFractionDigits: 4 })}.`,
@@ -226,7 +226,7 @@ function WithdrawForm({
     const result = await track(
       async () => {
         try {
-          return await withdraw.mutateAsync(shares);
+          return await withdraw.mutateAsync({ vaultId: vault.id, shares });
         } catch (e) {
           const refused = toNearActionError(e);
           if (refused.availableUsdc !== undefined) setRefusedAvailable(refused.availableUsdc);
@@ -300,7 +300,7 @@ function WithdrawForm({
 }
 
 function PositionSummary({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
-  const position = useVaultAccount();
+  const position = useVaultAccount(vault.id);
   if (!signedIn) {
     return <p className="text-ui text-muted-foreground">Connect a wallet to see your vault shares.</p>;
   }
@@ -350,7 +350,7 @@ export function VaultTicket({
   className?: string;
 }) {
   const wallet = useWallet();
-  const position = useVaultAccount();
+  const position = useVaultAccount("core");
   const [mode, setMode] = useState<Mode>("deposit");
   const signedIn = wallet.accountId !== null;
 

@@ -10,6 +10,10 @@ function market(overrides: Partial<Market> = {}): Market {
     id: "NEAR",
     oracle_asset_id: "wrap.near",
     intents_asset_id: "nep141:wrap.near",
+    price_source: "tee",
+    vault_id: "core",
+    fee_bps: 10,
+    max_leverage_cap: 20,
     hard_cap: 500_000n * USD,
     exit_capacity: 100_000n * USD,
     depth_measured_at_ms: 0,
@@ -21,8 +25,10 @@ function market(overrides: Partial<Market> = {}): Market {
     borrow_index_long: 0n,
     borrow_index_short: 0n,
     last_accrual_ms: 0,
+    funding: { paid_index: [0n, 0n], received_index: [0n, 0n], last_accrual_ms: 0 },
     max_oi_per_side: 100_000n * USD,
     is_open: true,
+    funding_rate_per_hour: 0n,
     ...overrides,
   };
 }

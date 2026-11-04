@@ -40,7 +40,7 @@ function HeaderStat({ label, children }: { label: ReactNode; children: ReactNode
 /** Value of the signed-in account's vault shares; a dash while signed out. */
 function YourDeposit() {
   const wallet = useWallet();
-  const position = useVaultAccount();
+  const position = useVaultAccount("core");
   if (wallet.accountId === null) return <>—</>;
   if (position.isPending) return <Skeleton className="h-6 w-20" />;
   if (position.isError) return <span className="text-tertiary">—</span>;

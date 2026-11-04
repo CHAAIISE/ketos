@@ -2,19 +2,27 @@
 
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import {
+  addCrossMarginTx,
+  cancelOrderTx,
   closePositionTx,
   depositMarginTx,
   depositVaultTx,
   faucetTx,
+  listMarketTx,
   openPositionTx,
+  placeOrderTx,
+  removeCrossMarginTx,
+  switchToCrossTx,
   withdrawMarginTx,
   withdrawVaultTx,
+  type ListMarketArgs,
   type OpenPositionArgs,
+  type PlaceOrderArgs,
 } from "@/lib/near/calls";
 import type { NearConfig } from "@/lib/near/config";
 import { NearActionError } from "@/lib/near/errors";
 import type { NearTransaction, TxResult } from "@/lib/near/tx";
-import { positionSchema, type Position } from "@/lib/near/types";
+import { orderSchema, positionSchema, type Order, type Position, type VaultId } from "@/lib/near/types";
 import { useNear } from "./near-provider";
 import { ketosKeys } from "./use-ketos-queries";
 
@@ -53,18 +61,30 @@ function useTxMutation<TVars, TData extends TxReceipt>(options: {
 
 const receipt = ({ txHash }: TxResult): TxReceipt => ({ txHash });
 
+function toPosition(value: unknown): Position | null {
+  const result = positionSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+/** Everything a trade, order or margin-mode change can move. */
 const tradingKeys = (accountId: string | null): QueryKey[] => [
   ketosKeys.account(accountId),
   ketosKeys.positions(accountId),
+  ketosKeys.orders(accountId),
+  ketosKeys.crossAccount(accountId),
+  ketosKeys.history(accountId),
+  ketosKeys.accountStats(accountId),
   ketosKeys.markets(),
-  ketosKeys.vault(),
+  ketosKeys.vaults(),
+  ketosKeys.anyVault(),
   ketosKeys.openPositions(),
 ];
 
 const vaultKeys = (accountId: string | null): QueryKey[] => [
   ketosKeys.account(accountId),
-  ketosKeys.vault(),
-  ketosKeys.vaultAccount(accountId),
+  ketosKeys.vaults(),
+  ketosKeys.anyVault(),
+  ketosKeys.vaultAccounts(),
 ];
 
 /** Claims 1,000 tUSDC; `amount` is the minted amount in USDC units. */
@@ -94,14 +114,11 @@ export function useWithdrawMargin() {
   });
 }
 
-/** `position` is the opened position as returned by the contract. */
+/** Market order at the oracle price, with optional TP/SL. `position` is the opened position. */
 export function useOpenPosition() {
   return useTxMutation<OpenPositionArgs, TxReceipt & { position: Position | null }>({
     build: openPositionTx,
-    parse: (result) => {
-      const parsed = positionSchema.safeParse(result.value);
-      return { txHash: result.txHash, position: parsed.success ? parsed.data : null };
-    },
+    parse: (result) => ({ txHash: result.txHash, position: toPosition(result.value) }),
     invalidate: tradingKeys,
   });
 }
@@ -115,19 +132,86 @@ export function useClosePosition() {
   });
 }
 
-/** Variables: amount in USDC units, moved from the tUSDC wallet into the vault. */
-export function useDepositVault() {
+/** Limit, Stop Market, Take Profit or Stop Loss order; `order` is the stored order. */
+export function usePlaceOrder() {
+  return useTxMutation<PlaceOrderArgs, TxReceipt & { order: Order | null }>({
+    build: placeOrderTx,
+    parse: (result) => {
+      const order = orderSchema.safeParse(result.value);
+      return { txHash: result.txHash, order: order.success ? order.data : null };
+    },
+    invalidate: tradingKeys,
+  });
+}
+
+/** Variables: order id. */
+export function useCancelOrder() {
+  return useTxMutation<number, TxReceipt>({
+    build: cancelOrderTx,
+    parse: receipt,
+    invalidate: tradingKeys,
+  });
+}
+
+/** Variables: USDC units moved from free margin into the cross-margin pool. */
+export function useAddCrossMargin() {
   return useTxMutation<bigint, TxReceipt>({
-    build: depositVaultTx,
+    build: addCrossMarginTx,
+    parse: receipt,
+    invalidate: tradingKeys,
+  });
+}
+
+/** Variables: USDC units moved from cross cash back to free margin. */
+export function useRemoveCrossMargin() {
+  return useTxMutation<bigint, TxReceipt>({
+    build: removeCrossMarginTx,
+    parse: receipt,
+    invalidate: tradingKeys,
+  });
+}
+
+/** Variables: id of an isolated position to move into the cross-margin pool. */
+export function useSwitchToCross() {
+  return useTxMutation<number, TxReceipt & { position: Position | null }>({
+    build: switchToCrossTx,
+    parse: (result) => ({ txHash: result.txHash, position: toPosition(result.value) }),
+    invalidate: tradingKeys,
+  });
+}
+
+/** Pays the 5 USDC listing fee; the new market shows as measuring until its first depth sample. */
+export function useListMarket() {
+  return useTxMutation<ListMarketArgs, TxReceipt>({
+    build: listMarketTx,
+    parse: receipt,
+    invalidate: (accountId) => [ketosKeys.account(accountId), ketosKeys.markets(), ketosKeys.vaults(), ketosKeys.anyVault()],
+  });
+}
+
+export interface VaultDepositArgs {
+  vaultId: VaultId;
+  /** USDC units moved from the tUSDC wallet into the vault. */
+  amount: bigint;
+}
+
+export function useDepositVault() {
+  return useTxMutation<VaultDepositArgs, TxReceipt>({
+    build: (config, { vaultId, amount }) => depositVaultTx(config, vaultId, amount),
     parse: receipt,
     invalidate: vaultKeys,
   });
 }
 
-/** Variables: vault shares to burn. */
+export interface VaultWithdrawArgs {
+  vaultId: VaultId;
+  /** Vault shares to burn. */
+  shares: bigint;
+}
+
 export function useWithdrawVault() {
-  return useTxMutation<bigint, TxReceipt>({
-    build: withdrawVaultTx,
+  return useTxMutation<VaultWithdrawArgs, TxReceipt>({
+    build: (config, { vaultId, shares }) => withdrawVaultTx(config, vaultId, shares),
     parse: receipt,
     invalidate: vaultKeys,
   });

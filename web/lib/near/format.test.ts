@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBps, formatPrice, formatUnits, formatUsd, formatUsdc, parseUsdc, usdcToNumber } from "./format";
+import { formatBps, formatFundingRate, formatPrice, formatUnits, formatUsd, formatUsdc, parseUsdc, usdcToNumber } from "./format";
 
 describe("formatUnits", () => {
   it("truncates instead of rounding", () => {
@@ -33,6 +33,14 @@ describe("formatBps", () => {
   it("formats basis points as a percentage", () => {
     expect(formatBps(1234)).toBe("12.34%");
     expect(formatBps(5)).toBe("0.05%");
+  });
+});
+
+describe("formatFundingRate", () => {
+  it("shows the hourly rate with its sign, longs paying when positive", () => {
+    expect(formatFundingRate(500_000_000n)).toBe("+0.0500%");
+    expect(formatFundingRate(-125_000_000n)).toBe("-0.0125%");
+    expect(formatFundingRate(0n)).toBe("0.0000%");
   });
 });
 

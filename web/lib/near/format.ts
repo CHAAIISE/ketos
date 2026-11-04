@@ -64,6 +64,14 @@ export function formatBps(bps: number): string {
 }
 
 /**
+ * Hourly funding rate (1e12 = 100%) to "+0.0125%": positive means longs pay shorts. The contract
+ * caps it at ±0.05% per hour, so 4 decimals keep every step visible.
+ */
+export function formatFundingRate(ratePerHour: bigint): string {
+  return `${formatUnits(ratePerHour, 10, { maxFractionDigits: 4, minFractionDigits: 4, signed: true })}%`;
+}
+
+/**
  * User input like "1,234.5" to fixed-point units. Returns null for anything that is not a plain
  * non-negative decimal or that has more fraction digits than the token supports.
  */

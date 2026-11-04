@@ -32,7 +32,7 @@ const stripClass =
 export function LiveStrip() {
   const { config } = useNear();
   const markets = useMarkets();
-  const vault = useVault();
+  const vault = useVault("core");
   const nowMs = useNow();
 
   if (markets.isPending || vault.isPending) {

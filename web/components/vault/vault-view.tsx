@@ -49,7 +49,7 @@ function VaultDetails({ contractId, network }: { contractId: string; network: Ne
 
 export function VaultView() {
   const { config } = useNear();
-  const vault = useVault();
+  const vault = useVault("core");
   const markets = useMarkets();
   const history = useNavHistory(config.ketosContract);
 

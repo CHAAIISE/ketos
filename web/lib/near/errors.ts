@@ -128,7 +128,7 @@ function fromPanic(panic: string, details: string): NearActionError {
     case "ERR_NO_POSITION":
       return make("This position no longer exists: it was already closed or liquidated. Refresh to see the latest state.");
     case "ERR_NOT_OWNER":
-      return make("This position belongs to another account.");
+      return make("This position or order belongs to another account.");
     case "ERR_UNKNOWN_MARKET":
       return make("This market does not exist.");
     case "ERR_POSITION_HEALTHY":
@@ -163,6 +163,45 @@ function fromPanic(panic: string, details: string): NearActionError {
       return make("The deposit was refused by the perps contract and your USDC was refunded.");
     case "ERR_OVERFLOW":
       return make("The amount is too large.");
+    case "ERR_NO_ORDER":
+      return make("This order no longer exists: it was already filled or cancelled. Refresh to see the latest state.");
+    case "ERR_TOO_MANY_ORDERS":
+      return make("You have reached the limit of 50 open orders. Cancel one before placing another.");
+    case "ERR_ZERO_TRIGGER_PRICE":
+      return make("Enter a trigger price greater than zero.");
+    case "ERR_INVALID_TAKE_PROFIT":
+      return make("The take profit must be above the current price for a long and below it for a short.");
+    case "ERR_INVALID_STOP_LOSS":
+      return make("The stop loss must be below the current price for a long and above it for a short.");
+    case "ERR_EXIT_ORDER_EXISTS":
+      return make("This position already has that exit order. Cancel it first to set a new price.");
+    case "ERR_INVALID_LEVERAGE":
+      return make("Leverage must be a whole number between 1x and the market's limit.");
+    case "ERR_ALREADY_CROSS":
+      return make("This position already uses cross margin.");
+    case "ERR_TOO_MANY_CROSS_POSITIONS":
+      return make("Cross margin holds at most 16 positions. Close one or use isolated margin.");
+    case "ERR_CROSS_UNDERMARGINED":
+      return make("Your cross account would fall under its maintenance margin. Add cross margin or reduce the size.");
+    case "ERR_INSUFFICIENT_CROSS_CASH":
+      return make("Not enough cross cash to move out. Lower the amount.");
+    case "ERR_STALE_CROSS_PRICE":
+      return make("A price in your cross account is out of date. Wait for the next price update (about a minute) and retry.");
+    case "ERR_LISTING_FEE":
+      return make("Listing a market costs exactly 5 USDC. Your USDC was refunded.");
+    case "ERR_INVALID_LISTING":
+    case "ERR_INVALID_ASSET":
+      return make("The listing details are not valid: pick an asset from the list and retry. Your USDC was refunded.");
+    case "ERR_INVALID_SYMBOL":
+      return make("Use an uppercase ticker of up to 16 letters or digits, starting with a letter. Your USDC was refunded.");
+    case "ERR_MARKET_EXISTS":
+      return make("A market with this ticker is already listed. Your USDC was refunded.");
+    case "ERR_ASSET_EXISTS":
+      return make("This asset is already listed under another ticker. Your USDC was refunded.");
+    case "ERR_UNSUPPORTED_WORKER_ASSET":
+      return make("Our price worker does not price this asset yet. Your USDC was refunded.");
+    case "ERR_UNKNOWN_VAULT":
+      return make("This vault does not exist.");
     default:
       return make(`The contract rejected the transaction (${code}).`);
   }

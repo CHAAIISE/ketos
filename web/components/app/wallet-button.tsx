@@ -166,7 +166,7 @@ function AccountMenu({ accountId }: { accountId: string }) {
   const wallet = useWallet();
   const account = useAccount();
   const positions = usePositions();
-  const vault = useVaultAccount();
+  const vault = useVaultAccount("core");
   const funding = useFundingDialog();
   const [open, setOpen] = useState(false);
   const locked = positions.data?.reduce((sum, p) => sum + p.margin, 0n);
