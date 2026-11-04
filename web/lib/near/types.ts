@@ -163,6 +163,11 @@ export const priceSchema = z.object({
 });
 export type OraclePriceView = z.infer<typeof priceSchema>;
 
+/** `get_price_data` of the price oracle; without `asset_ids` it lists every asset it supports. */
+export const oraclePriceDataSchema = z.looseObject({
+  prices: z.array(z.looseObject({ asset_id: z.string() })),
+});
+
 export const revenueSchema = z.object({
   fees: u128,
   funding: i128,

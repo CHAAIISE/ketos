@@ -1,15 +1,17 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
 import { ChevronDown } from "lucide-react";
 import { FlashValue } from "@/components/landing/flash-value";
 import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { useCandles } from "@/hooks/use-candles";
 import { formatPrice, formatUsd } from "@/lib/near/format";
-import type { Market, MarketId } from "@/lib/near/types";
+import { isMeasuring, type Market, type MarketId } from "@/lib/near/types";
 import { CANDLE_SOURCE, change24h } from "@/lib/prices/candles";
 import { cn } from "@/lib/utils";
 import { isPriceFresh, marketStatus } from "./market-status";
@@ -54,6 +56,9 @@ function MarketSelector({
   onSelect: (id: MarketId) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toUpperCase();
+  const shown = needle ? markets.filter((m) => m.id.includes(needle)) : markets;
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger
@@ -69,9 +74,21 @@ function MarketSelector({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="start" sideOffset={6} className="z-50">
-          <Popover.Popup className="z-50 w-[30rem] max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-popover outline-none">
+          <Popover.Popup className="z-50 flex max-h-[min(30rem,70vh)] w-[30rem] max-w-[calc(100vw-1rem)] flex-col rounded-lg border border-border bg-popover outline-none">
+            <div className="border-b border-border p-2">
+              <Input
+                type="search"
+                autoFocus
+                aria-label="Search markets"
+                placeholder="Search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="h-7 text-ui"
+              />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
             <table className="w-full text-label">
-              <thead className="text-tertiary">
+              <thead className="sticky top-0 bg-popover text-tertiary">
                 <tr className="h-8 border-b border-border">
                   <th scope="col" className="px-3 text-left font-normal">Market</th>
                   <th scope="col" className="px-3 text-right font-normal">Mark</th>
@@ -80,7 +97,7 @@ function MarketSelector({
                 </tr>
               </thead>
               <tbody role="listbox" aria-label="Markets">
-                {markets.map((m) => (
+                {shown.map((m) => (
                   <tr
                     key={m.id}
                     role="option"
@@ -104,6 +121,7 @@ function MarketSelector({
                       <span className="flex items-center gap-2">
                         {marketName(m.id)}
                         <Badge variant="success">{m.max_leverage}x</Badge>
+                        {isMeasuring(m) ? <Badge variant="warning">Measuring</Badge> : null}
                       </span>
                     </td>
                     <td className="px-3 text-right tabular-nums">{m.price > 0n ? formatPrice(m.price) : "—"}</td>
@@ -113,6 +131,15 @@ function MarketSelector({
                 ))}
               </tbody>
             </table>
+            {shown.length === 0 ? <p className="px-3 py-4 text-ui text-muted-foreground">No market matches “{query.trim()}”.</p> : null}
+            </div>
+            <Link
+              href="/markets"
+              onClick={() => setOpen(false)}
+              className="border-t border-border px-3 py-2 text-label text-tertiary transition-colors hover:text-foreground"
+            >
+              All markets, funding and listing →
+            </Link>
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>

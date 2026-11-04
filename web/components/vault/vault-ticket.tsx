@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { Tabs } from "@base-ui/react/tabs";
+import { ConnectButton } from "@/components/app/connect-button";
 import { Skeleton } from "@/components/app/states";
 import { useTxToast } from "@/components/app/tx-toast";
 import { Button } from "@/components/ui/button";
@@ -66,31 +67,6 @@ function amountError(text: string, amount: bigint | null): string | null {
   if (amount === null) return "Enter an amount like 250 or 250.5, with up to 6 decimals.";
   if (amount === 0n) return "Enter an amount greater than zero.";
   return null;
-}
-
-function ConnectButton() {
-  const wallet = useWallet();
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <div className="flex flex-col gap-2">
-      <Button
-        data-primary
-        className="w-full"
-        disabled={!wallet.isReady}
-        onClick={async () => {
-          setError(null);
-          try {
-            await wallet.signIn();
-          } catch (e) {
-            setError(toNearActionError(e).message);
-          }
-        }}
-      >
-        {wallet.isReady ? "Connect wallet" : "Loading wallet…"}
-      </Button>
-      {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
-    </div>
-  );
 }
 
 function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {

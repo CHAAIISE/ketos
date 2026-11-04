@@ -84,6 +84,8 @@ The example describes the message format, not a supported live asset. Duplicate 
 
 Listed markets always belong to Long-tail, with a $500,000 hard cap, 0.1% trading fees and a 5× leverage ceiling. Callers cannot override these terms. They start measuring (`depth_measured_at_ms = 0`, zero exit capacity): registration does not attest price or liquidity support. Opening still requires a fresh authenticated oracle price and a keeper depth measurement with at least $10,000 of capacity; no quote means no capacity. Unsupported assets cannot trade merely by paying the fee. The `signed` source is stored but has no active price adapter yet. The hosted demo has no listing UI or multi-market keeper yet.
 
+In the app, `/markets` has a "List a market" panel. [`GET /api/listable-markets`](web/app/api/listable-markets/route.ts) offers the assets that the configured oracle supports (`get_price_data` without ids lists them all) and that 1Click's `/v0/tokens` quotes as the same `nep141:` token on NEAR, minus anything already in the registry and the USDC collateral ([`listing.ts`](web/lib/intents/listing.ts)). On testnet that is currently FRAX, USDT and WBTC; the sandbox seeds a WBTC oracle price so the end-to-end flow can list it.
+
 ### Funding on fresh deployments
 
 [`funding.rs`](contracts/ketos/src/funding.rs) adds hourly funding based on open interest:
@@ -188,7 +190,7 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 - **OutLayer price oracle** (`price-oracle.testnet`, a TEE oracle) — `oracle_call` / `oracle_on_call` for BTC, ETH, NEAR and ZEC prices: [`oracle.rs`](contracts/ketos/src/oracle.rs).
 - **near-sdk 5.29** and `near-contract-standards` — the trading contract and the NEP-141 test USDC with a faucet: [`contracts/mock-usdc/src/lib.rs`](contracts/mock-usdc/src/lib.rs).
 - **@hot-labs/near-connect** — wallet connection and transaction signing in the app: [`web/lib/near/wallet.ts`](web/lib/near/wallet.ts).
-- **Coinbase Exchange public candles** (no key, proxied and cached 30 s server-side) and **TradingView Lightweight Charts** (Apache-2.0) — the spot price chart and 24h change on `/trade`: [`web/app/api/candles/route.ts`](web/app/api/candles/route.ts), [`web/components/trade/price-chart.tsx`](web/components/trade/price-chart.tsx).
+- **Coinbase Exchange public candles and 24h stats** (no key, proxied and cached server-side) and **TradingView Lightweight Charts** (Apache-2.0) — the spot price chart and 24h change on `/trade`, and the 24h change column on `/markets`: [`web/app/api/candles/route.ts`](web/app/api/candles/route.ts), [`web/app/api/market-stats/route.ts`](web/app/api/market-stats/route.ts), [`web/components/trade/price-chart.tsx`](web/components/trade/price-chart.tsx).
 - near-workspaces (integration tests on a sandbox), Next.js 16, TanStack Query, Tailwind v4, Playwright.
 
 ### Testnet contracts

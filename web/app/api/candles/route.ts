@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const query = candlesQuerySchema.safeParse({ market: params.get("market"), interval: params.get("interval") });
   if (!query.success) {
-    return Response.json({ error: "market must be BTC, ETH, NEAR or ZEC; interval must be 5m, 1h or 1d" }, { status: 400 });
+    return Response.json({ error: "market must be an uppercase ticker such as BTC; interval must be 5m, 1h or 1d" }, { status: 400 });
   }
   const { market, interval } = query.data;
   const key = `${market}:${interval}`;

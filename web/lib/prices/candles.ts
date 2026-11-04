@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { MARKET_IDS, type MarketId } from "@/lib/near/types";
+import type { MarketId } from "@/lib/near/types";
+
+/** Ticker as the market registry spells it, which is also Coinbase's base currency code. */
+export const tickerSchema = z.string().regex(/^[A-Z][A-Z0-9]{0,15}$/);
 
 /** Chart intervals and their candle length in seconds. */
 export const CANDLE_INTERVALS = { "5m": 300, "1h": 3_600, "1d": 86_400 } as const;
@@ -30,7 +33,7 @@ export const candlesResponseSchema = z.object({
 export type CandlesResponse = z.infer<typeof candlesResponseSchema>;
 
 export const candlesQuerySchema = z.object({
-  market: z.enum(MARKET_IDS),
+  market: tickerSchema,
   interval: candleIntervalSchema,
 });
 

@@ -10,6 +10,7 @@ import {
   leaderboardEntrySchema,
   liquidationSchema,
   marketSchema,
+  oraclePriceDataSchema,
   orderSchema,
   positionSchema,
   priceSchema,
@@ -59,6 +60,12 @@ export class KetosViews {
 
   config() {
     return this.view(configSchema, this.ketosContract, "get_config");
+  }
+
+  /** Every asset id the price oracle supports, whether or not its last price is still fresh. */
+  async oracleAssetIds(oracleId: string) {
+    const data = await this.view(oraclePriceDataSchema, oracleId, "get_price_data", {});
+    return data.prices.map((p) => p.asset_id);
   }
 
   marketPage(fromIndex: number, limit = MARKETS_PAGE) {

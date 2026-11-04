@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { Term } from "./term";
 import { formatShares } from "./vault-math";
 
-function ReadAt({ at, failing }: { at: number; failing: boolean }) {
+export function ReadAt({ at, failing }: { at: number; failing: boolean }) {
   const nowMs = useNow();
   if (!at) return null;
   const age = formatAge(at, nowMs);
@@ -28,7 +28,7 @@ function ReadAt({ at, failing }: { at: number; failing: boolean }) {
 }
 
 /** Small grey label above a white value, as in the header stats row. */
-function HeaderStat({ label, children }: { label: ReactNode; children: ReactNode }) {
+export function HeaderStat({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <dt className="text-label text-tertiary">{label}</dt>

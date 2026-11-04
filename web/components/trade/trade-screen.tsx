@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { OnboardingSteps } from "@/components/ui/onboarding-steps";
 import { useAccountId } from "@/hooks/near-provider";
@@ -38,12 +38,29 @@ function TradeSkeleton() {
   );
 }
 
+function subscribeToHistory(onChange: () => void) {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+}
+
 export function TradeScreen() {
   const accountId = useAccountId();
   const markets = useMarkets();
   const account = useAccount();
   const positions = usePositions();
-  const [marketId, setMarketId] = useState<MarketId>("NEAR");
+  // `?market=` is read on the client only (null while hydrating), so the page stays static.
+  const urlMarket = useSyncExternalStore(
+    subscribeToHistory,
+    () => new URLSearchParams(window.location.search).get("market"),
+    () => null,
+  );
+  const [picked, setPicked] = useState<MarketId | null>(null);
+  const marketId = picked ?? urlMarket ?? "NEAR";
+  // Mirrors the choice into the URL so a reload or a shared link opens the same market.
+  const setMarketId = (id: MarketId) => {
+    setPicked(id);
+    window.history.replaceState(null, "", `?market=${encodeURIComponent(id)}`);
+  };
 
   const openPositions = positions.data?.length ?? 0;
   const step = tradeStep(accountId, account.data, openPositions);

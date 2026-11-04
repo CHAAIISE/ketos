@@ -39,6 +39,8 @@ const PRICES = [
   ["AVAX", 3_000_000_000n],
   ["LINK", 1_500_000_000n],
 ];
+// Known to the oracle and to NEAR Intents but not in the registry: the permissionless listing candidate.
+const LISTABLE_PRICES = [["2260fac5e5542a773aa44fbcfedf7c193bc2c599.factory.bridge.near", 8_056_700_000_000n]];
 
 if (process.argv.includes("--node")) {
   await runNode();
@@ -157,7 +159,7 @@ async function seed(rpcUrl) {
   });
   const keeper = new Account(ids.keeper, provider, keeperKey.toString());
 
-  for (const [assetId, price] of PRICES) {
+  for (const [assetId, price] of [...PRICES, ...LISTABLE_PRICES]) {
     await call(rootAccount, ids.oracle, "set_price", { asset_id: assetId, multiplier: price.toString(), decimals: 8 });
   }
   await call(keeper, ids.ketos, "refresh_prices", {}, { gas: teraToGas("300") });
