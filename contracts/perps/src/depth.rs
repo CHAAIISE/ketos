@@ -99,9 +99,9 @@ impl Perps {
             "ERR_DEPTH_NOT_NEWER"
         );
         let capacity_usd = exit_capacity_usd(&samples);
-        let max_leverage = max_leverage_for(capacity_usd);
         // Utilization changes with the cap: charge the elapsed period at the old one.
         market.accrue(now_ms);
+        let max_leverage = max_leverage_for(capacity_usd).min(market.max_leverage_cap);
         market.exit_capacity = U128(capacity_usd as u128 * USD);
         market.depth_measured_at_ms = measured_at_ms;
         market.max_leverage = max_leverage;

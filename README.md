@@ -64,6 +64,15 @@ flowchart LR
 4. **Liquidate.** `liquidate` is permissionless. Below maintenance, the position closes at the oracle price; 1% of notional goes to the vault and 0.2% to the liquidator (capped at remaining equity), the rest back to the trader. Negative equity is absorbed by the vault.
 5. **Vault.** LPs deposit tUSDC for shares at NAV. NAV = vault USDC − traders' unrealized PnL + borrow fees due. Withdrawals are limited to what is not reserved for the maximum payout of open positions.
 
+### Market registry
+
+Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA. Each entry stores its oracle asset id, Intents asset id, price source (`tee` or `signed`), vault assignment, hard cap, trading fee and leverage ceiling ([`market.rs`](contracts/perps/src/market.rs)). `id` is the market symbol. Duplicate symbols or assets cannot replace an existing market.
+
+`get_markets({ "from_index": 0, "limit": 100 })` returns markets in listing order (default 50, maximum 100 per page). The client reads every page. A new market has no exit capacity and cannot accept positions until measured; its leverage is the lower of its configured ceiling and the live liquidity tier. Oracle callbacks match asset ids rather than ticker order and update only TEE-priced entries.
+
+The deployed demo still uses the four-market contract listed below. The new registry changes the serialized state: deploy it to a **fresh contract account**, not over that existing account. Core / Long-tail assignments are registry metadata; settlement currently uses the single LP vault.
+
+
 All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/perps/src/) (`position.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
 
 The keeper signs with a function-call key limited to `refresh_prices`, `set_depth` and `liquidate` ([`scripts/deploy-testnet.ts`](scripts/deploy-testnet.ts), [`web/lib/keeper/`](web/lib/keeper/)); it cannot move funds. The integration tests check that the key is refused on any other method.
@@ -127,5 +136,5 @@ pnpm --dir web dev
 - No cross-chain deposits or settlement: everything settles in one NEAR contract. NEAR Intents is used only to measure liquidity.
 - Liquidity is measured on mainnet 1Click quotes while trading runs on testnet, so caps reflect real markets but trades do not touch them.
 - The local sandbox and the end-to-end tests use a mock oracle with the same interface as the OutLayer one; prices there are set by the test.
-- Four markets (BTC, ETH, NEAR, ZEC) and a fixed size grid; capacity is only as fine as the grid ($100k today means "fine at $100k, no quote at $250k").
+- The deployed demo and keeper measure four markets (BTC, ETH, NEAR, ZEC); fresh local deployments list seven, with SOL, AURORA and RHEA closed until measured. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
 - The keeper runs from the app's tick endpoint or `pnpm keeper`; with nobody online, depth goes stale and markets close to new positions after 30 minutes. Closing an existing position needs an oracle price under 120 s old, and `refresh_prices` is open to any account.

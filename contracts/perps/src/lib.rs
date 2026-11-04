@@ -40,6 +40,7 @@ enum StorageKey {
     Depth,
     Liquidations,
     VaultShares,
+    OracleMarkets,
 }
 
 #[near(serializers = [json])]
@@ -57,6 +58,7 @@ pub struct Perps {
     oracle_id: AccountId,
     keeper_id: AccountId,
     markets: IterableMap<MarketId, Market>,
+    oracle_markets: LookupMap<String, MarketId>,
     accounts: LookupMap<AccountId, Account>,
     positions: IterableMap<PositionId, Position>,
     next_position_id: PositionId,
@@ -76,15 +78,12 @@ pub struct Perps {
 impl Perps {
     #[init]
     pub fn new(usdc_id: AccountId, oracle_id: AccountId, keeper_id: AccountId) -> Self {
-        let mut markets = IterableMap::new(StorageKey::Markets);
-        for market in default_markets() {
-            markets.insert(market.id.clone(), market);
-        }
-        Self {
+        let mut contract = Self {
             usdc_id,
             oracle_id,
             keeper_id,
-            markets,
+            markets: IterableMap::new(StorageKey::Markets),
+            oracle_markets: LookupMap::new(StorageKey::OracleMarkets),
             accounts: LookupMap::new(StorageKey::Accounts),
             positions: IterableMap::new(StorageKey::Positions),
             next_position_id: 0,
@@ -95,7 +94,11 @@ impl Perps {
             vault_shares: LookupMap::new(StorageKey::VaultShares),
             vault_total_shares: 0,
             fee_log: FeeLog::default(),
+        };
+        for config in default_markets() {
+            contract.register_market(config);
         }
+        contract
     }
 
     pub fn get_config(&self) -> Config {

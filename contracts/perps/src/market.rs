@@ -27,12 +27,48 @@ pub const MAX_PRICE_AGE_MS: u64 = 120_000;
 pub type MarketId = String;
 
 #[near(serializers = [json, borsh])]
+#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PriceSource {
+    Tee,
+    Signed,
+}
+
+#[near(serializers = [json, borsh])]
+#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultId {
+    Core,
+    LongTail,
+}
+
+#[near(serializers = [json])]
+#[derive(Clone, Debug)]
+pub struct MarketConfig {
+    pub symbol: MarketId,
+    pub oracle_asset_id: String,
+    pub intents_asset_id: String,
+    pub price_source: PriceSource,
+    pub vault_id: VaultId,
+    pub hard_cap: U128,
+    pub fee_bps: u32,
+    pub max_leverage_cap: u32,
+}
+
+#[near(serializers = [json, borsh])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Market {
-    /// Short ticker used as the market key (`BTC`, `ETH`, `NEAR`, `ZEC`).
+    /// Short ticker used as the market key.
     pub id: MarketId,
     /// Asset id on the price oracle (OutLayer `price-oracle.testnet`).
     pub oracle_asset_id: String,
+    pub intents_asset_id: String,
+    pub price_source: PriceSource,
+    pub vault_id: VaultId,
+    /// Fee charged on notional at both entry and exit.
+    pub fee_bps: u32,
+    /// Listing ceiling, also applied when live depth allows a higher leverage tier.
+    pub max_leverage_cap: u32,
     /// Maximum open interest per side in USDC units, before the exit-liquidity cap.
     pub hard_cap: U128,
     /// Largest size (USDC units) that exits to USDC on NEAR Intents within 100 bps of impact.
@@ -79,16 +115,21 @@ pub struct MarketView {
 }
 
 impl Market {
-    pub fn new(id: &str, oracle_asset_id: &str, hard_cap: u128) -> Self {
+    pub fn new(config: MarketConfig) -> Self {
         Self {
-            id: id.to_string(),
-            oracle_asset_id: oracle_asset_id.to_string(),
-            hard_cap: U128(hard_cap),
+            id: config.symbol,
+            oracle_asset_id: config.oracle_asset_id,
+            intents_asset_id: config.intents_asset_id,
+            price_source: config.price_source,
+            vault_id: config.vault_id,
+            fee_bps: config.fee_bps,
+            max_leverage_cap: config.max_leverage_cap,
+            hard_cap: config.hard_cap,
             exit_capacity: U128(0),
             depth_measured_at_ms: 0,
             oi_long: U128(0),
             oi_short: U128(0),
-            max_leverage: DEFAULT_MAX_LEVERAGE,
+            max_leverage: DEFAULT_MAX_LEVERAGE.min(config.max_leverage_cap),
             price: U128(0),
             price_timestamp_ms: 0,
             borrow_index_long: U128(0),
@@ -202,24 +243,72 @@ impl Market {
     }
 }
 
-/// The four listed markets and the OutLayer asset ids that price them.
-pub fn default_markets() -> Vec<Market> {
+/// Initial registry; new markets use the same configuration and risk machinery.
+pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
     [
-        ("BTC", "nbtc.bridge.near"),
-        ("ETH", "aurora"),
-        ("NEAR", "wrap.near"),
-        ("ZEC", "zec.omft.near"),
+        ("BTC", "nbtc.bridge.near", "btc.omft.near", VaultId::Core),
+        ("ETH", "aurora", "eth.omft.near", VaultId::Core),
+        ("NEAR", "wrap.near", "wrap.near", VaultId::Core),
+        ("ZEC", "zec.omft.near", "zec.omft.near", VaultId::LongTail),
+        ("SOL", "22.contract.portalbridge.near", "sol.omft.near", VaultId::Core),
+        (
+            "AURORA",
+            "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
+            "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
+            VaultId::LongTail,
+        ),
+        ("RHEA", "token.rhealab.near", "token.rhealab.near", VaultId::LongTail),
     ]
     .into_iter()
-    .map(|(id, asset)| Market::new(id, asset, DEFAULT_HARD_CAP))
-    .collect()
+    .map(|(symbol, oracle_asset_id, intents_asset_id, vault_id)| MarketConfig {
+        symbol: symbol.into(),
+        oracle_asset_id: oracle_asset_id.into(),
+        intents_asset_id: format!("nep141:{intents_asset_id}"),
+        price_source: PriceSource::Tee,
+        vault_id,
+        hard_cap: U128(DEFAULT_HARD_CAP),
+        fee_bps: 10,
+        max_leverage_cap: 20,
+    })
+}
+
+impl Perps {
+    /// Shared insertion path; no privileged endpoint can change a live market's terms.
+    pub(crate) fn register_market(&mut self, config: MarketConfig) {
+        require!(
+            !self.markets.contains_key(&config.symbol),
+            "ERR_MARKET_EXISTS"
+        );
+        require!(
+            !self.oracle_markets.contains_key(&config.oracle_asset_id)
+                && !self.markets.values().any(|m| m.intents_asset_id == config.intents_asset_id),
+            "ERR_ASSET_EXISTS"
+        );
+        require!(
+            !config.symbol.is_empty()
+                && !config.oracle_asset_id.is_empty()
+                && !config.intents_asset_id.is_empty()
+                && config.hard_cap.0 > 0
+                && config.fee_bps <= 10
+                && (1..=20).contains(&config.max_leverage_cap),
+            "ERR_INVALID_MARKET_CONFIG"
+        );
+        self.oracle_markets.insert(config.oracle_asset_id.clone(), config.symbol.clone());
+        self.markets.insert(config.symbol.clone(), Market::new(config));
+    }
 }
 
 #[near]
 impl Perps {
-    pub fn get_markets(&self) -> Vec<MarketView> {
+    /// At most 100 markets per page, in listing order.
+    pub fn get_markets(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<MarketView> {
         let now_ms = env::block_timestamp_ms();
-        self.markets.values().map(|m| m.view(now_ms)).collect()
+        self.markets
+            .values()
+            .skip(from_index.unwrap_or(0) as usize)
+            .take(limit.unwrap_or(50).min(100) as usize)
+            .map(|m| m.view(now_ms))
+            .collect()
     }
 
     pub fn get_market(&self, market_id: MarketId) -> Option<MarketView> {

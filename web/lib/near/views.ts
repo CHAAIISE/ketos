@@ -15,6 +15,7 @@ import {
 
 /** Largest page `get_open_positions` returns. */
 export const OPEN_POSITIONS_PAGE = 100;
+export const MARKETS_PAGE = 100;
 
 /** Typed read-only calls to the perps and tUSDC contracts over JSON-RPC. */
 export class PerpsViews {
@@ -48,8 +49,21 @@ export class PerpsViews {
     return this.view(configSchema, this.perpsContract, "get_config");
   }
 
-  markets() {
-    return this.view(z.array(marketSchema), this.perpsContract, "get_markets");
+  marketPage(fromIndex: number, limit = MARKETS_PAGE) {
+    return this.view(z.array(marketSchema), this.perpsContract, "get_markets", {
+      from_index: fromIndex,
+      limit,
+    });
+  }
+
+  /** Every listed market, including permissionless listings beyond the first page. */
+  async markets() {
+    const all = [];
+    for (let from = 0; ; from += MARKETS_PAGE) {
+      const page = await this.marketPage(from);
+      all.push(...page);
+      if (page.length < MARKETS_PAGE) return all;
+    }
   }
 
   account(accountId: string) {

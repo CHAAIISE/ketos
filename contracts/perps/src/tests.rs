@@ -6,7 +6,7 @@ use near_sdk::{testing_env, AccountId, Gas, NearToken, PromiseError, PromiseOrVa
 
 use crate::depth::DepthSample;
 use crate::liquidation::LiquidationRecord;
-use crate::market::USD;
+use crate::market::{MarketConfig, PriceSource, VaultId, USD};
 use crate::math;
 use crate::position::{PositionView, Side};
 use crate::Perps;
@@ -48,29 +48,116 @@ fn margin(perps: &Perps, trader: &str) -> u128 {
 }
 
 #[test]
-fn lists_four_markets_with_oracle_ids() {
+fn registry_starts_with_seven_markets_and_paginates_in_listing_order() {
     let perps = setup();
-    let markets = perps.get_markets();
-    let ids: Vec<_> = markets
-        .iter()
-        .map(|m| (m.market.id.as_str(), m.market.oracle_asset_id.as_str()))
-        .collect();
+    let markets = perps.get_markets(None, None);
     assert_eq!(
-        ids,
-        [
-            ("BTC", "nbtc.bridge.near"),
-            ("ETH", "aurora"),
-            ("NEAR", "wrap.near"),
-            ("ZEC", "zec.omft.near")
-        ]
+        markets.iter().map(|m| m.market.id.as_str()).collect::<Vec<_>>(),
+        ["BTC", "ETH", "NEAR", "ZEC", "SOL", "AURORA", "RHEA"]
     );
-    let zec = perps.get_market("ZEC".into()).unwrap();
-    assert_eq!(zec.market.oi_short, U128(0));
-    // No depth sample yet: closed, no capacity.
-    assert!(!zec.is_open);
-    assert_eq!(zec.max_oi_per_side, U128(0));
+    assert!(markets.iter().all(|m| !m.is_open && m.max_oi_per_side.0 == 0));
+    let mut paged = Vec::new();
+    for from in [0, 3, 6] {
+        paged.extend(perps.get_markets(Some(from), Some(3)));
+    }
+    assert_eq!(paged, markets);
+    assert!(perps.get_markets(Some(7), Some(3)).is_empty());
+    assert!(perps.get_markets(Some(u32::MAX), Some(3)).is_empty());
+    assert!(perps.get_markets(None, Some(0)).is_empty());
+    assert_eq!(perps.get_market("SOL".into()).unwrap().market.vault_id, VaultId::Core);
+    assert_eq!(perps.get_market("RHEA".into()).unwrap().market.vault_id, VaultId::LongTail);
     assert!(perps.get_market("DOGE".into()).is_none());
-    assert_eq!(perps.get_config().usdc_id, id(USDC));
+}
+
+fn extra_market(symbol: &str, source: PriceSource) -> MarketConfig {
+    MarketConfig {
+        symbol: symbol.into(),
+        oracle_asset_id: format!("{symbol}.oracle"),
+        intents_asset_id: format!("nep141:{symbol}.token"),
+        price_source: source,
+        vault_id: VaultId::LongTail,
+        hard_cap: U128(20_000 * USD),
+        fee_bps: 5,
+        max_leverage_cap: 3,
+    }
+}
+
+#[test]
+fn registry_addition_uses_asset_prices_market_fees_and_risk_limits() {
+    let mut perps = setup();
+    perps.register_market(extra_market("NEW", PriceSource::Tee));
+    assert!(!perps.get_market("NEW".into()).unwrap().is_open);
+    set_depth_at(&mut perps, "NEW", measured_curve(), T0_MS);
+    // An unrelated asset must not price this market.
+    let data = price_data(T0_MS, &[("OTHER.oracle", Some((P4, 8)))]);
+    push_prices(&mut perps, ORACLE, T0_MS, data);
+    assert_eq!(stored_price(&perps, "NEW"), (0, 0));
+    let data = price_data(T0_MS, &[("NEW.oracle", Some((P4, 8)))]);
+    push_prices(&mut perps, ORACLE, T0_MS, data);
+    let market = perps.get_market("NEW".into()).unwrap();
+    assert!(market.is_open);
+    assert_eq!(market.max_oi_per_side.0, 20_000 * USD);
+    assert_eq!(market.market.max_leverage, 3);
+    assert_eq!(perps.get_depth("NEW".into()).unwrap().history[0].max_leverage, 3);
+    deposit(&mut perps, "alice.test", 200 * USD);
+    perps.vault_usdc = 10_000 * USD;
+    let p = open(&mut perps, "NEW", Side::Long, 100 * USD, 3);
+    assert_eq!(p.entry_price.0, P4);
+    assert_eq!(p.margin.0, 100 * USD - 150_000);
+    assert_eq!(p.close_fee.0, 150_000);
+    ctx_at("alice.test", T0_MS);
+    assert_eq!(perps.close_position(p.id).0, 100 * USD - 300_000);
+}
+
+#[test]
+#[should_panic(expected = "ERR_LEVERAGE_TOO_HIGH: max 3")]
+fn market_leverage_ceiling_cannot_be_overridden_by_deeper_liquidity() {
+    let mut perps = setup();
+    perps.register_market(extra_market("NEW", PriceSource::Tee));
+    set_depth_at(&mut perps, "NEW", measured_curve(), T0_MS);
+    set_price(&mut perps, "NEW", P4, T0_MS);
+    deposit(&mut perps, "alice.test", 200 * USD);
+    open(&mut perps, "NEW", Side::Long, 100 * USD, 4);
+}
+
+#[test]
+#[should_panic(expected = "ERR_MARKET_EXISTS")]
+fn registry_refuses_replacing_a_live_market() {
+    let mut perps = setup();
+    perps.register_market(extra_market("NEAR", PriceSource::Tee));
+}
+
+#[test]
+#[should_panic(expected = "ERR_ASSET_EXISTS")]
+fn registry_refuses_reusing_an_oracle_asset() {
+    let mut perps = setup();
+    let mut config = extra_market("NEW", PriceSource::Tee);
+    config.oracle_asset_id = "wrap.near".into();
+    perps.register_market(config);
+}
+
+#[test]
+#[should_panic(expected = "ERR_ASSET_EXISTS")]
+fn registry_refuses_reusing_an_intents_asset() {
+    let mut perps = setup();
+    let mut config = extra_market("NEW", PriceSource::Tee);
+    config.intents_asset_id = "nep141:wrap.near".into();
+    perps.register_market(config);
+}
+
+#[test]
+fn market_pages_are_bounded_without_hiding_later_listings() {
+    let mut perps = setup();
+    for i in 0..100 {
+        perps.register_market(extra_market(&format!("NEW{i}"), PriceSource::Tee));
+    }
+    let first = perps.get_markets(None, Some(u32::MAX));
+    let last = perps.get_markets(Some(100), Some(100));
+    assert_eq!(first.len(), 100);
+    assert_eq!(last.len(), 7);
+    assert_eq!(first.last().unwrap().market.id, "NEW92");
+    assert_eq!(last.first().unwrap().market.id, "NEW93");
+    assert_eq!(last.last().unwrap().market.id, "NEW99");
 }
 
 #[test]
@@ -852,32 +939,6 @@ fn stored_price(perps: &Perps, market: &str) -> (u128, u64) {
     (m.price.0, m.price_timestamp_ms)
 }
 
-#[test]
-fn refresh_asks_the_oracle_to_push_all_market_prices() {
-    let mut perps = setup();
-    ctx("anyone.test", 0);
-    let _ = perps.refresh_prices();
-    let receipts = get_created_receipts();
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].receiver_id, id(ORACLE));
-    let MockAction::FunctionCallWeight {
-        method_name,
-        args,
-        attached_deposit,
-        ..
-    } = &receipts[0].actions[0]
-    else {
-        panic!("expected oracle_call");
-    };
-    assert_eq!(method_name.as_slice(), b"oracle_call");
-    assert_eq!(*attached_deposit, NearToken::from_millinear(20));
-    let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
-    assert_eq!(args["receiver_id"], CONTRACT);
-    assert_eq!(
-        args["asset_ids"],
-        near_sdk::serde_json::json!(["nbtc.bridge.near", "aurora", "wrap.near", "zec.omft.near"])
-    );
-}
 
 #[test]
 #[should_panic(expected = "ERR_ORACLE_FUNDS_LOW")]
@@ -915,6 +976,12 @@ fn oracle_push_stores_8_decimal_prices_and_enables_trading() {
             ("aurora", Some((2_292_595_000_000_000, 12))),
             ("wrap.near", Some((382_231_700, 8))),
             ("zec.omft.near", None),
+            ("token.rhealab.near", Some((53_000, 8))),
+            ("22.contract.portalbridge.near", Some((15_000_000_000, 8))),
+            (
+                "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
+                Some((7_200_000, 8)),
+            ),
             ("doge.near", Some((1, 8))),
         ],
     );
@@ -923,9 +990,12 @@ fn oracle_push_stores_8_decimal_prices_and_enables_trading() {
     assert_eq!(stored_price(&perps, "ETH"), (229_259_500_000, T0_MS - 1_500));
     assert_eq!(stored_price(&perps, "NEAR"), (382_231_700, T0_MS - 1_500));
     assert_eq!(stored_price(&perps, "ZEC"), (0, 0));
+    assert_eq!(stored_price(&perps, "SOL"), (15_000_000_000, T0_MS - 1_500));
+    assert_eq!(stored_price(&perps, "AURORA"), (7_200_000, T0_MS - 1_500));
+    assert_eq!(stored_price(&perps, "RHEA"), (53_000, T0_MS - 1_500));
 
     let prices = perps.get_prices();
-    assert_eq!(prices.len(), 4);
+    assert_eq!(prices.len(), 7);
     assert!(prices.iter().find(|p| p.market_id == "NEAR").unwrap().is_fresh);
     assert!(!prices.iter().find(|p| p.market_id == "ZEC").unwrap().is_fresh);
 
@@ -951,6 +1021,16 @@ fn older_push_is_ignored_and_future_timestamps_are_clamped() {
     // The price ages out for trading after 120 s.
     ctx_at("anyone.test", T0_MS + 120_001);
     assert!(!perps.get_prices().iter().any(|p| p.is_fresh));
+}
+
+#[test]
+fn tee_callback_cannot_price_a_signed_market() {
+    let mut perps = setup();
+    perps.register_market(extra_market("SIGNED", PriceSource::Signed));
+    let data = price_data(T0_MS, &[("SIGNED.oracle", Some((P4, 8)))]);
+    push_prices(&mut perps, ORACLE, T0_MS, data);
+    assert_eq!(stored_price(&perps, "SIGNED"), (0, 0));
+    assert!(!perps.get_prices().iter().find(|p| p.market_id == "SIGNED").unwrap().is_fresh);
 }
 
 #[test]

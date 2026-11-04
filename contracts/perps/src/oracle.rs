@@ -1,12 +1,12 @@
 //! Price feed from OutLayer's `price-oracle.testnet` (or the local mock with the same
-//! interface). `refresh_prices` asks the oracle to push its latest prices for the four markets
+//! interface). `refresh_prices` asks the oracle to push prices for all TEE markets
 //! through `oracle_call`; the oracle answers with `oracle_on_call` on this contract.
 
 use near_sdk::json_types::{U128, U64};
 use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId, Gas, GasWeight, NearToken, Promise};
 
-use crate::market::{MarketId, MAX_PRICE_AGE_MS};
+use crate::market::{MarketId, PriceSource, MAX_PRICE_AGE_MS};
 use crate::{Perps, PerpsExt};
 
 /// Guarantee attached to `oracle_call`; OutLayer sends it back in the same transaction.
@@ -82,6 +82,7 @@ impl Perps {
         let asset_ids: Vec<String> = self
             .markets
             .values()
+            .filter(|m| m.price_source == PriceSource::Tee)
             .map(|m| m.oracle_asset_id.clone())
             .collect();
         let args = json!({
@@ -108,16 +109,15 @@ impl Perps {
         );
         let now_ms = env::block_timestamp_ms();
         let timestamp_ms = (data.timestamp.0 / 1_000_000).min(now_ms);
-        let ids: Vec<MarketId> = self.markets.keys().cloned().collect();
-        for id in ids {
-            let market = self.markets.get_mut(&id).expect("listed market");
-            let Some(price) = data
-                .prices
-                .iter()
-                .find(|p| p.asset_id == market.oracle_asset_id)
-                .and_then(|p| p.price.as_ref())
-                .and_then(to_price8)
-            else {
+        for asset in data.prices {
+            let Some(id) = self.oracle_markets.get(&asset.asset_id) else {
+                continue;
+            };
+            let market = self.markets.get_mut(id).expect("indexed market");
+            if market.price_source != PriceSource::Tee {
+                continue;
+            }
+            let Some(price) = asset.price.as_ref().and_then(to_price8) else {
                 continue;
             };
             if price == 0 || timestamp_ms < market.price_timestamp_ms {

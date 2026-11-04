@@ -11,9 +11,6 @@ pub const RATE_PRECISION: u128 = 1_000_000_000_000;
 
 pub const MS_PER_HOUR: u128 = 3_600_000;
 
-/// Opening and closing fee: 0.1% of notional.
-pub const TRADE_FEE_BPS: u128 = 10;
-
 /// Hourly borrow rate at zero utilization: 0.001% of notional per hour.
 pub const BORROW_BASE_PER_HOUR: u128 = 10_000_000;
 
@@ -34,8 +31,8 @@ pub fn mul_div_ceil(a: u128, b: u128, d: u128) -> u128 {
 }
 
 /// Fee in USDC units charged on `notional`, rounded up.
-pub fn trade_fee(notional: u128) -> u128 {
-    mul_div_ceil(notional, TRADE_FEE_BPS, BPS)
+pub fn trade_fee(notional: u128, fee_bps: u32) -> u128 {
+    mul_div_ceil(notional, u128::from(fee_bps), BPS)
 }
 
 /// Hourly borrow rate (RATE_PRECISION scale) for a side carrying `oi` out of `max_oi`.
@@ -124,8 +121,10 @@ mod tests {
 
     #[test]
     fn fees_round_up() {
-        assert_eq!(trade_fee(500 * USD), 500_000);
-        assert_eq!(trade_fee(1), 1);
+        assert_eq!(trade_fee(500 * USD, 10), 500_000);
+        assert_eq!(trade_fee(1, 10), 1);
+        assert_eq!(trade_fee(500 * USD, 3), 150_000);
+        assert_eq!(trade_fee(1, 0), 0);
     }
 
     #[test]

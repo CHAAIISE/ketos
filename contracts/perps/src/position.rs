@@ -93,7 +93,7 @@ impl Position {
         Marked {
             pnl,
             borrow_fee,
-            close_fee: trade_fee(self.size),
+            close_fee: trade_fee(self.size, market.fee_bps),
             equity: to_i128(self.margin) + pnl - to_i128(borrow_fee),
             maintenance: maintenance_margin(self.size, self.max_leverage),
         }
@@ -205,8 +205,8 @@ impl Perps {
 #[near]
 impl Perps {
     /// Opens an isolated-margin position: `margin` USDC is taken from the caller's free margin,
-    /// notional = margin × leverage at the oracle price. The 0.1% opening fee is paid out of
-    /// the position's collateral to the vault.
+    /// notional = margin × leverage at the oracle price. The market's opening fee is paid
+    /// out of the position's collateral to the vault.
     pub fn open_position(
         &mut self,
         market_id: MarketId,
@@ -235,7 +235,7 @@ impl Perps {
         }
         let price = market.fresh_price(now_ms);
         let size = margin * leverage as u128;
-        let fee = trade_fee(size);
+        let fee = trade_fee(size, market.fee_bps);
         // `cap` is the notional (USDC units) still available on this side.
         let room = market.max_oi_per_side().saturating_sub(market.oi(side));
         if size > room {

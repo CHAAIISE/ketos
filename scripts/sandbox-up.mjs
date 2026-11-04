@@ -20,12 +20,15 @@ const USD = 1_000_000n;
 const VAULT_SEED = 10_000n * USD;
 const MARKETS = ["BTC", "ETH", "NEAR", "ZEC"];
 const KEEPER_METHODS = ["refresh_prices", "set_depth", "liquidate"];
-// OutLayer asset ids with 8-decimal prices close to the testnet feed on 2026-11-03.
+// Mock oracle values for sandbox trading; the first four match the 2026-11-03 feed.
 const PRICES = [
   ["nbtc.bridge.near", 7_756_150_000_000n],
   ["aurora", 229_259_500_000n],
   ["wrap.near", 400_000_000n],
   ["zec.omft.near", 120_660_966_700n],
+  ["22.contract.portalbridge.near", 15_000_000_000n],
+  ["aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near", 10_000_000n],
+  ["token.rhealab.near", 5_000_000n],
 ];
 
 if (process.argv.includes("--node")) {
@@ -176,7 +179,11 @@ async function seed(rpcUrl) {
     view(ids.perps, "get_prices"),
     view(ids.perps, "get_vault"),
   ]);
-  if (!markets.every((m) => m.is_open)) throw new Error(`markets not open: ${JSON.stringify(markets)}`);
+  const openMarkets = markets.filter((m) => m.is_open).map((m) => m.id);
+  if (openMarkets.length !== MARKETS.length || MARKETS.some((m) => !openMarkets.includes(m))) {
+    throw new Error(`expected only fixture markets to be open: ${JSON.stringify(markets)}`);
+  }
+  if (markets.length !== 7) throw new Error(`expected 7 listed markets, got ${markets.length}`);
   if (!prices.every((p) => p.is_fresh)) throw new Error(`prices not fresh: ${JSON.stringify(prices)}`);
   if (BigInt(vault.nav) !== VAULT_SEED) throw new Error(`vault NAV ${vault.nav}, expected ${VAULT_SEED}`);
 

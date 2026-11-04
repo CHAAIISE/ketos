@@ -8,12 +8,15 @@ use serde_json::{json, Value};
 const USD: u128 = 1_000_000;
 const KEEPER_METHODS: [&str; 3] = ["refresh_prices", "set_depth", "liquidate"];
 
-/// OutLayer asset ids and 8-decimal prices for BTC, ETH, NEAR, ZEC.
-const PRICES: [(&str, u128); 4] = [
+/// Mock oracle values; the first four match the 2026-11-03 feed.
+const PRICES: [(&str, u128); 7] = [
     ("nbtc.bridge.near", 7_756_150_000_000),
     ("aurora", 229_259_500_000),
     ("wrap.near", 400_000_000),
     ("zec.omft.near", 120_660_966_700),
+    ("22.contract.portalbridge.near", 15_000_000_000),
+    ("aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near", 10_000_000),
+    ("token.rhealab.near", 5_000_000),
 ];
 
 fn wasm(name: &str) -> Vec<u8> {
@@ -136,6 +139,16 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         )
         .transact()
         .await?);
+
+    let markets = view(&perps, "get_markets", json!({})).await?;
+    assert_eq!(markets.as_array().unwrap().len(), 7);
+    let mut paged = Vec::new();
+    for from in [0, 3, 6] {
+        let page = view(&perps, "get_markets", json!({ "from_index": from, "limit": 3 })).await?;
+        paged.extend(page.as_array().unwrap().iter().cloned());
+    }
+    assert_eq!(json!(paged), markets);
+    assert!(markets.as_array().unwrap().iter().all(|m| m["is_open"] == false));
     ok(root
         .call(usdc.id(), "storage_deposit")
         .args_json(json!({ "account_id": perps.id() }))
@@ -183,7 +196,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             .all(|p| p["is_fresh"] == true),
         "{prices}"
     );
-    assert_eq!(prices[2]["price"], "400000000");
+    for (asset, price) in PRICES {
+        let stored = prices.as_array().unwrap().iter()
+            .find(|p| p["oracle_asset_id"] == asset).unwrap();
+        assert_eq!(stored["price"], price.to_string());
+    }
 
     // Depth: the recorded 1Click curve, stamped at the current block time.
     let fixture = depth_fixture();

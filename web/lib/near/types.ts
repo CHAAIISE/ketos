@@ -5,7 +5,7 @@ const u128 = z.string().regex(/^\d+$/).transform(BigInt);
 const i128 = z.string().regex(/^-?\d+$/).transform(BigInt);
 
 export const MARKET_IDS = ["BTC", "ETH", "NEAR", "ZEC"] as const;
-export const marketIdSchema = z.enum(MARKET_IDS);
+export const marketIdSchema = z.string().min(1);
 export type MarketId = z.infer<typeof marketIdSchema>;
 
 export const sideSchema = z.enum(["long", "short"]);

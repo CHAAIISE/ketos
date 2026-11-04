@@ -57,9 +57,7 @@ function MeasuredAt({ markets }: { markets: Market[] }) {
 
 export function ExposureTable({ query, className }: { query: UseQueryResult<Market[]>; className?: string }) {
   const panel = cn("flex min-w-0 flex-col rounded-md border border-border bg-card", className);
-  const markets = query.data
-    ? [...query.data].sort((a, b) => MARKET_IDS.indexOf(a.id) - MARKET_IDS.indexOf(b.id))
-    : null;
+  const markets = query.data;
 
   return (
     <section aria-labelledby="exposure-title" className={panel}>

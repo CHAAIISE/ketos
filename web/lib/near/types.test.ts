@@ -59,6 +59,18 @@ describe("perps view schemas", () => {
     expect(parsed.is_open).toBe(true);
   });
 
+  it("accepts newly listed market ids in markets, positions and prices", () => {
+    expect(marketSchema.parse({ ...market, id: "SOL" }).id).toBe("SOL");
+    expect(positionSchema.parse({ ...position, market_id: "NEW" }).market_id).toBe("NEW");
+    expect(priceSchema.parse({
+      market_id: "NEW",
+      oracle_asset_id: "new.oracle",
+      price: "100000000",
+      timestamp_ms: 1,
+      is_fresh: true,
+    }).market_id).toBe("NEW");
+  });
+
   it("parses a position with a negative I128 pnl", () => {
     const parsed = positionSchema.parse(position);
     expect(parsed.side).toBe("short");
@@ -88,7 +100,6 @@ describe("perps view schemas", () => {
   it("rejects numbers where the contract sends U128 strings", () => {
     expect(marketSchema.safeParse({ ...market, price: 97123 }).success).toBe(false);
     expect(positionSchema.safeParse({ ...position, margin: "-1" }).success).toBe(false);
-    expect(positionSchema.safeParse({ ...position, market_id: "DOGE" }).success).toBe(false);
   });
 
   it("parses the remaining views", () => {
