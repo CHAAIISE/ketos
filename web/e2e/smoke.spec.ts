@@ -20,10 +20,12 @@ test.describe("deployment", { tag: "@smoke" }, () => {
     }
   });
 
-  test("liquidity shows a timestamped measurement and its impact curve", async ({ page }) => {
+  test("risk shows the registry and read-only stress controls", async ({ page }) => {
     await page.goto("/liquidity");
-    await expect(page.getByText("Last measurement").filter({ visible: true })).toBeVisible();
-    await expect(page.getByText(/\d{2}:\d{2}(:\d{2})? UTC/).first()).toBeVisible();
-    await expect(page.getByRole("img", { name: /^Price impact by sell size; exit capacity/ })).toBeVisible();
+    await expect(page).toHaveURL(/\/risk$/);
+    await expect(page.getByTestId("risk-market-NEAR")).toBeVisible();
+    await expect(page.locator("#stress-market")).toBeVisible();
+    await expect(page.getByRole("slider", { name: "Instant price drop" })).toBeVisible();
+    await expect(page.locator("[data-primary]:visible")).toHaveText("Copy re-run command");
   });
 });

@@ -127,7 +127,7 @@ function ExitLadder({ market }: { market: Market }) {
             </div>
           );
         })}
-        <Link href="/liquidity" className="text-label text-tertiary transition-colors hover:text-foreground">
+        <Link href="/risk" className="text-label text-tertiary transition-colors hover:text-foreground">
           See the measured curves →
         </Link>
       </div>

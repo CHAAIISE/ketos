@@ -9,13 +9,13 @@ const linkClass =
 const navLinks = [
   { href: "/#how-it-works", label: "How it works" },
   { href: "/#why", label: "Why" },
-  { href: "/liquidity", label: "Liquidity" },
+  { href: "/risk", label: "Risk" },
 ] as const;
 
 const footerLinks = [
   { href: "/trade", label: "Trade" },
   { href: "/vaults", label: "Vaults" },
-  { href: "/liquidity", label: "Liquidity" },
+  { href: "/risk", label: "Risk" },
   { href: "/#how-it-works", label: "How it works" },
 ] as const;
 

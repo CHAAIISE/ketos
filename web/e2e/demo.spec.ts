@@ -22,7 +22,7 @@ function parseUsd(text: string): number {
   return Number(text.replace(/[^0-9.]/g, ""));
 }
 
-async function openApp(page: Page, name: "Trade" | "Vaults" | "Liquidity"): Promise<void> {
+async function openApp(page: Page, name: "Trade" | "Vaults" | "Risk"): Promise<void> {
   await page.getByRole("navigation", { name: "App" }).getByRole("link", { name }).click();
 }
 
@@ -178,16 +178,25 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
     await expect(sharesRow.locator("span").last()).toHaveText(coreShares);
   });
 
-  await test.step("7. liquidity: measured impact curves for the four assets", async () => {
-    await openApp(page, "Liquidity");
-    await expect(page).toHaveURL(/\/liquidity/);
-    await expect(page.getByText("Last measurement").filter({ visible: true })).toBeVisible();
-    const tabs = page.getByRole("tablist", { name: "Asset" });
+  await test.step("7. risk: measured liquidity and a read-only shock on the real NEAR position", async () => {
+    await openApp(page, "Risk");
+    await expect(page).toHaveURL(/\/risk$/);
+    await expect(page.getByText("Last measurement", { exact: true })).toBeVisible();
     for (const asset of ["BTC", "ETH", "NEAR", "ZEC"]) {
-      await tabs.getByRole("tab", { name: asset }).click();
+      await page.getByTestId(`risk-market-${asset}`).click();
+      await expect(page.locator("#stress-market")).toHaveValue(asset);
+      await page.locator("summary").filter({ hasText: "Latest measured impact curve" }).click();
       await expect(page.getByRole("img", { name: /^Price impact by sell size; exit capacity/ })).toBeVisible();
     }
-    await expect(page.getByText("Derived parameters")).toBeVisible();
+    await page.getByTestId("risk-market-NEAR").click();
+    const row = page.locator('[data-testid^="stress-position-"]').filter({ hasText: "NEAR" });
+    await expect(row).toContainText("Would liquidate");
+    await expect(page.getByTestId("stress-notional")).toHaveText("$500.00");
+    await page.locator("#stress-shock").fill("50");
+    await expect(page.getByTestId("stress-debt-core")).toHaveText(/^\$150\./);
+    await expect(page.getByTestId("stress-debt-long-tail")).toHaveText("$0.00");
+    const oracleAfterScenario = await getMarket("NEAR");
+    expect(oracleAfterScenario.oi_long).toBe("500000000");
     await expect(page.getByText("pnpm depth:sample").first()).toBeVisible();
     await expectSinglePrimary(page, /Copy/);
   });

@@ -130,6 +130,16 @@ Position views expose `margin_mode`. Cross `liquidation_price` is zero because a
 
 Cross margin is available on the V2 contract. The local keeper uses `get_cross_account` before `liquidate_cross`, never individual leg equity. The hosted demo still uses the older isolated-only contract; its deployed views, controls and keeper remain unchanged.
 
+### Risk center
+
+The current client serves `/risk`; `/liquidity` redirects there. The hosted demo keeps its previous liquidity screen until the next deployment.
+
+- The capacity heatmap covers the full market registry. Color compares the larger side's open interest with measured exit capacity; stale, unmeasured and zero-capacity states are explicit. Selecting a market also selects its stress scenario and capacity history.
+- Capacity history uses only real onchain observations inside the trailing 24 hours, at most 48 records. The ring can span minutes rather than a full day; gaps are not backfilled. The latest impact curve remains available below the chart. A recent reduction in capacity or maximum leverage displays a **Market tightened** alert with both observation times.
+- The read-only stress slider applies a 10–50% drop to one asset's oracle price. It reprices real open positions with the contract's integer rounding, entry-locked maintenance and frozen borrow/funding accruals. Affected cross accounts include all peer-market legs and signed cash: an underwater leg of a healthy pool is not liquidated. Unhealthy pools close whole positions in the contract's risk-score/id order until recovery, including penalties, vault payout caps and creditor-vault debt provenance.
+- Results show liquidatable notional, last measured exit capacity, estimated bad debt by vault and affected positions. Isolated bad debt means uncovered negative equity, including unpaid fees, not a booked receivable writeoff. Cross writeoffs occur only after the final leg exits and belong to the vault owed. Capped positive trader payouts are not counted as bad debt.
+
+This is a scenario estimate, not an execution guarantee or a prediction of post-shock liquidity. Position, market, vault and account views are independent finalized reads; missing or inconsistent state prevents a numeric estimate, while stale nonzero oracle prices are explicitly warned. Orders, TP/SL, future accrual and future quotes are excluded. The scenario sends no transaction; the app's background keeper still operates independently. Methodology and asset identifiers are collapsed, with `pnpm depth:sample` available to re-run the measurement. Calculation: [`stress.ts`](web/components/risk/stress.ts); screen: [`risk-screen.tsx`](web/components/risk/risk-screen.tsx).
 
 ### Isolated vaults on fresh deployments
 
@@ -184,7 +194,7 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 
 ## What's new
 
-- Listing and sizing as a pure function of measured exit liquidity: open interest and leverage caps recomputed onchain from 1Click quotes, with the history kept in the contract and shown on `/liquidity`.
+- Listing and sizing as a pure function of measured exit liquidity: open interest and leverage caps recomputed onchain from 1Click quotes, with history kept in the contract. The current client's `/risk` adds a registry-wide heatmap and read-only price-shock scenarios; the hosted demo still uses its previous liquidity screen.
 - Refusal at the contract level, not in the UI: the order ticket only warns, so the onchain refusal and its cap are visible.
 - A keeper key restricted to seven maintenance methods, unable to move funds; the hosted demo currently executes the original three through a throttled HTTP endpoint.
 

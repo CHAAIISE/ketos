@@ -10,7 +10,7 @@ const appLinks = [
   { href: "/trade", label: "Trade" },
   { href: "/markets", label: "Markets" },
   { href: "/vaults", label: "Vaults" },
-  { href: "/liquidity", label: "Liquidity" },
+  { href: "/risk", label: "Risk" },
 ] as const
 
 function TopNav({

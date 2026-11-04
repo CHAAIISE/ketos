@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   distDir: process.env.NEXT_PUBLIC_E2E === "1" ? ".next-e2e" : ".next",
   cacheComponents: true,
   partialPrefetching: true,
+  redirects() {
+    return [{ source: "/liquidity", destination: "/risk", permanent: true }];
+  },
   turbopack: {
     rules: {
       "*.css": {
