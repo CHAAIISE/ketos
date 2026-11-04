@@ -187,10 +187,10 @@ async function ensureRegistered(accountId: string): Promise<void> {
   console.log(`registered ${accountId} on ${ids.usdc}`);
 }
 
-async function seedVault(): Promise<void> {
-  const vault = await view<{ total_shares: string }>(ids.ketos, "get_vault");
+async function seedVault(vaultId: "core" | "long-tail"): Promise<void> {
+  const vault = await view<{ total_shares: string }>(ids.ketos, "get_vault", { vault_id: vaultId });
   if (BigInt(vault.total_shares) > 0n) {
-    console.log("vault already seeded");
+    console.log(`${vaultId} vault already seeded`);
     return;
   }
   await parent.callFunction({
@@ -201,11 +201,11 @@ async function seedVault(): Promise<void> {
   await parent.callFunction({
     contractId: ids.usdc,
     methodName: "ft_transfer_call",
-    args: { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: "deposit_vault" },
+    args: { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: `deposit_vault:${vaultId}` },
     deposit: 1n,
     gas: teraToGas("100"),
   });
-  console.log(`seeded the vault with ${VAULT_SEED / USD} tUSDC`);
+  console.log(`seeded ${vaultId} with ${VAULT_SEED / USD} tUSDC`);
 }
 
 async function topUpKetos(): Promise<void> {
@@ -226,7 +226,8 @@ await ensureContract(ids.ketos, BALANCES.ketos, "ketos", {
 const keeperKey = await ensureKeeperKey();
 await ensureRegistered(ids.ketos);
 await ensureRegistered(parentId);
-await seedVault();
+await seedVault("core");
+await seedVault("long-tail");
 await topUpKetos();
 
 const deployment = {

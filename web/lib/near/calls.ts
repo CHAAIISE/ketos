@@ -9,7 +9,7 @@ const GAS = 100n * TGAS;
 const ONE_YOCTO = 1n;
 
 export const MSG_DEPOSIT_MARGIN = "deposit_margin";
-export const MSG_DEPOSIT_VAULT = "deposit_vault";
+export const MSG_DEPOSIT_VAULT = "deposit_vault:core";
 
 type Contracts = Pick<NearConfig, "ketosContract" | "usdcContract">;
 
@@ -74,5 +74,5 @@ export function depositVaultTx(c: Contracts, amount: bigint): NearTransaction {
 
 /** Burns `shares` vault shares for USDC at the current NAV. */
 export function withdrawVaultTx(c: Contracts, shares: bigint): NearTransaction {
-  return call(c.ketosContract, "withdraw_vault", { shares: shares.toString() }, ONE_YOCTO);
+  return call(c.ketosContract, "withdraw_vault", { vault_id: "core", shares: shares.toString() }, ONE_YOCTO);
 }

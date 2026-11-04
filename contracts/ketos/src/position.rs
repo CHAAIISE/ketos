@@ -94,6 +94,17 @@ pub(crate) fn fees_covered(position: &Position, marked: &Marked, fees: u128) -> 
     u128::try_from(left.max(0)).unwrap_or(0).min(fees)
 }
 
+/// A payer cannot contribute funding beyond collateral plus price PnL. Credits are
+/// honored by the assigned vault, including when they offset an otherwise unpaid loss.
+pub(crate) fn realized_funding(position: &Position, marked: &Marked) -> i128 {
+    let net = to_i128(marked.funding_paid) - to_i128(marked.funding_received);
+    if net > 0 {
+        net.min((to_i128(position.margin) + marked.pnl).max(0))
+    } else {
+        net
+    }
+}
+
 impl Position {
     pub fn is_long(&self) -> bool {
         self.side == Side::Long
@@ -230,13 +241,14 @@ impl Ketos {
         let (position, marked) = self.remove_position(id, price, now_ms);
         let owed = marked.equity - to_i128(marked.close_fee);
         let mut payout = u128::try_from(owed.max(0)).unwrap_or(0);
-        let available = self.vault_usdc + position.margin;
+        let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
+        let available = self.vaults[vault_id.index()].balance + position.margin;
         if payout > available {
             payout = available;
         }
-        self.vault_usdc = available - payout;
         let fees = fees_covered(&position, &marked, marked.borrow_fee + marked.close_fee);
-        self.record_fee(now_ms, fees);
+        let net_funding = realized_funding(&position, &marked);
+        self.record_settlement(vault_id, position.margin, payout, fees, net_funding, 0);
         (position, marked, payout)
     }
 
@@ -272,6 +284,7 @@ impl Ketos {
         let entry_funding_paid_index = market.funding.paid_index[funding_side].0;
         let entry_funding_received_index = market.funding.received_index[funding_side].0;
         let max_leverage = market.max_leverage;
+        let vault_id = market.vault_id;
         *market.oi_mut(side) += size;
         market.track(side, size, price, entry_borrow_index, true);
         market.funding.track(side, size, entry_funding_paid_index, entry_funding_received_index, true);
@@ -285,8 +298,7 @@ impl Ketos {
         let id = self.next_position_id;
         self.next_position_id += 1;
         account.positions.push(id);
-        self.vault_usdc += fee;
-        self.record_fee(now_ms, fee);
+        self.record_opening_fee(vault_id, now_ms, fee);
 
         let position = Position {
             account_id: account_id.clone(),

@@ -7,7 +7,7 @@ use near_sdk::{env, near, require, AccountId};
 
 use crate::market::MarketId;
 use crate::math::{mul_div_ceil, mul_div_floor, BPS};
-use crate::position::{fees_covered, PositionId, Side};
+use crate::position::{fees_covered, realized_funding, PositionId, Side};
 use crate::{emit_event, Ketos, KetosExt};
 
 /// Liquidation penalty paid to the vault: 1% of notional.
@@ -78,11 +78,12 @@ impl Ketos {
 
         let (position, marked) = self.remove_position(position_id, price, now_ms);
         let (reward, penalty, returned) = split_equity(marked.equity, position.size);
-        // Equity at or below maintenance is less than the position's original collateral.
-        let available = self.vault_usdc + position.margin;
-        self.vault_usdc = available - reward - returned;
+        let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
         let borrow_paid = fees_covered(&position, &marked, marked.borrow_fee);
-        self.record_fee(now_ms, penalty + borrow_paid);
+        self.record_settlement(
+            vault_id, position.margin, reward + returned, borrow_paid,
+            realized_funding(&position, &marked), penalty,
+        );
         if returned > 0 {
             self.accounts
                 .get_mut(&position.account_id)

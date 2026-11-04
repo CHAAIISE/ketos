@@ -34,7 +34,7 @@ fn balanced_market_has_no_funding_after_ten_hours() {
         assert_eq!(p.funding_received.0, 0);
         assert_eq!(p.equity.0, p.margin.0 as i128 - p.borrow_fee.0 as i128);
     }
-    assert_eq!(ketos.get_vault().funding_net_due.0, 0);
+    assert_eq!(ketos.get_vault(VaultId::Core).funding_net_due.0, 0);
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn assert_ten_hour_funding(long_leverage: u32, short_leverage: u32) {
     assert_eq!(before.funding_payment.0, 750_000);
     assert_eq!(before.equity.0, before.margin.0 as i128 - before.borrow_fee.0 as i128 - 750_000);
     assert_eq!(ketos.get_position(receiver).unwrap().funding_payment.0, -250_000);
-    let vault = ketos.get_vault();
+    let vault = ketos.get_vault(VaultId::Core);
     assert_eq!(vault.funding_net_due.0, 500_000);
     assert_eq!(vault.reserved.0, 400 * USD + 250_000);
     assert_eq!(vault.nav.0, vault.balance.0 + vault.borrow_fees_due.0 + 500_000);
@@ -84,9 +84,9 @@ fn assert_ten_hour_funding(long_leverage: u32, short_leverage: u32) {
     }
     let fees = long.close_fee.0 + short.close_fee.0;
     let borrow = vault.borrow_fees_due.0;
-    assert_eq!(ketos.vault_usdc, vault.balance.0 + fees + borrow + 500_000);
-    assert_eq!(ketos.vault_usdc + payouts, vault.balance.0 + long.margin.0 + short.margin.0);
-    assert_eq!(ketos.get_vault().funding_net_due.0, 0);
+    assert_eq!(ketos.vaults[0].balance, vault.balance.0 + fees + borrow + 500_000);
+    assert_eq!(ketos.vaults[0].balance + payouts, vault.balance.0 + long.margin.0 + short.margin.0);
+    assert_eq!(ketos.get_vault(VaultId::Core).funding_net_due.0, 0);
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn vault_keeps_receiver_funding_reserved_after_payer_exits() {
     let now = T0_MS + 10 * HOUR_MS;
     close_at(&mut ketos, long.id, P4, now);
     let receiver = ketos.get_position(short.id).unwrap();
-    let vault = ketos.get_vault();
+    let vault = ketos.get_vault(VaultId::Core);
     assert_eq!(receiver.funding_payment.0, -250_000);
     assert_eq!(vault.funding_net_due.0, -250_000);
     assert_eq!(vault.reserved.0, 100 * USD + 250_000);
@@ -182,13 +182,13 @@ fn funding_alone_can_make_a_position_liquidatable() {
     assert!(marked.equity.0 <= marked.maintenance_margin.0 as i128);
     assert!(marked.equity.0 + marked.funding_payment.0 > marked.maintenance_margin.0 as i128);
     assert!(marked.liquidation_price.0 > P4);
-    let vault_before = ketos.vault_usdc;
+    let vault_before = ketos.vaults[VaultId::Core.index()].balance;
     let record = ketos.liquidate(position.id);
     assert_eq!(record.funding_paid.0, 50 * USD);
     assert_eq!(record.funding_payment, marked.funding_payment);
     assert_eq!(record.equity, marked.equity);
-    assert_eq!(ketos.vault_usdc + record.reward.0 + record.returned.0, vault_before + position.margin.0);
-    assert_eq!(ketos.get_vault().funding_net_due.0, 0);
+    assert_eq!(ketos.vaults[0].balance + record.reward.0 + record.returned.0, vault_before + position.margin.0);
+    assert_eq!(ketos.get_vault(VaultId::Core).funding_net_due.0, 0);
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn receivers_are_paid_even_when_payer_is_underwater() {
     assert_eq!(receiver.funding_received.0, 250_000);
     let payout = ketos.close_position(short.id).0;
     assert_eq!(payout as i128, receiver.equity.0 - receiver.close_fee.0 as i128);
-    assert_eq!(ketos.vault_usdc + payout, 10_000 * USD + 100 * USD + 100_000 + short.margin.0);
+    assert_eq!(ketos.vaults[0].balance + payout, 10_000 * USD + 100 * USD + 100_000 + short.margin.0);
 }
 
 #[test]

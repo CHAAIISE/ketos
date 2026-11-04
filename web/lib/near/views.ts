@@ -104,11 +104,11 @@ export class KetosViews {
   }
 
   vault() {
-    return this.view(vaultSchema, this.ketosContract, "get_vault");
+    return this.view(vaultSchema, this.ketosContract, "get_vault", { vault_id: "core" });
   }
 
   vaultAccount(accountId: string) {
-    return this.view(vaultAccountSchema, this.ketosContract, "get_vault_account", { account_id: accountId });
+    return this.view(vaultAccountSchema, this.ketosContract, "get_vault_account", { vault_id: "core", account_id: accountId });
   }
 
   /** tUSDC wallet balance (6 decimals). */

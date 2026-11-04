@@ -70,7 +70,7 @@ Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA.
 
 `get_markets({ "from_index": 0, "limit": 100 })` returns markets in listing order (default 50, maximum 100 per page). The client reads every page. A new market has no exit capacity and cannot accept positions until measured; its leverage is the lower of its configured ceiling and the live liquidity tier. Oracle callbacks match asset ids rather than ticker order and update only TEE-priced entries.
 
-The deployed demo still uses the four-market contract listed below. The new registry changes the serialized state: deploy it to a **fresh contract account**, not over that existing account. Core / Long-tail assignments are registry metadata; settlement currently uses the single LP vault.
+The deployed demo still uses the four-market contract listed below. The new registry changes the serialized state: deploy it to a **fresh contract account**, not over that existing account. Fresh deployments settle each market against its assigned Core or Long-tail vault.
 
 ### Funding on fresh deployments
 
@@ -100,6 +100,18 @@ The deployed four-market demo does **not** have funding yet. The new fields chan
 - `get_orders({ "account_id": "..." })` returns active orders; `get_open_orders({ "from_index": 0, "limit": 100 })` supports executor discovery. Accounts hold at most 50 active orders, execution batches at most 50 ids. Order placement, cancellation, fill and rejection emit onchain events.
 
 These methods require a fresh contract account. The deployed demo, order controls and existing keeper have not been switched to this contract yet.
+
+### Isolated vaults on fresh deployments
+
+[`vault.rs`](contracts/ketos/src/vault.rs) maintains independent balances, LP shares, NAV, reserves and revenue for `core` (BTC, ETH, NEAR, SOL) and `long-tail` (ZEC, AURORA, RHEA). Price gains, losses, borrow fees, funding and liquidation penalties affect only the market's assigned vault. A winning Long-tail position cannot spend Core's funds, even if Long-tail runs out of liquidity.
+
+- Deposit through the configured USDC contract's `ft_transfer_call` with `msg: "deposit_vault:core"` or `"deposit_vault:long-tail"`. The unqualified message is not accepted. Shares are minted at that vault's NAV, rounded down.
+- Read `get_vault({ "vault_id": "core" })`, `get_vaults()` (Core, then Long-tail), or `get_vault_account({ "vault_id": "long-tail", "account_id": "..." })`. Every vault view includes its realized `revenue` counters.
+- Withdraw with `withdraw_vault({ "vault_id": "long-tail", "shares": "..." })` and 1 yoctoNEAR. Only shares owned in that vault authorize a withdrawal; only its positions reserve liquidity. A failed token transfer restores shares and funds to the same vault.
+- Realized revenue separates trading/borrow `fees`, net `funding`, counterparty `trader_pnl`, `liquidations` and `listing` fees. Positive signed amounts earn USDC for LPs. Funding a payer cannot cover is not counted as collected; counterparty PnL includes unpaid-loss and capped-payout adjustments. The components sum exactly to balance changes excluding LP deposits and withdrawals. Listing income remains zero until paid listings are enabled.
+- Anyone can call `snapshot_vaults()` once at least 3,600,000 ms have elapsed since the last snapshot. Earlier calls fail without changing either history. Both vaults are recorded together; each ring keeps 168 observations in chronological order through `get_vault_history({ "vault_id": "core" })`. Snapshots freeze timestamp, NAV, share price, TVL (vault-owned USDC, not trader collateral) and cumulative realized revenue. Missed hours are not backfilled; valuations use the latest stored oracle prices.
+
+The sandbox and deployment script seed 10,000 test USDC per vault. The existing single-vault screen and hooks select Core; the vault selector, onchain-history charts and revenue display are not exposed there yet. The deployed demo still uses its original single-vault contract. Do not run the current client against that old contract: the vault deposit message and required `vault_id` arguments have changed.
 
 All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/ketos/src/) (`position.rs`, `funding.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
 

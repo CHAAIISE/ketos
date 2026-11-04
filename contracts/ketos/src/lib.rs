@@ -26,13 +26,13 @@ use near_sdk::{
 use account::Account;
 use depth::DepthRecord;
 use liquidation::LiquidationRecord;
-use market::{default_markets, Market, MarketId};
+use market::{default_markets, Market, MarketId, VaultId};
 use orders::{Order, OrderId};
 use position::{Position, PositionId};
-use vault::FeeLog;
+use vault::{Vault, VaultSnapshot};
 
 pub const MSG_DEPOSIT_MARGIN: &str = "deposit_margin";
-pub const MSG_DEPOSIT_VAULT: &str = "deposit_vault";
+pub const MSG_DEPOSIT_VAULT: &str = "deposit_vault:";
 
 #[near]
 #[derive(BorshStorageKey)]
@@ -42,9 +42,10 @@ enum StorageKey {
     Positions,
     Depth,
     Liquidations,
-    VaultShares,
+    VaultShares { vault_id: VaultId },
     OracleMarkets,
     Orders,
+    VaultHistory { vault_id: VaultId },
 }
 
 #[near(serializers = [json])]
@@ -73,11 +74,11 @@ pub struct Ketos {
     /// Ring of the last `LIQUIDATION_HISTORY_LEN` liquidations.
     liquidations: Vector<LiquidationRecord>,
     liquidation_count: u64,
-    /// USDC owned by the LP vault: deposits, fees, trader losses, minus trader gains paid out.
-    vault_usdc: u128,
-    vault_shares: LookupMap<AccountId, u128>,
-    vault_total_shares: u128,
-    fee_log: FeeLog,
+    vaults: [Vault; 2],
+    vault_shares: [LookupMap<AccountId, u128>; 2],
+    vault_history: [Vector<VaultSnapshot>; 2],
+    vault_snapshot_count: u64,
+    last_snapshot_at_ms: Option<u64>,
 }
 
 #[near]
@@ -98,10 +99,17 @@ impl Ketos {
             depth: LookupMap::new(StorageKey::Depth),
             liquidations: Vector::new(StorageKey::Liquidations),
             liquidation_count: 0,
-            vault_usdc: 0,
-            vault_shares: LookupMap::new(StorageKey::VaultShares),
-            vault_total_shares: 0,
-            fee_log: FeeLog::default(),
+            vaults: [Vault::default(), Vault::default()],
+            vault_shares: [
+                LookupMap::new(StorageKey::VaultShares { vault_id: VaultId::Core }),
+                LookupMap::new(StorageKey::VaultShares { vault_id: VaultId::LongTail }),
+            ],
+            vault_history: [
+                Vector::new(StorageKey::VaultHistory { vault_id: VaultId::Core }),
+                Vector::new(StorageKey::VaultHistory { vault_id: VaultId::LongTail }),
+            ],
+            vault_snapshot_count: 0,
+            last_snapshot_at_ms: None,
         };
         for config in default_markets() {
             contract.register_market(config);
@@ -146,7 +154,14 @@ impl FungibleTokenReceiver for Ketos {
         require!(amount.0 > 0, "ERR_ZERO_AMOUNT");
         match msg.as_str() {
             MSG_DEPOSIT_MARGIN => self.deposit_margin(&sender_id, amount.0),
-            MSG_DEPOSIT_VAULT => self.deposit_vault(&sender_id, amount.0),
+            _ if msg.starts_with(MSG_DEPOSIT_VAULT) => {
+                let vault_id = match &msg[MSG_DEPOSIT_VAULT.len()..] {
+                    "core" => VaultId::Core,
+                    "long-tail" => VaultId::LongTail,
+                    _ => env::panic_str("ERR_UNKNOWN_VAULT"),
+                };
+                self.deposit_vault(vault_id, &sender_id, amount.0);
+            }
             _ => env::panic_str("ERR_INVALID_MSG"),
         }
         PromiseOrValue::Value(U128(0))

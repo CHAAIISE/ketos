@@ -165,19 +165,19 @@ async function seed(rpcUrl) {
   for (const accountId of [ids.ketos, ids.lp]) {
     await call(rootAccount, ids.usdc, "storage_deposit", { account_id: accountId }, { deposit: nearToYocto("0.0125") });
   }
-  await call(rootAccount, ids.usdc, "mint", { account_id: ids.lp, amount: VAULT_SEED.toString() });
-  await call(
-    as(ids.lp),
-    ids.usdc,
-    "ft_transfer_call",
-    { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: "deposit_vault" },
-    { deposit: 1n },
-  );
+  for (const vaultId of ["core", "long-tail"]) {
+    await call(rootAccount, ids.usdc, "mint", { account_id: ids.lp, amount: VAULT_SEED.toString() });
+    await call(
+      as(ids.lp), ids.usdc, "ft_transfer_call",
+      { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: `deposit_vault:${vaultId}` },
+      { deposit: 1n },
+    );
+  }
 
   const [markets, prices, vault] = await Promise.all([
     view(ids.ketos, "get_markets"),
     view(ids.ketos, "get_prices"),
-    view(ids.ketos, "get_vault"),
+    view(ids.ketos, "get_vault", { vault_id: "core" }),
   ]);
   const openMarkets = markets.filter((m) => m.is_open).map((m) => m.id);
   if (openMarkets.length !== MARKETS.length || MARKETS.some((m) => !openMarkets.includes(m))) {

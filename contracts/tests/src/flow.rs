@@ -230,9 +230,9 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .transact()
         .await?);
     transfer_call(&trader, &usdc, &ketos, 500 * USD, "deposit_margin").await?;
-    transfer_call(&lp, &usdc, &ketos, 10_000 * USD, "deposit_vault").await?;
+    transfer_call(&lp, &usdc, &ketos, 10_000 * USD, "deposit_vault:core").await?;
     assert_eq!(margin(&ketos, &trader).await?, 500 * USD);
-    let vault = view(&ketos, "get_vault", json!({})).await?;
+    let vault = view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?;
     assert_eq!(vault["nav"], (10_000 * USD).to_string());
 
     // Long NEAR 5x, then a ZEC short sized past the measured exit capacity.
@@ -322,7 +322,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     assert_eq!(ft_balance(&usdc, &trader).await?, 500 * USD + free);
 
     // The vault earned the trader's loss net of the short's gain, plus fees.
-    let vault = view(&ketos, "get_vault", json!({})).await?;
+    let vault = view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?;
     let nav: u128 = vault["nav"].as_str().unwrap().parse()?;
     assert!(nav > 10_000 * USD, "{vault}");
 
