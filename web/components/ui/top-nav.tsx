@@ -12,6 +12,7 @@ const appLinks = [
   { href: "/portfolio", label: "Portfolio" },
   { href: "/vaults", label: "Vaults" },
   { href: "/risk", label: "Risk" },
+  { href: "/leaderboard", label: "Leaderboard" },
 ] as const
 
 function TopNav({

@@ -138,6 +138,10 @@ The cumulative realized-PnL chart uses retained open, close and liquidation even
 
 Positions can be closed or moved from Isolated to Cross after a risk confirmation. Open Orders supports cancellation; Trade History includes liquidations; Funding History shows settled payments. Deposit and Withdraw use the shared margin dialog. Deposits & Withdrawals lists successful margin transfers from the onchain ring, including activity made outside this browser. Recording starts with the transfer-history contract update; older transfers are not backfilled, and vault movements remain on Vaults. The hosted website gains this screen at its next release.
 
+### Leaderboard
+
+[`/leaderboard`](web/components/leaderboard/leaderboard-screen.tsx) reads the whole indexed cohort with one `get_leaderboard` call (500 rows max) and ranks it client-side by realized PnL, ROI, volume or trades, all-time. Ties break on descending account id, as in the contract indexes. The connected account is highlighted and its rank shown above the table; accounts without an executed entry or exit are not ranked. The hosted website gains this screen at its next release.
+
 ### Risk center
 
 The current client serves `/risk`; `/liquidity` redirects there. The hosted demo keeps its previous liquidity screen until the next deployment.

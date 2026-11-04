@@ -62,7 +62,7 @@ export function sortMarkets(
   });
 }
 
-function SortHeader({
+export function SortHeader<K extends string>({
   label,
   sortKey,
   sort,
@@ -70,9 +70,9 @@ function SortHeader({
   align = "right",
 }: {
   label: ReactNode;
-  sortKey: SortKey;
-  sort: Sort;
-  onSort: (key: SortKey) => void;
+  sortKey: K;
+  sort: { key: K; dir: "asc" | "desc" };
+  onSort: (key: K) => void;
   align?: "left" | "right";
 }) {
   const active = sort.key === sortKey;
