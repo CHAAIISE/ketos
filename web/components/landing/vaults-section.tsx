@@ -31,7 +31,7 @@ function VaultRow({ vault, markets }: { vault: Vault; markets: Market[] | undefi
   const assigned = markets?.filter((m) => m.vault_id === vault.id).map((m) => m.id);
   return (
     <article data-testid={`landing-vault-${vault.id}`} className="flex flex-col gap-5 border-t border-border py-8 first:border-t-0 first:pt-0">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+      <div className="flex flex-col gap-1">
         <h3 className="text-heading text-foreground">
           <Link
             href={`/vaults/${vault.id}`}

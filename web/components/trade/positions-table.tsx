@@ -39,7 +39,8 @@ function positionValue(p: Position): bigint {
 
 const pnlClass = (pnl: bigint) => (pnl > 0n ? "text-success" : pnl < 0n ? "text-destructive" : "text-foreground");
 
-const th = "px-3 font-normal whitespace-nowrap";
+const th = "px-2 font-normal whitespace-nowrap";
+const td = "px-2 text-right";
 
 /** Open positions: a table from tablet width, stacked cards on phones so Close stays in reach. */
 export function PositionsTable({ positions, orders, allowSwitchToCross = false }: { positions: readonly Position[]; orders: readonly Order[]; allowSwitchToCross?: boolean }) {
@@ -60,12 +61,15 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
       <span className="text-destructive">{bracket(p.stop_loss)}</span>
     </span>
   );
-  // `funding_payment` is positive when the position pays.
-  const fundingValue = (p: Position) => (
-    <span className={p.funding_payment > 0n ? "text-destructive" : p.funding_payment < 0n ? "text-success" : undefined}>
-      {formatUsd(-p.funding_payment, { signed: true })}
-    </span>
-  );
+  // `funding_payment` is positive when the position pays; sub-cent amounts display as $0.00 and stay neutral.
+  const fundingValue = (p: Position) => {
+    const visible = p.funding_payment >= 5_000n || p.funding_payment <= -5_000n;
+    return (
+      <span className={!visible ? undefined : p.funding_payment > 0n ? "text-destructive" : "text-success"}>
+        {formatUsd(-p.funding_payment, { signed: true })}
+      </span>
+    );
+  };
   const liqValue = (p: Position) =>
     p.margin_mode === "cross" ? (
       <Term hint="Cross positions share one margin pool: the pool is liquidated when its equity falls to its maintenance margin, not at a price of this position alone.">
@@ -181,7 +185,7 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
       </ul>
 
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[1120px] text-label tabular-nums">
+        <table className="w-full min-w-[1040px] text-label tabular-nums">
           <thead className="text-tertiary">
             <tr className="h-8">
               <th scope="col" className={cn(th, "text-left")}>Coin</th>
@@ -200,21 +204,21 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
           </thead>
           <tbody>
             {positions.map((p) => (
-              <tr key={p.id} data-testid={`position-${p.id}`} className="h-9 border-t border-border text-foreground">
-                <th scope="row" className="px-3 text-left font-normal">
+              <tr key={p.id} data-testid={`position-${p.id}`} className="h-9 border-t border-border whitespace-nowrap text-foreground">
+                <th scope="row" className="px-2 text-left font-normal">
                   {coin(p)}
                 </th>
-                <td className="px-3 text-right">{assetSize(p)}</td>
-                <td className="px-3 text-right">{formatUsd(positionValue(p))}</td>
-                <td className="px-3 text-right">{formatPrice(p.entry_price)}</td>
-                <td className="px-3 text-right">{formatPrice(p.mark_price)}</td>
-                <td className="px-3 text-right">{pnl(p)}</td>
-                <td className="px-3 text-right text-warning">{liqValue(p)}</td>
-                <td className="px-3 text-right">{formatUsd(p.margin)} {marginMode(p)}</td>
-                <td className="px-3 text-right">{fundingValue(p)}</td>
-                <td className="px-3 text-right whitespace-nowrap">{tpsl(p)}</td>
-                <td className="px-3 text-right">{formatUsd(p.borrow_fee + p.close_fee)}</td>
-                <td className="px-3 text-right">{closeButton(p)}</td>
+                <td className={td}>{assetSize(p)}</td>
+                <td className={td}>{formatUsd(positionValue(p))}</td>
+                <td className={td}>{formatPrice(p.entry_price)}</td>
+                <td className={td}>{formatPrice(p.mark_price)}</td>
+                <td className={td}>{pnl(p)}</td>
+                <td className={cn(td, "text-warning")}>{liqValue(p)}</td>
+                <td className={td}>{formatUsd(p.margin)} {marginMode(p)}</td>
+                <td className={td}>{fundingValue(p)}</td>
+                <td className={td}>{tpsl(p)}</td>
+                <td className={td}>{formatUsd(p.borrow_fee + p.close_fee)}</td>
+                <td className={td}>{closeButton(p)}</td>
               </tr>
             ))}
           </tbody>

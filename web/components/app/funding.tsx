@@ -56,14 +56,7 @@ export function FundButton({
       {faucet.isPending ? (
         "Funding…"
       ) : coolingDown ? (
-        prominent ? (
-          `Faucet used, try again in ${waitLabel(waitMs)}`
-        ) : (
-          <>
-            <span className="sm:hidden">{waitLabel(waitMs)}</span>
-            <span className="hidden sm:inline">Available in {waitLabel(waitMs)}</span>
-          </>
-        )
+        prominent ? `Faucet used, try again in ${waitLabel(waitMs)}` : `Fund in ${waitLabel(waitMs)}`
       ) : prominent ? (
         "Get 1,000 USDC"
       ) : (

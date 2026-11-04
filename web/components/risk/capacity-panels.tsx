@@ -97,7 +97,11 @@ export function CapacityHistory({ view, now }: { view: DepthView | null; now: nu
             {tightened && previous ? <><p className="font-medium">Market tightened</p><p className="mt-1 text-label">Latest recent measurement {timestamp(latest.measured_at_ms)} vs preceding record {timestamp(previous.measured_at_ms)}. {capacityDrop ? `Capacity: ${formatSizeUsd(previous.exit_capacity_usd)} → ${formatSizeUsd(latest.exit_capacity_usd)}. ` : ""}{leverageDrop ? `Max leverage: ${previous.max_leverage}× → ${latest.max_leverage}×.` : ""}</p></> : <p>No recent tightening observed (limited retained history). Alerts compare the latest measurement, if within 30 min, with its preceding retained record.</p>}
             <p className="mt-1 text-label"><span>Last measurement</span>: {timestamp(latest.measured_at_ms)} · {formatAge(latest.measured_at_ms, now)}{!recent ? " · stale measurement" : ""}. {previous ? `Baseline: ${timestamp(previous.measured_at_ms)}.` : "No preceding retained record for comparison."}</p>
           </div>
-          <CapacityPlot records={records} />
+          {records.length >= 2 ? (
+            <CapacityPlot records={records} />
+          ) : (
+            <p className="px-3 pb-3 text-label text-tertiary">One observation in the window: the curve appears from the second measurement. Its value is in the table below.</p>
+          )}
           <div className="min-w-0 overflow-x-auto border-t border-border">
             <table className="w-full text-label">
               <caption className="sr-only">Real onchain depth observations, newest first</caption>

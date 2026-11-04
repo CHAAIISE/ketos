@@ -48,7 +48,7 @@ function Rows({ markets }: { markets: Market[] }) {
             <th scope="col" className="py-3 pr-4 text-right font-medium"><span className="md:hidden">OI / cap</span><span className="hidden md:inline">Open interest / cap per side</span></th>
             <th scope="col" className="hidden md:table-cell py-3 pr-4 text-right font-medium">Max leverage</th>
             <th scope="col" className="hidden md:table-cell py-3 pr-4 text-left font-medium">Vault</th>
-            <th scope="col" className="py-3 text-left font-medium">Status</th>
+            <th scope="col" className="hidden sm:table-cell py-3 text-left font-medium">Status</th>
           </tr>
         </thead>
         <tbody>
@@ -63,6 +63,9 @@ function Rows({ markets }: { markets: Market[] }) {
                   >
                     {marketName(m.id)}
                   </Link>
+                  <span className="block text-label font-normal sm:hidden">
+                    <Status market={m} />
+                  </span>
                 </th>
                 <td className={cn("pr-4 text-right text-foreground", !isPriceFresh(m, nowMs) && "text-tertiary")}>
                   {m.price > 0n ? formatPrice(m.price) : "—"}
@@ -79,7 +82,7 @@ function Rows({ markets }: { markets: Market[] }) {
                 </td>
                 <td className="hidden md:table-cell pr-4 text-right text-foreground">{m.max_leverage}×</td>
                 <td className="hidden md:table-cell pr-4 text-muted-foreground">{VAULT_LABEL[m.vault_id]}</td>
-                <td>
+                <td className="hidden sm:table-cell">
                   <Status market={m} />
                 </td>
               </tr>

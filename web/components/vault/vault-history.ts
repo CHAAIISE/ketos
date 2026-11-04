@@ -36,6 +36,23 @@ const historyDate = new Intl.DateTimeFormat("en-GB", {
 export const formatHistoryTime = (ms: number): string =>
   `${historyDate.format(ms)} UTC`;
 
+const historyDateSeconds = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZone: "UTC",
+});
+
+/** Axis end labels; adds seconds when both ends fall in the same minute. */
+export function formatHistoryAxis(firstMs: number, lastMs: number): [string, string] {
+  const first = formatHistoryTime(firstMs);
+  const last = formatHistoryTime(lastMs);
+  if (first !== last) return [first, last];
+  return [`${historyDateSeconds.format(firstMs)} UTC`, `${historyDateSeconds.format(lastMs)} UTC`];
+}
+
 export const rangeOf = (id: HistoryRange) =>
   RANGES.find((r) => r.id === id) ?? RANGES[0];
 

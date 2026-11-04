@@ -7,7 +7,7 @@ import { STALE_AFTER_MS, formatAge, formatUtc, useNow } from "@/components/landi
 import { Badge } from "@/components/ui/badge";
 import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
-import type { Market, VaultId } from "@/lib/near/types";
+import { isMeasuring, type Market, type VaultId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { PanelHeading } from "./panel-heading";
 import { Term } from "./term";
@@ -43,8 +43,10 @@ function UsageBar({ net, capacity }: { net: bigint; capacity: bigint }) {
 
 function MeasuredAt({ markets }: { markets: Market[] }) {
   const nowMs = useNow();
-  const oldest = Math.min(...markets.map((m) => m.depth_measured_at_ms));
-  if (!oldest) return <span className="text-label text-tertiary">Exit capacity not measured yet</span>;
+  const measured = markets.map((m) => m.depth_measured_at_ms).filter((ms) => ms > 0);
+  if (!measured.length) return <span className="text-label text-tertiary">Exit capacity not measured yet</span>;
+  const oldest = Math.min(...measured);
+  const waiting = markets.length - measured.length;
   const stale = nowMs > 0 && nowMs - oldest > STALE_AFTER_MS;
   const age = formatAge(oldest, nowMs);
   return (
@@ -52,6 +54,7 @@ function MeasuredAt({ markets }: { markets: Market[] }) {
       Exit capacity measured {formatUtc(oldest)}
       {age ? ` · ${age}` : null}
       {stale ? " · older than 30 min, new positions paused" : null}
+      {waiting ? ` · ${waiting} awaiting first measurement` : null}
     </span>
   );
 }
@@ -103,7 +106,11 @@ export function ExposureTable({ query, vaultId, className }: { query: UseQueryRe
                       <th scope="row" className="px-3 text-left font-medium text-foreground">
                         <span className="inline-flex items-center gap-2">
                           <Link href={`/trade?market=${m.id}`} className="hover:underline">{m.id}</Link>
-                          {m.is_open ? null : <Badge variant="warning">paused</Badge>}
+                          {isMeasuring(m) ? (
+                            <Badge variant="warning">Measuring</Badge>
+                          ) : m.is_open ? null : (
+                            <Badge>Paused</Badge>
+                          )}
                         </span>
                       </th>
                       <td className="px-3 text-right text-foreground">{usd0(m.oi_long)}</td>
@@ -111,10 +118,10 @@ export function ExposureTable({ query, vaultId, className }: { query: UseQueryRe
                       <td className="px-3 text-right">
                         <NetCell net={m.oi_long - m.oi_short} />
                       </td>
-                      <td className="px-3 text-right text-foreground">{usd0(m.exit_capacity)}</td>
-                      <td className="px-3 text-right text-muted-foreground">{usd0(m.max_oi_per_side)}</td>
+                      <td className="px-3 text-right text-foreground">{isMeasuring(m) ? "—" : usd0(m.exit_capacity)}</td>
+                      <td className="px-3 text-right text-muted-foreground">{isMeasuring(m) ? "—" : usd0(m.max_oi_per_side)}</td>
                       <td className="px-3 text-right text-muted-foreground">
-                        <UsageBar net={m.oi_long - m.oi_short} capacity={m.exit_capacity} />
+                        {isMeasuring(m) ? <span className="text-tertiary">awaiting measurement</span> : <UsageBar net={m.oi_long - m.oi_short} capacity={m.exit_capacity} />}
                       </td>
                     </tr>
                   ))

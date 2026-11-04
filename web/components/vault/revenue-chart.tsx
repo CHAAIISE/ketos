@@ -34,6 +34,7 @@ export function RevenueChart({
 }) {
   const sums = sumBuckets(buckets);
   const observed = buckets.some((bucket) => bucket.observations > 0);
+  const booked = buckets.some((bucket) => REVENUE_KEYS.some((key) => bucket.amounts[key] !== 0n));
   const extents = buckets.flatMap((b) => [
     REVENUE_KEYS.reduce(
       (sum, key) =>
@@ -71,6 +72,11 @@ export function RevenueChart({
           <span className="pointer-events-none absolute top-1/2 left-0 -translate-y-full text-label text-tertiary">
             0
           </span>
+          {observed && !booked ? (
+            <span className="pointer-events-none absolute inset-x-0 top-1/2 mt-2 text-center text-label text-tertiary">
+              No revenue booked in this window yet
+            </span>
+          ) : null}
           {buckets.map((bucket) => (
             <div
               key={bucket.start}

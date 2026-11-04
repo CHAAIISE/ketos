@@ -74,7 +74,7 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
     await expectSinglePrimary(page, /^Get 1,000 USDC$/);
     await page.getByTestId("fund-button").click();
     await expectToast(page, /1,000 USDC added to your wallet/);
-    await expect(page.getByTestId("fund-button")).toHaveText(/Available in \d+ min/);
+    await expect(page.getByTestId("fund-button")).toHaveText(/Fund in \d+ min/);
   });
 
   await test.step("3. trade: enable trading with 200 USDC of margin", async () => {

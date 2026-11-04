@@ -4,7 +4,7 @@ import { useState, type KeyboardEvent, type PointerEvent } from "react";
 import { EmptyState, Skeleton } from "@/components/app/states";
 import { formatUsd } from "@/lib/near/format";
 import type { HistoryEvent } from "@/lib/near/types";
-import { formatHistoryTime } from "@/components/vault/vault-history";
+import { formatHistoryAxis, formatHistoryTime } from "@/components/vault/vault-history";
 import { cumulativePnl, type PnlPoint } from "./portfolio-math";
 
 const VIEW_W = 1000;
@@ -140,8 +140,9 @@ function Plot({ points }: { points: readonly PnlPoint[] }) {
         </div>
       </div>
       <div className="flex justify-between gap-3 pl-23 text-label text-tertiary tabular-nums">
-        <span>{formatHistoryTime(first.timestampMs)}</span>
-        <span className="text-right">{formatHistoryTime(last.timestampMs)}</span>
+        {formatHistoryAxis(first.timestampMs, last.timestampMs).map((label, i) => (
+          <span key={i} className={i ? "text-right" : undefined}>{label}</span>
+        ))}
       </div>
     </figure>
   );

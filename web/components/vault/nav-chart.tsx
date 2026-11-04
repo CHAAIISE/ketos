@@ -3,7 +3,7 @@
 import { useState, type PointerEvent } from "react";
 import { EmptyState, Skeleton } from "@/components/app/states";
 import { formatUsd, usdcToNumber, USDC_UNIT } from "@/lib/near/format";
-import { formatHistoryTime, type HistoryPoint } from "./vault-history";
+import { formatHistoryAxis, formatHistoryTime, type HistoryPoint } from "./vault-history";
 
 const VIEW_W = 1000;
 const VIEW_H = 200;
@@ -13,8 +13,14 @@ const toUnits = (dollars: number) => BigInt(Math.round(dollars * Number(USDC_UNI
 function yDomain(values: number[]): [number, number] {
   const min = Math.min(...values);
   const max = Math.max(...values);
-  // A flat NAV still gets a visible band, about ±0.05% around the value.
-  const pad = max > min ? (max - min) * 0.2 : Math.max(Math.abs(max) * 0.0005, 0.01);
+  // Never zoom in below ±0.05% of the value: cent-level moves stay flat and axis labels stay distinct.
+  const minSpan = Math.max(Math.abs(max) * 0.001, 0.000001);
+  const padded = (max - min) * 1.4;
+  if (padded < minSpan) {
+    const mid = (min + max) / 2;
+    return [mid - minSpan / 2, mid + minSpan / 2];
+  }
+  const pad = (max - min) * 0.2;
   return [min - pad, max + pad];
 }
 
@@ -103,8 +109,9 @@ function Plot({ points, metric }: { points: HistoryPoint[]; metric: "nav" | "sha
         </div>
       </div>
       <div className="flex justify-between pl-23 text-label text-tertiary tabular-nums">
-        <span>{formatHistoryTime(t0)}</span>
-        <span className="text-right">{formatHistoryTime(t1)}</span>
+        {formatHistoryAxis(t0, t1).map((label, i) => (
+          <span key={i} className={i ? "text-right" : undefined}>{label}</span>
+        ))}
       </div>
     </div>
   );
