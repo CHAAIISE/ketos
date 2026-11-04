@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { useTxToast } from "@/components/app/tx-toast";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useClosePosition } from "@/hooks/use-ketos-mutations";
+import { Modal } from "@/components/ui/modal";
+import { useClosePosition, useSwitchToCross } from "@/hooks/use-ketos-mutations";
 import { formatPrice, formatUnits, formatUsd, PRICE_DECIMALS, USDC_DECIMALS } from "@/lib/near/format";
 import { isLiquidatable, type Order, type Position } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -40,9 +42,11 @@ const pnlClass = (pnl: bigint) => (pnl > 0n ? "text-success" : pnl < 0n ? "text-
 const th = "px-3 font-normal whitespace-nowrap";
 
 /** Open positions: a table from tablet width, stacked cards on phones so Close stays in reach. */
-export function PositionsTable({ positions, orders }: { positions: readonly Position[]; orders: readonly Order[] }) {
+export function PositionsTable({ positions, orders, allowSwitchToCross = false }: { positions: readonly Position[]; orders: readonly Order[]; allowSwitchToCross?: boolean }) {
   const close = useClosePosition();
+  const switchMode = useSwitchToCross();
   const { track } = useTxToast();
+  const [switchPosition, setSwitchPosition] = useState<Position | null>(null);
   const triggers = new Map(orders.map((o) => [o.id, o.request.trigger_price]));
 
   const bracket = (id: number | null) => {
@@ -71,6 +75,18 @@ export function PositionsTable({ positions, orders }: { positions: readonly Posi
       formatPrice(p.liquidation_price)
     );
   const modeLabel = (p: Position) => (p.margin_mode === "cross" ? "(Cross)" : "(Isolated)");
+  const marginMode = (p: Position) => allowSwitchToCross && p.margin_mode === "isolated" ? (
+    <Button
+      variant="link"
+      size="xs"
+      className="text-label"
+      disabled={switchMode.isPending || close.isPending}
+      title="Move this position's collateral into the shared cross pool. This cannot be undone."
+      onClick={() => setSwitchPosition(p)}
+    >
+      {switchMode.isPending && switchMode.variables === p.id ? "Switching…" : "Switch to Cross"}
+    </Button>
+  ) : <span className="text-tertiary">{modeLabel(p)}</span>;
 
   const closeButton = (p: Position) => {
     const payout = closePayout(p);
@@ -79,13 +95,15 @@ export function PositionsTable({ positions, orders }: { positions: readonly Posi
         variant="link"
         size="xs"
         className="text-label"
-        disabled={close.isPending}
-        title={`Market close: about ${formatUsd(payout)} returns to your free margin`}
+        disabled={close.isPending || switchMode.isPending}
+        title={p.margin_mode === "cross" ? "Market close: profit or loss settles into your shared cross pool" : `Market close: about ${formatUsd(payout)} returns to your free margin`}
         onClick={() =>
           track(() => close.mutateAsync(p.id), {
             pending: `Closing ${p.side} ${p.market_id}…`,
             success: (r) =>
-              `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · ${formatUsd(r.payout ?? payout)} back to margin`,
+              p.margin_mode === "cross"
+                ? `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · settled into cross margin`
+                : `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · ${formatUsd(r.payout ?? payout)} back to margin`,
           })
         }
       >
@@ -146,7 +164,7 @@ export function PositionsTable({ positions, orders }: { positions: readonly Posi
                   ["Entry Price", formatPrice(p.entry_price)],
                   ["Mark Price", formatPrice(p.mark_price)],
                   [liqTerm, <span key="liq" className="text-warning">{liqValue(p)}</span>],
-                  ["Margin", `${formatUsd(p.margin)} ${modeLabel(p)}`],
+                  ["Margin", <span key="margin">{formatUsd(p.margin)} {marginMode(p)}</span>],
                   [fundingTerm, fundingValue(p)],
                   [tpslTerm, tpsl(p)],
                   [feesTerm, formatUsd(p.borrow_fee + p.close_fee)],
@@ -192,7 +210,7 @@ export function PositionsTable({ positions, orders }: { positions: readonly Posi
                 <td className="px-3 text-right">{formatPrice(p.mark_price)}</td>
                 <td className="px-3 text-right">{pnl(p)}</td>
                 <td className="px-3 text-right text-warning">{liqValue(p)}</td>
-                <td className="px-3 text-right">{formatUsd(p.margin)} <span className="text-tertiary">{modeLabel(p)}</span></td>
+                <td className="px-3 text-right">{formatUsd(p.margin)} {marginMode(p)}</td>
                 <td className="px-3 text-right">{fundingValue(p)}</td>
                 <td className="px-3 text-right whitespace-nowrap">{tpsl(p)}</td>
                 <td className="px-3 text-right">{formatUsd(p.borrow_fee + p.close_fee)}</td>
@@ -202,6 +220,25 @@ export function PositionsTable({ positions, orders }: { positions: readonly Posi
           </tbody>
         </table>
       </div>
+      <Modal open={switchPosition !== null} onOpenChange={(open) => { if (!open && !switchMode.isPending) setSwitchPosition(null); }} title="Switch to Cross">
+        <p className="text-ui text-muted-foreground">
+          Move {switchPosition?.market_id}&apos;s collateral into your shared cross pool. All cross positions share gains and losses and can put each other&apos;s collateral at risk. Entry price and TP/SL stay unchanged. You cannot switch back to isolated.
+        </p>
+        <Button
+          className="mt-4 w-full"
+          disabled={switchMode.isPending}
+          onClick={async () => {
+            if (!switchPosition) return;
+            const done = await track(() => switchMode.mutateAsync(switchPosition.id), {
+              pending: `Moving ${switchPosition.market_id} into cross margin…`,
+              success: `${switchPosition.market_id} now shares cross margin · entry and TP/SL unchanged`,
+            });
+            if (done) setSwitchPosition(null);
+          }}
+        >
+          {switchMode.isPending ? "Switching…" : "Confirm switch to Cross"}
+        </Button>
+      </Modal>
     </>
   );
 }

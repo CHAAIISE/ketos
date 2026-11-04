@@ -32,7 +32,9 @@ fn quorum_prices_enable_worker_market_trading_only_after_depth() {
     let payout = ketos.close_position(position.id).0;
     // At +10%, the long earns $50 less both $0.50 trading fees and accrued charges.
     assert!(payout <= 149 * USD && payout >= 149 * USD - 2);
-    assert_eq!(ketos.get_history(id("alice.test"), None, None).len(), 3);
+    let history = ketos.get_history(id("alice.test"), None, None);
+    assert_eq!(history.len(), 4);
+    assert_eq!(history[0].kind, crate::history::HistoryKind::Deposit);
 }
 
 #[test]

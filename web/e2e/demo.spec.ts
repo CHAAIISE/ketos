@@ -22,7 +22,7 @@ function parseUsd(text: string): number {
   return Number(text.replace(/[^0-9.]/g, ""));
 }
 
-async function openApp(page: Page, name: "Trade" | "Vaults" | "Risk"): Promise<void> {
+async function openApp(page: Page, name: "Trade" | "Vaults" | "Risk" | "Portfolio"): Promise<void> {
   await page.getByRole("navigation", { name: "App" }).getByRole("link", { name }).click();
 }
 
@@ -226,23 +226,33 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
     await expect(liquidation).toContainText(/\+\$[1-9]/);
   });
 
-  await test.step("9. trade: close the remaining long and withdraw margin from the account menu", async () => {
-    await page.getByTestId("account-tab-positions").click();
+  await test.step("9. portfolio: switch the remaining long to cross, close and withdraw free margin", async () => {
+    await openApp(page, "Portfolio");
+    await expect(page).toHaveURL(/\/portfolio$/);
+    await expectSinglePrimary(page, /^Deposit$/);
     await expect(positions).toHaveCount(1);
     await expect(positions.first()).toContainText("BTC");
+    await expect(page.getByTestId("portfolio-realized")).toHaveText(/-\$/);
+    await positions.first().getByRole("button", { name: "Switch to Cross" }).click();
+    const switchDialog = page.getByRole("dialog", { name: "Switch to Cross" });
+    await expect(switchDialog).toContainText("cannot switch back");
+    await switchDialog.getByRole("button", { name: "Confirm switch to Cross" }).click();
+    await expectToast(page, /BTC now shares cross margin/);
+    await expect(positions.first()).toContainText("(Cross)");
+    await expect(page.getByTestId("portfolio-cross-health")).toContainText("Above maintenance");
     await positions.first().getByRole("button", { name: "Close" }).click();
-    await expectToast(page, /Long BTC closed · \$[\d,.]+ back to margin/);
+    await expectToast(page, /Long BTC closed · settled into cross margin/);
     await expect(positions).toHaveCount(0);
-
-    await page.getByTestId("wallet-account").click();
-    const menu = page.getByRole("dialog", { name: "Account" });
-    await expect(menu).toContainText("Wallet USDC");
-    await menu.getByRole("button", { name: "Withdraw" }).click();
+    await page.getByRole("button", { name: "Withdraw", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Margin" });
     await dialog.getByRole("button", { name: /Free \$[\d,.]+ · Max/ }).click();
     await dialog.getByRole("button", { name: "Withdraw to wallet" }).click();
     await expectToast(page, /sent back to your wallet/);
-    await page.getByTestId("account-tab-balances").click();
-    await expect(page.getByTestId("margin-free")).toHaveText("$0.00");
+    await expect(page.getByTestId("portfolio-available")).toHaveText("$0.00");
+    await page.getByRole("tab", { name: "Deposits & Withdrawals" }).click();
+    await expect(page.locator('[data-testid^="transfer-"]').filter({ hasText: "Withdrawal" })).toHaveCount(1);
+    await expect(page.locator('[data-testid^="transfer-"]').filter({ hasText: "$200.00" })).toContainText("Deposit");
+    await page.getByRole("tab", { name: "Trade History", exact: true }).click();
+    await expect(page.getByRole("tabpanel")).toContainText("Liquidated by keeper");
   });
 });

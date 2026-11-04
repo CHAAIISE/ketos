@@ -264,7 +264,7 @@ export const vaultSnapshotSchema = z.object({
 });
 export type VaultSnapshot = z.infer<typeof vaultSnapshotSchema>;
 
-export const historyKindSchema = z.enum(["open", "close", "liquidation", "order_fill", "funding"]);
+export const historyKindSchema = z.enum(["open", "close", "liquidation", "order_fill", "funding", "deposit", "withdrawal"]);
 export type HistoryKind = z.infer<typeof historyKindSchema>;
 
 export const historyEventSchema = z.object({

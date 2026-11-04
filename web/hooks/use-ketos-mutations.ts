@@ -101,7 +101,11 @@ export function useDepositMargin() {
   return useTxMutation<bigint, TxReceipt>({
     build: depositMarginTx,
     parse: receipt,
-    invalidate: (accountId) => [ketosKeys.account(accountId)],
+    invalidate: (accountId) => [
+      ketosKeys.account(accountId),
+      ketosKeys.history(accountId),
+      ketosKeys.accountStats(accountId),
+    ],
   });
 }
 
@@ -110,7 +114,11 @@ export function useWithdrawMargin() {
   return useTxMutation<bigint, TxReceipt>({
     build: withdrawMarginTx,
     parse: receipt,
-    invalidate: (accountId) => [ketosKeys.account(accountId)],
+    invalidate: (accountId) => [
+      ketosKeys.account(accountId),
+      ketosKeys.history(accountId),
+      ketosKeys.accountStats(accountId),
+    ],
   });
 }
 

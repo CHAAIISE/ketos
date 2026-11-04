@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 const appLinks = [
   { href: "/trade", label: "Trade" },
   { href: "/markets", label: "Markets" },
+  { href: "/portfolio", label: "Portfolio" },
   { href: "/vaults", label: "Vaults" },
   { href: "/risk", label: "Risk" },
 ] as const

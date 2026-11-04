@@ -139,7 +139,7 @@ export class KetosViews {
     });
   }
 
-  /** All-time trading totals; null before the account's first trade. */
+  /** All-time trading totals; null before the account's first recorded event. */
   accountStats(accountId: string) {
     return this.view(accountStatsSchema.nullable(), this.ketosContract, "get_account_stats", {
       account_id: accountId,

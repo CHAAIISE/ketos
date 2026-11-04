@@ -128,7 +128,7 @@ export function useCrossAccount() {
 }
 
 /**
- * Trade, order fill, liquidation and funding events of the signed-in account (last 200), newest
+ * Trade, order fill, liquidation, funding and margin-transfer events (last 200), newest
  * first. `kinds` narrows the list, e.g. `["funding"]` for funding history.
  */
 export function useHistory(kinds?: readonly HistoryKind[]) {
@@ -145,7 +145,7 @@ export function useHistory(kinds?: readonly HistoryKind[]) {
   });
 }
 
-/** All-time realized PnL, volume and trade count of the signed-in account; null before any trade. */
+/** All-time trading totals of the signed-in account; null before any recorded account event. */
 export function useAccountStats() {
   const { views } = useNear();
   const accountId = useAccountId();

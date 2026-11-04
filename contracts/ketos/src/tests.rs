@@ -227,12 +227,37 @@ fn withdraw_debits_margin_and_transfers_tokens() {
     let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
     assert_eq!(args["receiver_id"], "alice.test");
     assert_eq!(args["amount"], (150 * USD).to_string());
+    assert_eq!(receipts[1].receiver_id, id(CONTRACT));
+    let MockAction::FunctionCallWeight { method_name, args, .. } = &receipts[1].actions[0] else {
+        panic!("expected withdrawal callback");
+    };
+    assert_eq!(method_name.as_slice(), b"on_margin_withdrawn");
+    let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+    assert_eq!(args["account_id"], "alice.test");
+    assert_eq!(args["amount"], (150 * USD).to_string());
+
+    let pending = ketos.get_history(id("alice.test"), None, None);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, crate::history::HistoryKind::Deposit);
+    ctx_at(CONTRACT, T0_MS + 7);
+    assert_eq!(
+        ketos.on_margin_withdrawn(id("alice.test"), U128(150 * USD), Ok(())),
+        U128(150 * USD)
+    );
+    let completed = ketos.get_history(id("alice.test"), None, None);
+    assert_eq!(completed.len(), 2);
+    assert_eq!(completed[1].kind, crate::history::HistoryKind::Withdrawal);
+    assert_eq!(completed[1].size.0, 150 * USD);
+    assert_eq!(completed[1].timestamp_ms, T0_MS + 7);
+    assert_eq!(margin(&ketos, "alice.test"), 50 * USD);
 }
 
 #[test]
 fn failed_transfer_restores_margin() {
     let mut ketos = setup();
     deposit(&mut ketos, "alice.test", 200 * USD);
+    let history_before = ketos.get_history(id("alice.test"), None, None);
+    let stats_before = ketos.get_account_stats(id("alice.test"));
     ctx("alice.test", 1);
     let _ = ketos.withdraw_margin(U128(200 * USD));
     assert_eq!(margin(&ketos, "alice.test"), 0);
@@ -243,9 +268,11 @@ fn failed_transfer_restores_margin() {
     assert_eq!(sent, U128(0));
     assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
 
-    let sent = ketos.on_margin_withdrawn(id("alice.test"), U128(5), Ok(()));
-    assert_eq!(sent, U128(5));
-    assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
+    assert_eq!(
+        ketos.get_history(id("alice.test"), None, None),
+        history_before
+    );
+    assert_eq!(ketos.get_account_stats(id("alice.test")), stats_before);
 }
 
 #[test]

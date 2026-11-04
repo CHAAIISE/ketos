@@ -4,6 +4,7 @@ use near_sdk::{
     assert_one_yocto, env, log, near, require, AccountId, Gas, NearToken, Promise, PromiseError,
 };
 
+use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::USD;
 use crate::position::PositionId;
 use crate::orders::OrderId;
@@ -52,6 +53,12 @@ impl Ketos {
             .margin
             .checked_add(amount)
             .unwrap_or_else(|| env::panic_str("ERR_OVERFLOW"));
+        if amount > 0 {
+            self.record_history(
+                account_id,
+                HistoryEvent::transfer(HistoryKind::Deposit, amount, env::block_timestamp_ms()),
+            );
+        }
         log!("margin deposit {} by {}", amount, account_id);
     }
 }
@@ -87,7 +94,7 @@ impl Ketos {
             )
     }
 
-    /// Re-credits the margin if the token transfer failed (e.g. receiver not registered).
+    /// Records completed withdrawals, or re-credits margin if the token transfer failed.
     #[private]
     pub fn on_margin_withdrawn(
         &mut self,
@@ -96,6 +103,14 @@ impl Ketos {
         #[callback_result] result: Result<(), PromiseError>,
     ) -> U128 {
         if result.is_ok() {
+            self.record_history(
+                &account_id,
+                HistoryEvent::transfer(
+                    HistoryKind::Withdrawal,
+                    amount.0,
+                    env::block_timestamp_ms(),
+                ),
+            );
             return amount;
         }
         let account = self.accounts.entry(account_id.clone()).or_default();

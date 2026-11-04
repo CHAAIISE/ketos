@@ -19,6 +19,8 @@ pub enum HistoryKind {
     Liquidation,
     OrderFill,
     Funding,
+    Deposit,
+    Withdrawal,
 }
 
 #[near(serializers = [json, borsh])]
@@ -46,6 +48,26 @@ pub struct HistoryEvent {
 }
 
 impl HistoryEvent {
+    pub(crate) fn transfer(kind: HistoryKind, amount: u128, timestamp_ms: u64) -> Self {
+        Self {
+            sequence: 0,
+            kind,
+            position_id: 0,
+            order_id: None,
+            market_id: "USDC".into(),
+            side: Side::Long,
+            price: U128(0),
+            size: U128(amount),
+            pnl: I128(0),
+            realized_pnl: I128(0),
+            fees: U128(0),
+            funding_paid: U128(0),
+            funding_received: U128(0),
+            funding_payment: I128(0),
+            timestamp_ms,
+        }
+    }
+
     pub(crate) fn position(
         kind: HistoryKind,
         position_id: PositionId,
@@ -77,7 +99,7 @@ impl HistoryEvent {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountStats {
     pub realized_pnl: I128,
-    /// Entry and exit notional; annotations and funding never add volume.
+    /// Entry and exit notional; annotations, funding and transfers never add volume.
     pub volume: U128,
     /// Executed entries and exits, including liquidations.
     pub trades: u64,

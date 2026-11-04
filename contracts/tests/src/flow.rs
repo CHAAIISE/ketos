@@ -171,7 +171,7 @@ async fn depth(
     Ok(())
 }
 
-/// Check executed trade economics independently of funding/order annotation events.
+/// Check executed trade economics independently of annotations and margin transfers.
 async fn assert_economics(ketos: &Contract, account: &Account, collateral: i128) -> Result<()> {
     let history = view(
         ketos,
@@ -207,7 +207,7 @@ async fn assert_economics(ketos: &Contract, account: &Account, collateral: i128)
     assert_eq!(margin(ketos, account).await? as i128 - collateral, realized);
     for (sequence, event) in events.iter().enumerate() {
         assert_eq!(event["sequence"], sequence as u64);
-        if event["kind"] == "funding" || event["kind"] == "order_fill" {
+        if !matches!(event["kind"].as_str(), Some("open" | "close" | "liquidation")) {
             assert_eq!(integer(&event["realized_pnl"]), 0);
         }
     }
@@ -554,6 +554,132 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .await?);
     assert_eq!(margin(&ketos, &trader).await?, 0);
     assert_eq!(ft_balance(&usdc, &trader).await?, 500 * USD + free);
+    let trader_history = view(
+        &ketos,
+        "get_history",
+        json!({ "account_id": trader.id(), "limit": 200 }),
+    )
+    .await?;
+    let withdrawal = trader_history.as_array().unwrap().last().unwrap();
+    assert_eq!(withdrawal["kind"], "withdrawal");
+    assert_eq!(withdrawal["market_id"], "USDC");
+    assert_eq!(integer(&withdrawal["size"]), free as i128);
+    assert_eq!(integer(&withdrawal["realized_pnl"]), 0);
+    assert!(withdrawal["timestamp_ms"].as_u64().unwrap() <= now_ms(&worker).await?);
+
+    // Exercise a real NEP-141 refund and a failed transfer before the successful callback.
+    {
+        let receiver = sub(&root, "margin-receiver", 5).await?;
+        ok(root
+            .call(usdc.id(), "mint")
+            .args_json(json!({ "account_id": receiver.id(), "amount": USD.to_string() }))
+            .transact()
+            .await?);
+        let rejected = receiver
+            .call(usdc.id(), "ft_transfer_call")
+            .args_json(json!({
+                "receiver_id": ketos.id(),
+                "amount": (USD - 1).to_string(),
+                "msg": "deposit_margin",
+            }))
+            .deposit(NearToken::from_yoctonear(1))
+            .gas(Gas::from_tgas(100))
+            .transact()
+            .await?;
+        assert!(!rejected.failures().is_empty());
+        assert_eq!(rejected.json::<String>()?, "0");
+        assert_eq!(ft_balance(&usdc, &receiver).await?, USD);
+        assert_eq!(
+            view(&ketos, "get_history", json!({ "account_id": receiver.id() })).await?,
+            json!([])
+        );
+        assert!(view(
+            &ketos,
+            "get_account_stats",
+            json!({ "account_id": receiver.id() }),
+        )
+        .await?
+        .is_null());
+        let deposited_at = now_ms(&worker).await?;
+        transfer_call(&receiver, &usdc, &ketos, USD, "deposit_margin").await?;
+        let history_before = view(
+            &ketos,
+            "get_history",
+            json!({ "account_id": receiver.id() }),
+        )
+        .await?;
+        let stats_before = view(
+            &ketos,
+            "get_account_stats",
+            json!({ "account_id": receiver.id() }),
+        )
+        .await?;
+        assert_eq!(history_before[0]["kind"], "deposit");
+        assert_eq!(integer(&history_before[0]["size"]), USD as i128);
+        assert!(history_before[0]["timestamp_ms"].as_u64().unwrap() >= deposited_at);
+        assert_eq!(ft_balance(&usdc, &receiver).await?, 0);
+        assert_eq!(
+            ok(receiver
+                .call(usdc.id(), "storage_unregister")
+                .args_json(json!({ "force": false }))
+                .deposit(NearToken::from_yoctonear(1))
+                .transact()
+                .await?),
+            true
+        );
+        let failed = receiver
+            .call(ketos.id(), "withdraw_margin")
+            .args_json(json!({ "amount": USD.to_string() }))
+            .deposit(NearToken::from_yoctonear(1))
+            .gas(Gas::from_tgas(100))
+            .transact()
+            .await?;
+        assert!(!failed.failures().is_empty());
+        assert_eq!(failed.json::<String>()?, "0");
+        assert_eq!(margin(&ketos, &receiver).await?, USD);
+        assert_eq!(
+            view(&ketos, "get_history", json!({ "account_id": receiver.id() })).await?,
+            history_before
+        );
+        assert_eq!(
+            view(&ketos, "get_account_stats", json!({ "account_id": receiver.id() })).await?,
+            stats_before
+        );
+        ok(receiver
+            .call(usdc.id(), "storage_deposit")
+            .args_json(json!({ "registration_only": true }))
+            .deposit(NearToken::from_millinear(10))
+            .transact()
+            .await?);
+        assert_eq!(
+            ok(receiver
+                .call(ketos.id(), "withdraw_margin")
+                .args_json(json!({ "amount": USD.to_string() }))
+                .deposit(NearToken::from_yoctonear(1))
+                .gas(Gas::from_tgas(100))
+                .transact()
+                .await?),
+            USD.to_string()
+        );
+        assert_eq!(margin(&ketos, &receiver).await?, 0);
+        assert_eq!(ft_balance(&usdc, &receiver).await?, USD);
+        let completed = view(
+            &ketos,
+            "get_history",
+            json!({ "account_id": receiver.id() }),
+        )
+        .await?;
+        assert_eq!(completed.as_array().unwrap().len(), 2);
+        assert_eq!(completed[0], history_before[0]);
+        assert_eq!(completed[1]["kind"], "withdrawal");
+        assert_eq!(integer(&completed[1]["size"]), USD as i128);
+        let mut expected_stats = stats_before;
+        expected_stats["event_count"] = json!(2);
+        assert_eq!(
+            view(&ketos, "get_account_stats", json!({ "account_id": receiver.id() })).await?,
+            expected_stats
+        );
+    }
 
     // The vault earned the trader's loss net of the short's gain, plus fees.
     let vault = view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?;

@@ -221,7 +221,7 @@ describe("account views", () => {
   });
 
   it("parses history events, stats and leaderboard rows", () => {
-    const event = historyEventSchema.parse({
+    const rawEvent = {
       sequence: 3,
       kind: "close",
       position_id: 0,
@@ -237,9 +237,26 @@ describe("account views", () => {
       funding_received: "0",
       funding_payment: "16",
       timestamp_ms: 1793816885788,
-    });
+    };
+    const event = historyEventSchema.parse(rawEvent);
     expect(event.realized_pnl).toBe(-100_017n);
-    expect(historyEventSchema.safeParse({ ...event, kind: "deposit" }).success).toBe(false);
+    expect(historyEventSchema.safeParse({ ...rawEvent, kind: "unknown" }).success).toBe(false);
+    for (const kind of ["deposit", "withdrawal"]) {
+      const transfer = historyEventSchema.parse({
+        ...rawEvent,
+        kind,
+        market_id: "USDC",
+        price: "0",
+        size: "25000000",
+        realized_pnl: "0",
+        fees: "0",
+        funding_paid: "0",
+        funding_payment: "0",
+      });
+      expect(transfer.kind).toBe(kind);
+      expect(transfer.size).toBe(25_000_000n);
+      expect(transfer.realized_pnl).toBe(0n);
+    }
 
     const stats = accountStatsSchema.nullable().parse({
       realized_pnl: "-260017",
