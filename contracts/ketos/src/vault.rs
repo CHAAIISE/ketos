@@ -51,7 +51,7 @@ pub(crate) struct Vault {
     pub fee_log: FeeLog,
 }
 
-/// Fee income (trading, borrow, liquidation penalties) per UTC day, oldest first.
+/// Fee income (trading, borrow, liquidation penalties, listing) per UTC day, oldest first.
 #[near(serializers = [borsh])]
 #[derive(Clone, Debug, Default)]
 pub struct FeeLog {

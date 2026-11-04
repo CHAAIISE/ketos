@@ -8,6 +8,7 @@ pub mod account;
 pub mod depth;
 pub mod funding;
 pub mod liquidation;
+pub mod listing;
 pub mod market;
 pub mod math;
 pub mod oracle;
@@ -161,6 +162,9 @@ impl FungibleTokenReceiver for Ketos {
                     _ => env::panic_str("ERR_UNKNOWN_VAULT"),
                 };
                 self.deposit_vault(vault_id, &sender_id, amount.0);
+            }
+            _ if msg.starts_with(listing::MSG_LIST_MARKET) => {
+                self.list_market(&sender_id, amount.0, &msg[listing::MSG_LIST_MARKET.len()..]);
             }
             _ => env::panic_str("ERR_INVALID_MSG"),
         }

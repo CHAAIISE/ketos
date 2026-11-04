@@ -1,7 +1,7 @@
 use super::*;
 use crate::vault::{Revenue, SNAPSHOT_INTERVAL_MS, VAULT_HISTORY_LEN};
 
-fn deposit_to(ketos: &mut Ketos, vault: &str, lp: &str, amount: u128) {
+pub(super) fn deposit_to(ketos: &mut Ketos, vault: &str, lp: &str, amount: u128) {
     ctx_at(USDC, T0_MS);
     let PromiseOrValue::Value(unused) =
         ketos.ft_on_transfer(id(lp), U128(amount), format!("deposit_vault:{vault}"))

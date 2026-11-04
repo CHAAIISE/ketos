@@ -12,6 +12,7 @@ use crate::position::{PositionView, Side};
 use crate::Ketos;
 
 mod funding;
+mod listing;
 mod orders;
 mod vaults;
 

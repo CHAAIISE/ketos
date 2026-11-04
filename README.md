@@ -72,6 +72,18 @@ Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA.
 
 The deployed demo still uses the four-market contract listed below. The new registry changes the serialized state: deploy it to a **fresh contract account**, not over that existing account. Fresh deployments settle each market against its assigned Core or Long-tail vault.
 
+### Permissionless listing on fresh deployments
+
+Anyone can register a market through the configured USDC contract's `ft_transfer_call` with exactly `"5000000"` units and `msg: "list_market:<json>"` ([`listing.rs`](contracts/ketos/src/listing.rs)). The JSON contains `symbol`, `oracle_asset_id`, `intents_asset_id` and `price_source` (`tee` or `signed`). Symbols are 1–16 uppercase ASCII letters/digits, starting with a letter; Intents assets use `nep141:<NEAR account id>`. For example:
+
+```json
+{"symbol":"NEW","oracle_asset_id":"new.token.near","intents_asset_id":"nep141:new.token.near","price_source":"tee"}
+```
+
+The example describes the message format, not a supported live asset. Duplicate symbols, oracle assets or Intents assets, malformed requests, unknown fields and incorrect payments fail and are refunded by the token's transfer resolver. There is no direct unpaid `list_market` endpoint. The 5 USDC becomes Long-tail listing revenue, increasing its NAV without minting shares or margin; Core receives nothing. Listing fees are included in the trailing fee APR.
+
+Listed markets always belong to Long-tail, with a $500,000 hard cap, 0.1% trading fees and a 5× leverage ceiling. Callers cannot override these terms. They start measuring (`depth_measured_at_ms = 0`, zero exit capacity): registration does not attest price or liquidity support. Opening still requires a fresh authenticated oracle price and a keeper depth measurement with at least $10,000 of capacity; no quote means no capacity. Unsupported assets cannot trade merely by paying the fee. The `signed` source is stored but has no active price adapter yet. The deployed demo, listing UI and multi-market keeper have not been cut over.
+
 ### Funding on fresh deployments
 
 [`funding.rs`](contracts/ketos/src/funding.rs) adds hourly funding based on open interest:
@@ -108,7 +120,7 @@ These methods require a fresh contract account. The deployed demo, order control
 - Deposit through the configured USDC contract's `ft_transfer_call` with `msg: "deposit_vault:core"` or `"deposit_vault:long-tail"`. The unqualified message is not accepted. Shares are minted at that vault's NAV, rounded down.
 - Read `get_vault({ "vault_id": "core" })`, `get_vaults()` (Core, then Long-tail), or `get_vault_account({ "vault_id": "long-tail", "account_id": "..." })`. Every vault view includes its realized `revenue` counters.
 - Withdraw with `withdraw_vault({ "vault_id": "long-tail", "shares": "..." })` and 1 yoctoNEAR. Only shares owned in that vault authorize a withdrawal; only its positions reserve liquidity. A failed token transfer restores shares and funds to the same vault.
-- Realized revenue separates trading/borrow `fees`, net `funding`, counterparty `trader_pnl`, `liquidations` and `listing` fees. Positive signed amounts earn USDC for LPs. Funding a payer cannot cover is not counted as collected; counterparty PnL includes unpaid-loss and capped-payout adjustments. The components sum exactly to balance changes excluding LP deposits and withdrawals. Listing income remains zero until paid listings are enabled.
+- Realized revenue separates trading/borrow `fees`, net `funding`, counterparty `trader_pnl`, `liquidations` and `listing` fees. Positive signed amounts earn USDC for LPs. Funding a payer cannot cover is not counted as collected; counterparty PnL includes unpaid-loss and capped-payout adjustments. The components sum exactly to balance changes excluding LP deposits and withdrawals. Paid listings accrue only to Long-tail.
 - Anyone can call `snapshot_vaults()` once at least 3,600,000 ms have elapsed since the last snapshot. Earlier calls fail without changing either history. Both vaults are recorded together; each ring keeps 168 observations in chronological order through `get_vault_history({ "vault_id": "core" })`. Snapshots freeze timestamp, NAV, share price, TVL (vault-owned USDC, not trader collateral) and cumulative realized revenue. Missed hours are not backfilled; valuations use the latest stored oracle prices.
 
 The sandbox and deployment script seed 10,000 test USDC per vault. The existing single-vault screen and hooks select Core; the vault selector, onchain-history charts and revenue display are not exposed there yet. The deployed demo still uses its original single-vault contract. Do not run the current client against that old contract: the vault deposit message and required `vault_id` arguments have changed.
