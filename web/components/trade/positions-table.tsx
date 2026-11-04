@@ -5,7 +5,7 @@ import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useClosePosition } from "@/hooks/use-perps-mutations";
-import { formatPrice, formatUsd } from "@/lib/near/format";
+import { formatPrice, formatUnits, formatUsd, PRICE_DECIMALS, USDC_DECIMALS } from "@/lib/near/format";
 import { isLiquidatable, type Position } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +24,20 @@ function roe(position: Position): string {
   return `${sign}${abs / 10n}.${abs % 10n}%`;
 }
 
+/** Position size in the asset: notional (USDC) ÷ entry price, e.g. "125.0000 NEAR". */
+function assetSize(p: Position): string {
+  const units = (p.size * 10n ** BigInt(PRICE_DECIMALS)) / p.entry_price;
+  return `${formatUnits(units, USDC_DECIMALS, { maxFractionDigits: 4, minFractionDigits: 4 })} ${p.market_id}`;
+}
+
+/** Notional at the mark price: asset size × mark. */
+function positionValue(p: Position): bigint {
+  return (p.size * p.mark_price) / p.entry_price;
+}
+
 const pnlClass = (pnl: bigint) => (pnl > 0n ? "text-success" : pnl < 0n ? "text-destructive" : "text-foreground");
+
+const th = "px-3 font-normal whitespace-nowrap";
 
 /** Open positions: a table from tablet width, stacked cards on phones so Close stays in reach. */
 export function PositionsTable({ positions }: { positions: readonly Position[] }) {
@@ -35,10 +48,11 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
     const payout = closePayout(p);
     return (
       <Button
-        variant="outline"
-        size="sm"
+        variant="link"
+        size="xs"
+        className="text-label"
         disabled={close.isPending}
-        title={`About ${formatUsd(payout)} returns to your free margin`}
+        title={`Market close: about ${formatUsd(payout)} returns to your free margin`}
         onClick={() =>
           track(() => close.mutateAsync(p.id), {
             pending: `Closing ${p.side} ${p.market_id}…`,
@@ -52,19 +66,19 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
     );
   };
 
-  const title = (p: Position) => (
-    <div className="flex items-center gap-2">
-      <span className="text-foreground">{p.market_id}-PERP</span>
-      <span className={p.side === "long" ? "text-success" : "text-destructive"}>
+  const coin = (p: Position) => (
+    <span className="flex items-center gap-2">
+      <span className={p.side === "long" ? "text-success" : "text-destructive"}>{p.market_id}</span>
+      <Badge variant={p.side === "long" ? "success" : "destructive"}>
         {p.side === "long" ? "Long" : "Short"} {p.leverage}×
-      </span>
+      </Badge>
       {isLiquidatable(p) ? <Badge variant="warning">Liquidating</Badge> : null}
-    </div>
+    </span>
   );
 
   const liqTerm = (
     <Term hint="If the oracle price reaches this level, the position can be closed by anyone and loses its margin.">
-      Liq. price
+      Liq. Price
     </Term>
   );
   const feesTerm = (
@@ -72,30 +86,36 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
       Fees
     </Term>
   );
+  const pnl = (p: Position) => (
+    <span className={pnlClass(p.unrealized_pnl)}>
+      {formatUsd(p.unrealized_pnl, { signed: true })} ({roe(p)})
+    </span>
+  );
 
   return (
     <>
       <ul className="flex flex-col md:hidden">
         {positions.map((p) => (
-          <li key={p.id} data-testid={`position-card-${p.id}`} className="flex flex-col gap-3 border-t border-border px-3 py-3">
-            <div className="flex items-center justify-between gap-3 text-ui font-medium">
-              {title(p)}
+          <li key={p.id} data-testid={`position-card-${p.id}`} className="flex flex-col gap-3 border-t border-border px-3 py-3 first:border-t-0">
+            <div className="flex items-center justify-between gap-3 text-ui">
+              {coin(p)}
               {closeButton(p)}
             </div>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-ui">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-label">
               {(
                 [
-                  ["PnL", <span key="pnl" className={pnlClass(p.unrealized_pnl)}>{formatUsd(p.unrealized_pnl, { signed: true })} <span className="text-label">{roe(p)}</span></span>],
-                  ["Size", formatUsd(p.size)],
-                  ["Entry", formatPrice(p.entry_price)],
-                  ["Mark", formatPrice(p.mark_price)],
+                  ["PNL (ROE %)", pnl(p)],
+                  ["Size", assetSize(p)],
+                  ["Position Value", formatUsd(positionValue(p))],
+                  ["Entry Price", formatPrice(p.entry_price)],
+                  ["Mark Price", formatPrice(p.mark_price)],
                   [liqTerm, <span key="liq" className="text-warning">{formatPrice(p.liquidation_price)}</span>],
                   ["Margin", formatUsd(p.margin)],
                   [feesTerm, formatUsd(p.borrow_fee + p.close_fee)],
                 ] as const
               ).map(([label, value], i) => (
                 <div key={i} className="flex flex-col gap-0.5">
-                  <dt className="text-label text-tertiary">{label}</dt>
+                  <dt className="text-tertiary">{label}</dt>
                   <dd className="tabular-nums text-foreground">{value}</dd>
                 </div>
               ))}
@@ -104,40 +124,37 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
         ))}
       </ul>
 
-      <div className="relative hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[880px] whitespace-nowrap text-ui">
-          <thead className="bg-muted text-label text-tertiary">
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[920px] text-label tabular-nums">
+          <thead className="text-tertiary">
             <tr className="h-8">
-              <th scope="col" className="px-4 text-left font-normal">Market</th>
-              <th scope="col" className="px-4 text-right font-normal">Size</th>
-              <th scope="col" className="px-4 text-right font-normal">Entry</th>
-              <th scope="col" className="px-4 text-right font-normal">Mark</th>
-              <th scope="col" className="px-4 text-right font-normal">{liqTerm}</th>
-              <th scope="col" className="px-4 text-right font-normal">Margin</th>
-              <th scope="col" className="px-4 text-right font-normal">PnL</th>
-              <th scope="col" className="px-4 text-right font-normal">{feesTerm}</th>
-              <th scope="col" className="px-4 text-right font-normal">
-                <span className="sr-only">Close</span>
-              </th>
+              <th scope="col" className={cn(th, "text-left")}>Coin</th>
+              <th scope="col" className={cn(th, "text-right")}>Size</th>
+              <th scope="col" className={cn(th, "text-right")}>Position Value</th>
+              <th scope="col" className={cn(th, "text-right")}>Entry Price</th>
+              <th scope="col" className={cn(th, "text-right")}>Mark Price</th>
+              <th scope="col" className={cn(th, "text-right")}>PNL (ROE %)</th>
+              <th scope="col" className={cn(th, "text-right")}>{liqTerm}</th>
+              <th scope="col" className={cn(th, "text-right")}>Margin</th>
+              <th scope="col" className={cn(th, "text-right")}>{feesTerm}</th>
+              <th scope="col" className={cn(th, "text-right")}>Close</th>
             </tr>
           </thead>
           <tbody>
             {positions.map((p) => (
-              <tr key={p.id} data-testid={`position-${p.id}`} className="h-14 border-t border-border">
-                <th scope="row" className="px-4 text-left font-medium">
-                  {title(p)}
+              <tr key={p.id} data-testid={`position-${p.id}`} className="h-9 border-t border-border text-foreground">
+                <th scope="row" className="px-3 text-left font-normal">
+                  {coin(p)}
                 </th>
-                <td className="px-4 text-right tabular-nums">{formatUsd(p.size)}</td>
-                <td className="px-4 text-right tabular-nums">{formatPrice(p.entry_price)}</td>
-                <td className="px-4 text-right tabular-nums text-foreground">{formatPrice(p.mark_price)}</td>
-                <td className="px-4 text-right tabular-nums text-warning">{formatPrice(p.liquidation_price)}</td>
-                <td className="px-4 text-right tabular-nums">{formatUsd(p.margin)}</td>
-                <td className={cn("px-4 text-right tabular-nums", pnlClass(p.unrealized_pnl))}>
-                  {formatUsd(p.unrealized_pnl, { signed: true })}
-                  <span className="ml-1.5 text-label">{roe(p)}</span>
-                </td>
-                <td className="px-4 text-right tabular-nums">{formatUsd(p.borrow_fee + p.close_fee)}</td>
-                <td className="px-4 text-right">{closeButton(p)}</td>
+                <td className="px-3 text-right">{assetSize(p)}</td>
+                <td className="px-3 text-right">{formatUsd(positionValue(p))}</td>
+                <td className="px-3 text-right">{formatPrice(p.entry_price)}</td>
+                <td className="px-3 text-right">{formatPrice(p.mark_price)}</td>
+                <td className="px-3 text-right">{pnl(p)}</td>
+                <td className="px-3 text-right text-warning">{formatPrice(p.liquidation_price)}</td>
+                <td className="px-3 text-right">{formatUsd(p.margin)} <span className="text-tertiary">(Isolated)</span></td>
+                <td className="px-3 text-right">{formatUsd(p.borrow_fee + p.close_fee)}</td>
+                <td className="px-3 text-right">{closeButton(p)}</td>
               </tr>
             ))}
           </tbody>

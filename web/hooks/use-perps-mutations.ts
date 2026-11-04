@@ -58,6 +58,7 @@ const tradingKeys = (accountId: string | null): QueryKey[] => [
   perpsKeys.positions(accountId),
   perpsKeys.markets(),
   perpsKeys.vault(),
+  perpsKeys.openPositions(),
 ];
 
 const vaultKeys = (accountId: string | null): QueryKey[] => [

@@ -12,11 +12,12 @@ test.describe("deployment", { tag: "@smoke" }, () => {
 
   test("trade lists the four markets with live caps", async ({ page }) => {
     await page.goto("/trade");
+    await expect(page.getByTestId("mark-price")).toHaveText(/\$\d/);
+    await expect(page.getByTestId("max-oi")).toHaveText(/^\$[\d,]+$/);
+    await page.getByTestId("market-selector").click();
     for (const id of ["BTC", "ETH", "NEAR", "ZEC"]) {
       await expect(page.getByTestId(`market-tab-${id}`)).toBeVisible();
     }
-    await expect(page.getByTestId("mark-price")).toHaveText(/\$\d/);
-    await expect(page.getByTestId("max-oi")).toHaveText(/^\$[\d,]+$/);
   });
 
   test("liquidity shows a timestamped measurement and its impact curve", async ({ page }) => {

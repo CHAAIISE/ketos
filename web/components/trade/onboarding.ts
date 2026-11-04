@@ -5,7 +5,7 @@ export type TradeStep = "connect" | "fund" | "deposit" | "trade";
 
 const STEPS: ReadonlyArray<{ id: TradeStep; label: string }> = [
   { id: "connect", label: "Connect wallet" },
-  { id: "fund", label: "Get test USDC" },
+  { id: "fund", label: "Fund wallet" },
   { id: "deposit", label: "Deposit margin" },
   { id: "trade", label: "Open a position" },
 ];

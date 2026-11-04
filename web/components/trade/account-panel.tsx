@@ -1,127 +1,133 @@
 "use client";
 
 import { useState } from "react";
-import { formatUtc } from "@/components/landing/live-time";
+import Link from "next/link";
+import { useFundingDialog } from "@/components/app/funding";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
-import type { KeeperStatus } from "@/hooks/use-keeper-tick";
+import { Button } from "@/components/ui/button";
+import { PanelTabs } from "@/components/ui/panel-tabs";
 import { useAccountId } from "@/hooks/near-provider";
-import { useAccount, useConfig, useLiquidations, usePositions } from "@/hooks/use-perps-queries";
+import { useAccount, useConfig, useLiquidations, usePositions, useVaultAccount } from "@/hooks/use-perps-queries";
 import { formatUsd } from "@/lib/near/format";
-import { DepositMarginForm, WithdrawMarginForm } from "./funding";
+import { formatShares } from "@/components/vault/vault-math";
+import { cn } from "@/lib/utils";
 import { LiquidationsTable } from "./liquidations-table";
 import { PositionsTable } from "./positions-table";
 
-const TABS = [
-  { id: "positions", label: "Positions" },
-  { id: "liquidations", label: "Liquidations" },
-  { id: "margin", label: "Margin" },
-] as const;
-type Tab = (typeof TABS)[number]["id"];
+type Tab = "balances" | "positions" | "liquidations";
 
-const SIGNED_OUT = "Connect your wallet to see your positions and margin.";
+const SIGNED_OUT = "Connect a wallet to see your balances and positions.";
 
-function KeeperLine({ status }: { status: KeeperStatus }) {
-  const text =
-    status.state === "ran"
-      ? `Keeper ran at ${formatUtc(status.atMs, true)}${status.liquidated > 0 ? ` and liquidated ${status.liquidated} position${status.liquidated === 1 ? "" : "s"}` : ", nothing to liquidate"}.`
-      : status.state === "running"
-        ? "Keeper is checking every open position…"
-        : status.state === "unavailable"
-          ? `Keeper unavailable: ${status.reason}`
-          : "Keeper checks every open position once a minute while this page is open.";
+const th = "px-3 font-normal whitespace-nowrap";
+
+function Balances() {
+  const account = useAccount();
+  const positions = usePositions();
+  const vault = useVaultAccount();
+  const funding = useFundingDialog();
+
+  if (account.isPending) return <Skeleton className="m-3 h-24" />;
+  if (account.isError) {
+    return <ErrorState className="m-3" title="Your balances are unavailable right now." error={account.error} onRetry={() => void account.refetch()} />;
+  }
+  const locked = positions.data?.reduce((sum, p) => sum + p.margin, 0n) ?? 0n;
+  const { usdcBalance, margin } = account.data;
+
   return (
-    <p data-testid="keeper-status" className={status.state === "unavailable" ? "text-label text-warning" : "text-label text-tertiary"}>
-      {text}
-    </p>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[720px] text-label tabular-nums">
+        <thead className="text-tertiary">
+          <tr className="h-8">
+            <th scope="col" className={cn(th, "text-left")}>Coin</th>
+            <th scope="col" className={cn(th, "text-right")}>Total Balance</th>
+            <th scope="col" className={cn(th, "text-right")}>Available Balance</th>
+            <th scope="col" className={cn(th, "text-right")}>USDC Value</th>
+            <th scope="col" className={cn(th, "text-right")}>
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody className="text-foreground">
+          <tr className="h-9 border-t border-border">
+            <th scope="row" className="px-3 text-left font-normal">USDC <span className="text-tertiary">(wallet)</span></th>
+            <td className="px-3 text-right">{formatUsd(usdcBalance)}</td>
+            <td className="px-3 text-right">{formatUsd(usdcBalance)}</td>
+            <td className="px-3 text-right">{formatUsd(usdcBalance)}</td>
+            <td className="px-3 text-right">
+              <Button variant="link" size="xs" className="text-label" onClick={() => funding.open("deposit")}>
+                Deposit to margin
+              </Button>
+            </td>
+          </tr>
+          <tr className="h-9 border-t border-border">
+            <th scope="row" className="px-3 text-left font-normal">USDC <span className="text-tertiary">(margin)</span></th>
+            <td className="px-3 text-right">{formatUsd(margin + locked)}</td>
+            <td className="px-3 text-right" data-testid="margin-free">{formatUsd(margin)}</td>
+            <td className="px-3 text-right">{formatUsd(margin + locked)}</td>
+            <td className="px-3 text-right">
+              <Button variant="link" size="xs" className="text-label" onClick={() => funding.open("withdraw")}>
+                Withdraw to wallet
+              </Button>
+            </td>
+          </tr>
+          <tr className="h-9 border-t border-border">
+            <th scope="row" className="px-3 text-left font-normal">Vault shares</th>
+            <td className="px-3 text-right">{vault.data ? formatShares(vault.data.shares) : "—"}</td>
+            <td className="px-3 text-right">{vault.data ? formatShares(vault.data.shares) : "—"}</td>
+            <td className="px-3 text-right">{vault.data ? formatUsd(vault.data.value) : "—"}</td>
+            <td className="px-3 text-right">
+              <Link href="/vault" className="text-foreground underline-offset-4 hover:underline">
+                Manage on Vaults
+              </Link>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-/** Positions, liquidation history and margin moves, under the chart area like most perps screens. */
-export function AccountPanel({ keeper }: { keeper: KeeperStatus }) {
+/** Balances, positions and liquidations under the chart, like most perps screens. */
+export function AccountPanel({ className }: { className?: string }) {
   const accountId = useAccountId();
   const positions = usePositions();
-  const account = useAccount();
   const liquidations = useLiquidations();
   const config = useConfig();
   const [tab, setTab] = useState<Tab>("positions");
   const count = positions.data?.length ?? 0;
 
-  return (
-    <section aria-label="Your account" className="flex flex-col rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-2 md:px-4">
-        <div role="tablist" aria-label="Account" className="flex gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              id={`account-tab-${t.id}`}
-              aria-selected={tab === t.id}
-              aria-controls="account-tabpanel"
-              data-testid={`account-tab-${t.id}`}
-              onClick={() => setTab(t.id)}
-              className="shrink-0 rounded-md px-2.5 py-1.5 text-ui font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-selected:bg-muted aria-selected:text-foreground"
-            >
-              {t.label}
-              {t.id === "positions" && count > 0 ? <span className="ml-1.5 tabular-nums text-tertiary">{count}</span> : null}
-            </button>
-          ))}
-        </div>
-        {tab === "liquidations" ? <KeeperLine status={keeper} /> : null}
-      </div>
+  const tabs = [
+    { id: "balances", label: "Balances", testId: "account-tab-balances" },
+    { id: "positions", label: count > 0 ? `Positions (${count})` : "Positions", testId: "account-tab-positions" },
+    { id: "liquidations", label: "Liquidations", testId: "account-tab-liquidations" },
+  ] as const;
 
-      <div id="account-tabpanel" role="tabpanel" aria-labelledby={`account-tab-${tab}`}>
-        {tab === "positions" ? (
+  return (
+    <section aria-label="Your account" className={cn("flex min-h-0 min-w-0 flex-col rounded-md border border-border bg-card", className)}>
+      <PanelTabs tabs={tabs} value={tab} onChange={setTab} label="Account" idPrefix="account" />
+      <div id="account-panel" role="tabpanel" aria-labelledby={`account-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto">
+        {tab === "balances" ? (
+          !accountId ? <EmptyState>{SIGNED_OUT}</EmptyState> : <Balances />
+        ) : tab === "positions" ? (
           !accountId ? (
             <EmptyState>{SIGNED_OUT}</EmptyState>
           ) : positions.isPending ? (
-            <Skeleton className="mx-4 mb-4 h-20" />
+            <Skeleton className="m-3 h-20" />
           ) : positions.isError ? (
-            <ErrorState className="m-4" title="Positions are unavailable right now." error={positions.error} onRetry={() => void positions.refetch()} />
+            <ErrorState className="m-3" title="Positions are unavailable right now." error={positions.error} onRetry={() => void positions.refetch()} />
           ) : count === 0 ? (
-            <EmptyState>No positions yet. Pick a side, a margin and a leverage in the order ticket.</EmptyState>
+            <EmptyState>No open positions yet.</EmptyState>
           ) : (
             <PositionsTable positions={positions.data} />
           )
-        ) : tab === "liquidations" ? (
-          liquidations.isPending ? (
-            <Skeleton className="mx-4 mb-4 h-20" />
-          ) : liquidations.isError ? (
-            <ErrorState className="m-4" title="Liquidation history is unavailable right now." error={liquidations.error} onRetry={() => void liquidations.refetch()} />
-          ) : liquidations.data.length === 0 ? (
-            <EmptyState>No liquidations yet. A position is liquidated when its equity falls to its maintenance margin.</EmptyState>
-          ) : (
-            <LiquidationsTable liquidations={liquidations.data} keeperId={config.data?.keeper_id ?? null} accountId={accountId} />
-          )
-        ) : !accountId ? (
-          <EmptyState>{SIGNED_OUT}</EmptyState>
-        ) : account.isPending ? (
-          <Skeleton className="mx-4 mb-4 h-40" />
-        ) : account.isError ? (
-          <ErrorState className="m-4" title="Your margin is unavailable right now." error={account.error} onRetry={() => void account.refetch()} />
+        ) : liquidations.isPending ? (
+          <Skeleton className="m-3 h-20" />
+        ) : liquidations.isError ? (
+          <ErrorState className="m-3" title="Liquidation history is unavailable right now." error={liquidations.error} onRetry={() => void liquidations.refetch()} />
+        ) : liquidations.data.length === 0 ? (
+          <EmptyState>No liquidations yet. A position is liquidated when its equity falls to its maintenance margin.</EmptyState>
         ) : (
-          <div className="grid gap-6 px-4 pt-2 pb-4 md:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,1fr)] md:gap-8">
-            <dl className="flex gap-8 md:flex-col md:gap-3">
-              <div className="flex flex-col gap-0.5">
-                <dt className="text-label text-tertiary">Free margin</dt>
-                <dd className="text-heading tabular-nums text-foreground" data-testid="margin-free">
-                  {formatUsd(account.data.margin)}
-                </dd>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <dt className="text-label text-tertiary">Wallet</dt>
-                <dd className="text-ui tabular-nums text-muted-foreground">{formatUsd(account.data.usdcBalance)} tUSDC</dd>
-              </div>
-            </dl>
-            <div className="flex flex-col gap-2">
-              <h3 className="text-ui font-medium text-foreground">Deposit</h3>
-              <DepositMarginForm account={account.data} primary={false} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <h3 className="text-ui font-medium text-foreground">Withdraw</h3>
-              <WithdrawMarginForm account={account.data} />
-            </div>
-          </div>
+          <LiquidationsTable liquidations={liquidations.data} keeperId={config.data?.keeper_id ?? null} accountId={accountId} />
         )}
       </div>
     </section>

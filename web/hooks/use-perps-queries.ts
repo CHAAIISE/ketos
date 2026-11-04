@@ -20,6 +20,7 @@ export const perpsKeys = {
   vaultAccount: (accountId: string | null) => ["perps", "vault-account", accountId] as const,
   depth: (marketId: MarketId | null) => ["perps", "depth", marketId] as const,
   liquidations: (limit: number) => ["perps", "liquidations", limit] as const,
+  openPositions: () => ["perps", "open-positions"] as const,
 };
 
 /** Token, oracle and keeper accounts; fixed at deployment. */
@@ -119,6 +120,16 @@ export function useLiquidations(limit = 20) {
   return useQuery({
     queryKey: perpsKeys.liquidations(limit),
     queryFn: () => views.liquidations(limit),
+    refetchInterval: SLOW_MS,
+  });
+}
+
+/** Every open position on every market (all accounts), newest last as the contract lists them. */
+export function useAllOpenPositions() {
+  const { views } = useNear();
+  return useQuery({
+    queryKey: perpsKeys.openPositions(),
+    queryFn: () => views.allOpenPositions(),
     refetchInterval: SLOW_MS,
   });
 }
