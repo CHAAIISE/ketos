@@ -116,9 +116,9 @@ function Plot({ points }: { points: NavPoint[] }) {
 export function NavChart({ points, loading, className }: { points: NavPoint[]; loading: boolean; className?: string }) {
   const latest = points.at(-1);
   return (
-    <section aria-label="NAV since you opened this page" className={cn("flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4", className)}>
+    <section aria-label="NAV since you opened this page" className={cn("flex min-w-0 flex-col gap-3", className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-sm font-medium text-foreground">NAV since you opened this page</h2>
+        <h3 className="text-ui font-medium text-foreground">NAV since you opened this page</h3>
         <span className="text-label text-tertiary">read from the contract every 10 s while this tab is open</span>
       </div>
       {points.length >= 2 ? (

@@ -8,6 +8,7 @@ import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
 import { MARKET_IDS, type Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
+import { PanelHeading } from "./panel-heading";
 import { Term } from "./term";
 
 const COLUMNS = ["Long OI", "Short OI", "Net", "Exit capacity", "Max OI per side", "Net / capacity"] as const;
@@ -55,39 +56,34 @@ function MeasuredAt({ markets }: { markets: Market[] }) {
 }
 
 export function ExposureTable({ query, className }: { query: UseQueryResult<Market[]>; className?: string }) {
-  const panel = cn("flex min-w-0 flex-col rounded-lg border border-border bg-card", className);
+  const panel = cn("flex min-w-0 flex-col rounded-md border border-border bg-card", className);
   const markets = query.data
     ? [...query.data].sort((a, b) => MARKET_IDS.indexOf(a.id) - MARKET_IDS.indexOf(b.id))
     : null;
 
   return (
     <section aria-labelledby="exposure-title" className={panel}>
-      <div className="flex flex-col gap-1 p-4 pb-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <h2 id="exposure-title" className="text-sm font-medium text-foreground">
-            Net exposure vs exit capacity
-          </h2>
-          {markets?.length ? <MeasuredAt markets={markets} /> : null}
-        </div>
-        <p className="text-ui text-muted-foreground">
-          Open interest (total size of open positions) on each side. The vault holds the opposite of the net: when
-          traders are net long, the vault is short, and it can only hedge or unwind what NEAR Intents can absorb.
-        </p>
-      </div>
+      <PanelHeading id="exposure-title" aside={markets?.length ? <MeasuredAt markets={markets} /> : null}>
+        Net exposure vs exit capacity
+      </PanelHeading>
+      <p className="px-3 pt-2 pb-1 text-label text-tertiary">
+        Open interest (total size of open positions) on each side. The vault holds the opposite of the net: when traders
+        are net long, the vault is short, and it can only hedge or unwind what NEAR Intents can absorb.
+      </p>
       {query.isError && !markets ? (
-        <div className="px-4 pb-4">
+        <div className="p-3">
           <ErrorState title={`Could not read the markets from ${networkName()}.`} error={query.error} onRetry={() => void query.refetch()} />
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-176 text-ui tabular-nums">
-            <thead className="bg-muted text-label text-tertiary">
+            <thead className="text-label text-tertiary">
               <tr>
-                <th scope="col" className="h-8 px-4 text-left font-medium">
+                <th scope="col" className="h-8 px-3 text-left font-normal">
                   Market
                 </th>
                 {COLUMNS.map((label) => (
-                  <th key={label} scope="col" className="h-8 px-4 text-right font-medium whitespace-nowrap">
+                  <th key={label} scope="col" className="h-8 px-3 text-right font-normal whitespace-nowrap">
                     {label === "Net" ? (
                       <Term hint="Long open interest minus short open interest.">Net</Term>
                     ) : label === "Max OI per side" ? (
@@ -104,28 +100,28 @@ export function ExposureTable({ query, className }: { query: UseQueryResult<Mark
             <tbody>
               {markets
                 ? markets.map((m) => (
-                    <tr key={m.id} className="h-row border-t border-border">
-                      <th scope="row" className="px-4 text-left font-medium text-foreground">
+                    <tr key={m.id} className="h-8 hover:bg-muted/40">
+                      <th scope="row" className="px-3 text-left font-medium text-foreground">
                         <span className="inline-flex items-center gap-2">
                           {m.id}
                           {m.is_open ? null : <Badge variant="warning">paused</Badge>}
                         </span>
                       </th>
-                      <td className="px-4 text-right text-foreground">{usd0(m.oi_long)}</td>
-                      <td className="px-4 text-right text-foreground">{usd0(m.oi_short)}</td>
-                      <td className="px-4 text-right">
+                      <td className="px-3 text-right text-foreground">{usd0(m.oi_long)}</td>
+                      <td className="px-3 text-right text-foreground">{usd0(m.oi_short)}</td>
+                      <td className="px-3 text-right">
                         <NetCell net={m.oi_long - m.oi_short} />
                       </td>
-                      <td className="px-4 text-right text-foreground">{usd0(m.exit_capacity)}</td>
-                      <td className="px-4 text-right text-muted-foreground">{usd0(m.max_oi_per_side)}</td>
-                      <td className="px-4 text-right text-muted-foreground">
+                      <td className="px-3 text-right text-foreground">{usd0(m.exit_capacity)}</td>
+                      <td className="px-3 text-right text-muted-foreground">{usd0(m.max_oi_per_side)}</td>
+                      <td className="px-3 text-right text-muted-foreground">
                         <UsageBar net={m.oi_long - m.oi_short} capacity={m.exit_capacity} />
                       </td>
                     </tr>
                   ))
                 : MARKET_IDS.map((id) => (
-                    <tr key={id} className="h-row border-t border-border">
-                      <td colSpan={COLUMNS.length + 1} className="px-4">
+                    <tr key={id} className="h-8">
+                      <td colSpan={COLUMNS.length + 1} className="px-3">
                         <Skeleton className="h-4 w-full" />
                       </td>
                     </tr>

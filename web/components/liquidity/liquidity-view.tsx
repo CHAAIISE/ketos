@@ -5,7 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PageHeader, Eyebrow } from "@/components/ui/page-shell";
+import { Eyebrow } from "@/components/ui/page-shell";
+import { PanelHeading } from "@/components/vault/panel-heading";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { formatAge, formatUtc, STALE_AFTER_MS, useNow } from "@/components/landing/live-time";
 import { useDepth } from "@/hooks/use-perps-queries";
@@ -39,33 +40,38 @@ export function LiquidityView() {
 
   return (
     <>
-      <PageHeader
-        title="Measured exit liquidity"
-        description="How much of each asset can be sold on NEAR Intents before the price moves 1%."
-        actions={<MeasuredAt record={latest} loading={depth.isPending} now={now} />}
-      />
-
-      <div
-        role="tablist"
-        aria-label="Asset"
-        className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1"
-      >
-        {MARKET_IDS.map((id) => (
-          <button
-            key={id}
-            role="tab"
-            type="button"
-            aria-selected={id === asset}
-            onClick={() => select(id)}
-            className={cn(
-              "h-8 shrink-0 rounded-md px-4 text-ui font-medium transition-colors",
-              id === asset ? "bg-muted text-foreground" : "text-tertiary hover:text-foreground",
-            )}
-          >
-            {id}
-          </button>
-        ))}
-      </div>
+      <section aria-labelledby="liquidity-title" className="flex flex-col rounded-md border border-border bg-card">
+        <div className="flex flex-col gap-3 p-4 md:flex-row md:items-start md:justify-between">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 id="liquidity-title" className="text-heading text-foreground">
+              Measured exit liquidity
+            </h1>
+            <p className="text-ui text-muted-foreground">
+              How much of each asset can be sold on NEAR Intents before the price moves 1%.
+            </p>
+          </div>
+          <MeasuredAt record={latest} loading={depth.isPending} now={now} />
+        </div>
+        <div role="tablist" aria-label="Asset" className="flex gap-5 overflow-x-auto border-t border-border px-4">
+          {MARKET_IDS.map((id) => (
+            <button
+              key={id}
+              role="tab"
+              type="button"
+              aria-selected={id === asset}
+              onClick={() => select(id)}
+              className={cn(
+                "h-9 shrink-0 border-b text-ui transition-colors outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                id === asset
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+      </section>
 
       {depth.isError ? (
         <ErrorState error={depth.error} onRetry={() => depth.refetch()} />
@@ -105,10 +111,10 @@ function LoadingBody() {
   return (
     <>
       <div className="grid gap-1 lg:grid-cols-12">
-        <Skeleton className="h-96 rounded-lg lg:col-span-8" />
-        <Skeleton className="h-96 rounded-lg lg:col-span-4" />
+        <Skeleton className="h-96 lg:col-span-8" />
+        <Skeleton className="h-96 lg:col-span-4" />
       </div>
-      <Skeleton className="h-80 rounded-lg" />
+      <Skeleton className="h-80" />
     </>
   );
 }
@@ -117,7 +123,7 @@ function DepthBody({ view, now }: { view: DepthView | null; now: number }) {
   const latest = view?.history.at(-1);
   if (!view || !latest) {
     return (
-      <div className="rounded-lg border border-border bg-card">
+      <div className="rounded-md border border-border bg-card">
         <EmptyState>No sample yet. The keeper samples every minute while the app is open.</EmptyState>
       </div>
     );
@@ -125,12 +131,13 @@ function DepthBody({ view, now }: { view: DepthView | null; now: number }) {
   return (
     <>
       <div className="grid gap-1 lg:grid-cols-12">
-        <section className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 lg:col-span-8">
-          <div className="flex items-baseline justify-between gap-4">
-            <h2 className="text-subtitle text-foreground">Impact curve</h2>
-            <p className="text-label text-tertiary">Sell size (log) → net price impact</p>
+        <section aria-labelledby="impact-title" className="flex min-w-0 flex-col rounded-md border border-border bg-card lg:col-span-8">
+          <PanelHeading id="impact-title" aside={<p className="text-label text-tertiary">Sell size (log) → net price impact</p>}>
+            Impact curve
+          </PanelHeading>
+          <div className="p-3">
+            <ImpactChart record={latest} />
           </div>
-          <ImpactChart record={latest} />
         </section>
         <Parameters view={view} record={latest} now={now} />
       </div>
@@ -153,9 +160,9 @@ function Parameters({ view, record, now }: { view: DepthView; record: DepthRecor
     : `Capacity ≥ ${formatSizeUsd(MIN_OPEN_CAPACITY_USD)}, measured < 30 min ago`;
 
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 lg:col-span-4">
-      <h2 className="text-subtitle text-foreground">Derived parameters</h2>
-      <dl className="flex flex-col text-ui">
+    <section aria-labelledby="parameters-title" className="flex flex-col gap-1 rounded-md border border-border bg-card lg:col-span-4">
+      <PanelHeading id="parameters-title">Derived parameters</PanelHeading>
+      <dl className="flex flex-col px-3 text-ui">
         <Row label="Exit capacity" value={formatSizeUsd(capacity)} hint={`Largest size within ${MAX_EXIT_IMPACT_BPS} bps`} />
         <Row
           label="Max open interest per side"
@@ -170,13 +177,13 @@ function Parameters({ view, record, now }: { view: DepthView; record: DepthRecor
           hint={reason}
         />
       </dl>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 px-3 pt-2 pb-3">
         <Eyebrow>Leverage tiers</Eyebrow>
         <table className="w-full text-ui">
           <thead>
-            <tr className="bg-muted text-label text-tertiary">
-              <th className="h-8 rounded-l-md px-2 text-left font-normal">Exit capacity</th>
-              <th className="h-8 rounded-r-md px-2 text-right font-normal">Max leverage</th>
+            <tr className="border-b border-border text-label text-tertiary">
+              <th className="h-8 px-2 text-left font-normal">Exit capacity</th>
+              <th className="h-8 px-2 text-right font-normal">Max leverage</th>
             </tr>
           </thead>
           <tbody>
@@ -220,15 +227,14 @@ function Row({ label, value, hint, valueClass }: { label: string; value: string;
 function History({ history }: { history: DepthRecord[] }) {
   const rows = [...history].reverse();
   return (
-    <section className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      <div className="flex items-baseline justify-between gap-4">
-        <h2 className="text-subtitle text-foreground">Sample history</h2>
-        <p className="text-label text-tertiary">Last {rows.length} of up to 48, newest first</p>
-      </div>
-      <div className="overflow-x-auto">
+    <section aria-labelledby="history-title" className="flex min-w-0 flex-col rounded-md border border-border bg-card">
+      <PanelHeading id="history-title" aside={<p className="text-label text-tertiary">Last {rows.length} of up to 48, newest first</p>}>
+        Sample history
+      </PanelHeading>
+      <div className="overflow-x-auto px-1 pb-1">
         <table className="w-full min-w-3xl text-ui">
           <thead>
-            <tr className="bg-muted text-label text-tertiary">
+            <tr className="border-b border-border text-label text-tertiary">
               <th className="h-8 px-2 text-left font-normal whitespace-nowrap">Time</th>
               <th className="h-8 px-2 text-right font-normal">Capacity</th>
               <th className="h-8 px-2 text-right font-normal">Max lev.</th>
@@ -289,16 +295,16 @@ function RerunCallout({ asset, oracleAssetId }: { asset: MarketId; oracleAssetId
   };
 
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
+    <section className="flex flex-col gap-3 rounded-md border border-border bg-card p-3">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex flex-col gap-1">
-          <h2 className="text-subtitle text-foreground">Re-run it yourself</h2>
+          <h2 className="text-ui font-medium text-foreground">Re-run it yourself</h2>
           <p className="text-ui text-muted-foreground">
             Quotes every size on 1Click from your machine and prints the same impact numbers. No key needed.
           </p>
         </div>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
-          <code className="flex h-control min-w-0 items-center truncate rounded-md bg-muted px-3 font-mono text-ui text-foreground">
+          <code className="flex h-9 min-w-0 items-center truncate rounded-md bg-muted px-3 font-mono text-ui text-foreground">
             {RERUN_COMMAND}
           </code>
           <Button data-primary onClick={copy} aria-label="Copy re-run command">

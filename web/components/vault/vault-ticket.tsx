@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import Link from "next/link";
 import { Tabs } from "@base-ui/react/tabs";
 import { Skeleton } from "@/components/app/states";
 import { useTxToast } from "@/components/app/tx-toast";
@@ -52,7 +51,7 @@ function AmountInput({
         value={value}
         aria-invalid={invalid || undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="pr-16 text-right"
+        className="h-9 pr-16 text-right text-ui"
       />
       <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ui text-tertiary">
         {unit}
@@ -108,9 +107,9 @@ function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
     (amount === null || amount === 0n
       ? null
       : amount < MIN_DEPOSIT
-        ? "Vault deposits must be at least 1 tUSDC."
+        ? "Vault deposits must be at least 1 USDC."
         : balance !== undefined && amount > balance
-          ? `You have ${formatUsdc(balance)} tUSDC in your wallet. Lower the amount or get test USDC on Trade.`
+          ? `You have ${formatUsdc(balance)} USDC in your wallet. Lower the amount or use Fund in the top bar.`
           : vault.total_shares > 0n && vault.nav === 0n
             ? "The vault has no net value right now, so deposits are paused. Try again later."
             : shares === 0n
@@ -121,8 +120,8 @@ function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
   const submit = async () => {
     if (!amount || !ready) return;
     const result = await track(() => deposit.mutateAsync(amount), {
-      pending: `Depositing ${formatUsdc(amount)} tUSDC into the vault…`,
-      success: `Deposited ${formatUsdc(amount)} tUSDC into the vault`,
+      pending: `Depositing ${formatUsdc(amount)} USDC into the vault…`,
+      success: `Deposited ${formatUsdc(amount)} USDC into the vault`,
       successDescription: () => `About ${formatShares(shares)} shares minted at ${formatUsd(vault.share_price, { maxFractionDigits: 4 })}.`,
     });
     if (result) setText("");
@@ -130,7 +129,7 @@ function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
 
   return (
     <form
-      className="flex flex-col gap-4"
+      className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
@@ -144,7 +143,7 @@ function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
               {balance === undefined ? (
                 <Skeleton className="h-4 w-24" />
               ) : (
-                <span>Wallet {formatUsdc(balance)} tUSDC</span>
+                <span>Wallet {formatUsdc(balance)} USDC</span>
               )}
               <Button
                 type="button"
@@ -158,16 +157,10 @@ function DepositForm({ vault, signedIn }: { vault: Vault; signedIn: boolean }) {
             </span>
           ) : null}
         </div>
-        <AmountInput id="vault-deposit" value={text} onChange={setText} unit="tUSDC" invalid={error !== null} />
+        <AmountInput id="vault-deposit" value={text} onChange={setText} unit="USDC" invalid={error !== null} />
         {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
         {signedIn && balance === 0n && !error ? (
-          <FieldMessage>
-            Your wallet has no tUSDC.{" "}
-            <Link href="/trade" className="text-foreground underline underline-offset-4">
-              Get 1,000 test USDC on Trade
-            </Link>
-            .
-          </FieldMessage>
+          <FieldMessage>Your wallet has no USDC. Use Fund in the top bar to get 1,000 USDC.</FieldMessage>
         ) : null}
       </Field>
       <div className="flex flex-col gap-2">
@@ -253,7 +246,7 @@ function WithdrawForm({
 
   return (
     <form
-      className="flex flex-col gap-4"
+      className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
@@ -345,7 +338,7 @@ function PositionSummary({ vault, signedIn }: { vault: Vault; signedIn: boolean 
 }
 
 const tabClass =
-  "h-8 rounded-sm text-ui font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-active:bg-card data-active:text-foreground";
+  "-mb-px h-9 border-b border-transparent text-ui text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-active:border-foreground data-active:text-foreground";
 
 export function VaultTicket({
   vault,
@@ -364,10 +357,10 @@ export function VaultTicket({
   return (
     <section
       aria-label="Deposit or withdraw"
-      className={cn("flex min-w-0 flex-col gap-5 rounded-lg border border-border bg-card p-4", className)}
+      className={cn("flex min-w-0 flex-col rounded-md border border-border bg-card", className)}
     >
-      <Tabs.Root value={mode} onValueChange={(next: Mode) => setMode(next)} className="flex flex-col gap-4">
-        <Tabs.List className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
+      <Tabs.Root value={mode} onValueChange={(next: Mode) => setMode(next)} className="flex flex-col">
+        <Tabs.List className="grid grid-cols-2 border-b border-border">
           <Tabs.Tab value="deposit" className={tabClass}>
             Deposit
           </Tabs.Tab>
@@ -375,29 +368,31 @@ export function VaultTicket({
             Withdraw
           </Tabs.Tab>
         </Tabs.List>
-        {vault ? (
-          <>
-            <Tabs.Panel value="deposit">
-              <DepositForm vault={vault} signedIn={signedIn} />
-            </Tabs.Panel>
-            <Tabs.Panel value="withdraw">
-              <WithdrawForm vault={vault} position={position.data} signedIn={signedIn} />
-            </Tabs.Panel>
-          </>
-        ) : loading ? (
-          <div className="flex flex-col gap-4" aria-busy>
-            <Skeleton className="h-4 w-20" />
-            <Skeleton className="h-control w-full" />
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-control w-full" />
-          </div>
-        ) : (
-          <p className="text-ui text-muted-foreground">
-            Deposits and withdrawals need a fresh read of the vault. Retry from the NAV panel.
-          </p>
-        )}
+        <div className="p-3">
+          {vault ? (
+            <>
+              <Tabs.Panel value="deposit">
+                <DepositForm vault={vault} signedIn={signedIn} />
+              </Tabs.Panel>
+              <Tabs.Panel value="withdraw">
+                <WithdrawForm vault={vault} position={position.data} signedIn={signedIn} />
+              </Tabs.Panel>
+            </>
+          ) : loading ? (
+            <div className="flex flex-col gap-3" aria-busy>
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-control w-full" />
+            </div>
+          ) : (
+            <p className="text-ui text-muted-foreground">
+              Deposits and withdrawals need a fresh read of the vault. Retry from the vault overview above.
+            </p>
+          )}
+        </div>
       </Tabs.Root>
-      <div className="flex flex-col gap-3 border-t border-border pt-4">
+      <div className="flex flex-col gap-2 border-t border-border p-3">
         <h2 className="text-label text-tertiary">Your position</h2>
         {vault ? (
           <PositionSummary vault={vault} signedIn={signedIn} />
@@ -407,7 +402,7 @@ export function VaultTicket({
           <p className="text-ui text-muted-foreground">Unavailable until the vault can be read.</p>
         )}
       </div>
-      <p className="mt-auto text-label text-tertiary">
+      <p className="mt-auto border-t border-border p-3 text-label text-tertiary">
         LPs are the counterparty of every trade: the vault earns trading, borrow and liquidation fees and pays traders&apos;
         gains. Withdrawals are limited to USDC not reserved for open positions.
       </p>
