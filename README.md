@@ -113,7 +113,7 @@ pnpm --dir web exec playwright test   # local sandbox + app in test-wallet mode,
 Against testnet:
 
 ```bash
-cp .env.example .env.local      # NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY of a testnet account, optional ONECLICK_JWT
+cp .env.example .env.local      # NEAR_PRIVATE_KEY (+ NEAR_ACCOUNT_ID for a first deploy) of a testnet account, optional ONECLICK_JWT
 bash scripts/deploy-testnet.sh  # idempotent: subaccounts, contracts, keeper key, vault seed
 pnpm depth:sample               # print today's exit-liquidity table and save it as JSON
 pnpm keeper --once              # one keeper tick: depth, prices, liquidations

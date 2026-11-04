@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Account, JsonRpcProvider, KeyPair, actions, nearToYocto, teraToGas } from "near-api-js";
 import type { KeyPairString } from "near-api-js";
-import { loadEnv, optionalEnv, requireEnv } from "./lib/env.ts";
+import { loadEnv, nearAccountId, optionalEnv, requireEnv } from "./lib/env.ts";
 
 const ORACLE_ID = "price-oracle.testnet";
 const KEEPER_METHODS = ["refresh_prices", "set_depth", "liquidate"];
@@ -20,7 +20,7 @@ const PERPS_MIN_AVAILABLE = nearToYocto("2");
 const root = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 
 loadEnv();
-const parentId = requireEnv("NEAR_ACCOUNT_ID");
+const parentId = nearAccountId();
 const parentKey = requireEnv("NEAR_PRIVATE_KEY") as KeyPairString;
 const rpcUrl = optionalEnv("NEAR_RPC_URL") ?? "https://test.rpc.fastnear.com";
 const provider = new JsonRpcProvider({ url: rpcUrl });
@@ -231,6 +231,7 @@ await topUpPerps();
 
 const deployment = {
   network: "testnet",
+  owner: parentId,
   perps: ids.perps,
   usdc: ids.usdc,
   oracle: ORACLE_ID,

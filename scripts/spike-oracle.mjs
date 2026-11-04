@@ -1,7 +1,7 @@
 // Proves the OutLayer price oracle on testnet: fetches fresh prices for the four
 // Ketos markets, then sends an `oracle_call` to observe the exact callback payload.
 import { Account, JsonRpcProvider, nearToYocto, teraToGas } from "near-api-js";
-import { requireEnv } from "./lib/env.ts";
+import { nearAccountId, requireEnv } from "./lib/env.ts";
 
 const ORACLE = "price-oracle.testnet";
 const ASSETS = {
@@ -12,7 +12,7 @@ const ASSETS = {
 };
 const assetIds = Object.values(ASSETS);
 
-const accountId = requireEnv("NEAR_ACCOUNT_ID");
+const accountId = nearAccountId();
 const privateKey = requireEnv("NEAR_PRIVATE_KEY");
 const provider = new JsonRpcProvider({ url: process.env.NEAR_RPC_URL ?? "https://test.rpc.fastnear.com" });
 const account = new Account(accountId, provider, privateKey);
