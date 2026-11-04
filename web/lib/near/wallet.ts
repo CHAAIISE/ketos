@@ -6,12 +6,22 @@ import { settleOutcome, type NearTransaction, type TxResult } from "./tx";
 
 export type WalletKind = "near-connect" | "e2e";
 
+/** One entry of the connect menu. */
+export interface WalletOption {
+  id: string;
+  name: string;
+  /** Image URL from the wallet manifest; null when the wallet has none. */
+  icon: string | null;
+}
+
 export interface Wallet {
   readonly kind: WalletKind;
   /** Signed-in account, null when signed out. */
   readonly accountId: string | null;
-  /** Opens the wallet selector (or, for the E2E signer, signs in immediately). */
-  signIn(): Promise<void>;
+  /** Wallets the user can connect with, in the order near-connect lists them. */
+  listWallets(): Promise<WalletOption[]>;
+  /** Connects `walletId`, or opens the near-connect selector without one (the E2E signer signs in immediately). */
+  signIn(walletId?: string): Promise<void>;
   signOut(): Promise<void>;
   /** Signs and sends one transaction; rejects with a NearActionError, including for failed receipts. */
   signAndSendTransaction(tx: NearTransaction): Promise<TxResult>;
@@ -64,9 +74,17 @@ async function createNearConnectWallet(config: NearConfig): Promise<Wallet> {
     get accountId() {
       return store.get();
     },
-    async signIn() {
+    async listWallets() {
+      await connector.whenManifestLoaded.catch(() => undefined);
+      return connector.availableWallets.map(({ manifest }) => ({
+        id: manifest.id,
+        name: manifest.name,
+        icon: manifest.icon || null,
+      }));
+    },
+    async signIn(walletId) {
       try {
-        await connector.connect();
+        await connector.connect(walletId ? { walletId } : undefined);
       } catch (error) {
         throw toNearActionError(error);
       }
@@ -134,6 +152,9 @@ export function createE2EWallet(config: NearConfig, signer: E2ESigner): Wallet {
     kind: "e2e",
     get accountId() {
       return store.get();
+    },
+    async listWallets() {
+      return [{ id: "e2e", name: signer.accountId, icon: null }];
     },
     async signIn() {
       storage?.setItem(E2E_SESSION_KEY, signer.accountId);

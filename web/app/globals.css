@@ -132,7 +132,7 @@
 
   /* Spacing scale: 4, 8, 12, 16, 24, 32, 48, 64, 96, 160 (multiples of --spacing) plus layout sizes. */
   --spacing: 0.25rem;
-  --spacing-nav: 3rem;
+  --spacing-nav: 3.5rem;
   --spacing-control: 2.5rem;
   --spacing-pill: 3.5rem;
   --spacing-row: 2.25rem;

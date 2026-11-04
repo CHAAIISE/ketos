@@ -13,7 +13,7 @@ import {
 import { nearConfig, type NearConfig } from "@/lib/near/config";
 import { toNearActionError, type NearActionError } from "@/lib/near/errors";
 import { PerpsViews } from "@/lib/near/views";
-import { createWallet, type Wallet } from "@/lib/near/wallet";
+import { createWallet, type Wallet, type WalletOption } from "@/lib/near/wallet";
 
 export interface NearContextValue {
   config: NearConfig;
@@ -96,8 +96,10 @@ export interface WalletState {
   isReady: boolean;
   kind: Wallet["kind"] | null;
   error: NearActionError | null;
-  signIn: () => Promise<void>;
+  /** Connects `walletId`, or opens the wallet selector without one. */
+  signIn: (walletId?: string) => Promise<void>;
   signOut: () => Promise<void>;
+  listWallets: () => Promise<WalletOption[]>;
 }
 
 export function useWallet(): WalletState {
@@ -108,12 +110,16 @@ export function useWallet(): WalletState {
     isReady: wallet !== null,
     kind: wallet?.kind ?? null,
     error: walletError,
-    signIn: async () => {
+    signIn: async (walletId?: string) => {
       if (!wallet) throw walletError ?? toNearActionError(new Error("Wallet is still loading"));
-      await wallet.signIn();
+      await wallet.signIn(walletId);
     },
     signOut: async () => {
       await wallet?.signOut();
+    },
+    listWallets: async () => {
+      if (!wallet) throw walletError ?? toNearActionError(new Error("Wallet is still loading"));
+      return wallet.listWallets();
     },
   };
 }

@@ -4,10 +4,11 @@ import { TopNav } from "@/components/ui/top-nav"
 
 function AppShell({
   navActions,
+  footer,
   className,
   children,
   ...props
-}: React.ComponentProps<"main"> & { navActions?: React.ReactNode }) {
+}: React.ComponentProps<"main"> & { navActions?: React.ReactNode; footer?: React.ReactNode }) {
   return (
     <div data-slot="app-shell" className="flex min-h-dvh flex-1 flex-col bg-background">
       <TopNav actions={navActions} />
@@ -17,6 +18,7 @@ function AppShell({
       >
         {children}
       </main>
+      {footer}
     </div>
   )
 }
