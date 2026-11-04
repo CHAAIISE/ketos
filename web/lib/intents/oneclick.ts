@@ -100,17 +100,29 @@ export interface DryQuoteParams extends OneClickOptions {
   originAsset: string;
   /** Amount of the origin asset in its base units, as a decimal integer string. */
   amountIn: string;
+  /**
+   * Where the input would be deposited: already inside NEAR Intents (default) or on the asset's own
+   * chain, which makes `timeEstimate` include that chain's confirmations.
+   */
+  depositType?: "INTENTS" | "ORIGIN_CHAIN";
 }
 
-export async function dryQuote({ originAsset, amountIn, jwt, fetchImpl = fetch }: DryQuoteParams): Promise<DryQuoteResult> {
+export async function dryQuote({
+  originAsset,
+  amountIn,
+  depositType = "INTENTS",
+  jwt,
+  fetchImpl = fetch,
+}: DryQuoteParams): Promise<DryQuoteResult> {
   const body = {
     dry: true,
     swapType: "EXACT_INPUT",
     slippageTolerance: 100,
     originAsset,
-    depositType: "INTENTS",
+    depositType,
     destinationAsset: USDC_NEAR_ASSET_ID,
     amount: amountIn,
+    // Dry quotes never open a deposit; refunds stay inside NEAR Intents so no chain address is needed.
     refundTo: "intents.near",
     refundType: "INTENTS",
     recipient: "intents.near",

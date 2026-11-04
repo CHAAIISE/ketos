@@ -8,6 +8,7 @@ import { Field, FieldLabel, FieldMessage, Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PanelTabs } from "@/components/ui/panel-tabs";
 import { Skeleton } from "@/components/app/states";
+import { RoutePreviewForm } from "@/components/app/route-preview";
 import { useAccount, type AccountSummary } from "@/hooks/use-ketos-queries";
 import { useDepositMargin, useFaucet, useWithdrawMargin } from "@/hooks/use-ketos-mutations";
 import { formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
@@ -210,8 +211,35 @@ const FUNDING_TABS = [
   { id: "withdraw", label: "Withdraw" },
 ] as const;
 
+const DEPOSIT_SOURCES = [
+  { id: "near", label: "From NEAR" },
+  { id: "other-chain", label: "From another chain" },
+] as const;
+type DepositSource = (typeof DEPOSIT_SOURCES)[number]["id"];
+
+function DepositSourceToggle({ value, onChange }: { value: DepositSource; onChange: (source: DepositSource) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Deposit from" className="grid grid-cols-2 rounded-md bg-muted p-0.5">
+      {DEPOSIT_SOURCES.map((source) => (
+        <button
+          key={source.id}
+          type="button"
+          role="radio"
+          aria-checked={value === source.id}
+          data-testid={`deposit-source-${source.id}`}
+          onClick={() => onChange(source.id)}
+          className="h-8 rounded-sm text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-checked:bg-background aria-checked:text-foreground"
+        >
+          {source.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function FundingBody({ mode, onDone }: { mode: FundingMode; onDone: () => void }) {
   const account = useAccount();
+  const [source, setSource] = useState<DepositSource>("near");
   if (!account.data) {
     return account.isError ? (
       <p role="alert" className="text-ui text-destructive">
@@ -225,13 +253,20 @@ function FundingBody({ mode, onDone }: { mode: FundingMode; onDone: () => void }
   if (mode === "withdraw") return <WithdrawMarginForm account={data} onDone={onDone} />;
   return (
     <div className="flex flex-col gap-3">
-      {data.usdcBalance === 0n ? (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
-          <p className="text-label text-muted-foreground">Your wallet has no USDC yet.</p>
-          <FundButton account={data} />
-        </div>
-      ) : null}
-      <DepositMarginForm account={data} onDone={onDone} />
+      <DepositSourceToggle value={source} onChange={setSource} />
+      {source === "other-chain" ? (
+        <RoutePreviewForm onUseNear={() => setSource("near")} />
+      ) : (
+        <>
+          {data.usdcBalance === 0n ? (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+              <p className="text-label text-muted-foreground">Your wallet has no USDC yet.</p>
+              <FundButton account={data} />
+            </div>
+          ) : null}
+          <DepositMarginForm account={data} onDone={onDone} />
+        </>
+      )}
     </div>
   );
 }
