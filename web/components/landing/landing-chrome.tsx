@@ -7,14 +7,17 @@ const linkClass =
   "rounded-sm text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 const navLinks = [
+  { href: "/#markets", label: "Markets" },
   { href: "/#how-it-works", label: "How it works" },
-  { href: "/#why", label: "Why" },
-  { href: "/risk", label: "Risk" },
+  { href: "/#vaults", label: "Vaults" },
+  { href: "/#risk", label: "Risk" },
 ] as const;
 
 const footerLinks = [
   { href: "/trade", label: "Trade" },
+  { href: "/markets", label: "Markets" },
   { href: "/vaults", label: "Vaults" },
+  { href: "/leaderboard", label: "Leaderboard" },
   { href: "/risk", label: "Risk" },
   { href: "/#how-it-works", label: "How it works" },
 ] as const;

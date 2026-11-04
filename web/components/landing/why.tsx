@@ -27,7 +27,7 @@ export function Why() {
     <section id="why" aria-labelledby="why-title" className="scroll-mt-8">
       <Container className="flex flex-col gap-16">
         <div className="flex flex-col items-center gap-4 text-center">
-          <Eyebrow>Why</Eyebrow>
+          <Eyebrow>Why limits come from liquidity</Eyebrow>
           <h2 id="why-title" className="max-w-2xl font-display text-title">
             Vaults break when positions outgrow the exit.
           </h2>

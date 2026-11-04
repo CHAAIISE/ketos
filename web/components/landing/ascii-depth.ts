@@ -35,7 +35,7 @@ export interface AsciiOptions {
 }
 
 /** Characters before the first grid column (asset label). */
-export const LABEL_WIDTH = 5;
+export const LABEL_WIDTH = 7;
 /** From thin to deep. */
 const DENSITY = [":", "-", "=", "+", "*", "#"] as const;
 

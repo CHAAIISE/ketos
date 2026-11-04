@@ -255,4 +255,15 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
     await page.getByRole("tab", { name: "Trade History", exact: true }).click();
     await expect(page.getByRole("tabpanel")).toContainText("Liquidated by keeper");
   });
+
+  await test.step("10. landing: the session's trades show up in the live 24h volume", async () => {
+    await page.goto("/");
+    const volume = page.getByTestId("landing-volume-24h");
+    await expect(volume).toContainText(/\$[1-9][\d,]*/);
+    await expect(volume).toContainText(/[4-9] trades|\d{2,} trades/);
+    await expect(page.getByTestId("landing-market-NEAR")).toBeVisible();
+    await expect(page.getByTestId("landing-vault-core")).toContainText("TVL");
+    await expect(page.getByTestId("landing-vault-long-tail")).toBeVisible();
+    await expectSinglePrimary(page, /Launch app/);
+  });
 });

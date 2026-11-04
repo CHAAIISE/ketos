@@ -3,10 +3,10 @@
 import type { ReactNode } from "react";
 import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useDepth } from "@/hooks/use-ketos-queries";
+import { useDepths, useMarkets } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
-import type { DepthRecord, DepthView, MarketId } from "@/lib/near/types";
+import type { DepthRecord, DepthView, Market, MarketId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import {
   LABEL_WIDTH,
@@ -175,30 +175,37 @@ function Figure({ children, caption }: { children: ReactNode; caption?: ReactNod
   );
 }
 
-/** Live exit liquidity of the four markets, drawn from `get_depth`. */
+const SHOWN = 4;
+const PLACEHOLDER_IDS = ["", "", "", ""];
+
+/** The deepest markets first; ties keep registry order (majors were listed first). */
+function deepest(markets: Market[]): MarketId[] {
+  return [...markets]
+    .sort((a, b) => (a.exit_capacity === b.exit_capacity ? 0 : a.exit_capacity > b.exit_capacity ? -1 : 1))
+    .slice(0, SHOWN)
+    .map((m) => m.id);
+}
+
+/** Live exit liquidity of the registry's deepest markets, drawn from `get_depth`. */
 export function ExitLiquidity() {
-  const btc = useDepth("BTC");
-  const eth = useDepth("ETH");
-  const near = useDepth("NEAR");
-  const zec = useDepth("ZEC");
+  const markets = useMarkets();
+  const ids = markets.data ? deepest(markets.data) : [];
+  const depths = useDepths(ids);
   const isDesktop = useIsDesktop();
   const cols = isDesktop ? 72 : 40;
-  const queries = [
-    { id: "BTC" as const, query: btc },
-    { id: "ETH" as const, query: eth },
-    { id: "NEAR" as const, query: near },
-    { id: "ZEC" as const, query: zec },
-  ];
+  const queries = ids.map((id, i) => ({ id, query: depths[i] }));
 
-  const assets: Asset[] = queries.map(({ id, query }) => ({
-    id,
-    view: query.data,
-    record: query.data?.history.at(-1),
-  }));
-  const loading = queries.some((q) => q.query.isPending);
-  const failed = queries.every((q) => q.query.isError);
+  const assets: Asset[] = markets.data
+    ? queries.map(({ id, query }) => ({ id, view: query.data, record: query.data?.history.at(-1) }))
+    : PLACEHOLDER_IDS.map((id) => ({ id, view: undefined, record: undefined }));
+  const loading = markets.isPending || queries.some((q) => q.query.isPending);
+  const failed = markets.isError || (queries.length > 0 && queries.every((q) => q.query.isError));
   const records = assets.flatMap((a) => (a.record ? [a.record] : []));
   const width = LABEL_WIDTH + cols;
+  const retry = () => {
+    void markets.refetch();
+    queries.forEach((q) => void q.query.refetch());
+  };
 
   if (loading || failed) {
     const rows = padRows(
@@ -220,13 +227,9 @@ export function ExitLiquidity() {
             >
               <span className="text-foreground">
                 Last measurement unavailable.{" "}
-                <span className="text-muted-foreground">The {networkName()} RPC did not answer get_depth.</span>
+                <span className="text-muted-foreground">The {networkName()} RPC did not answer get_markets or get_depth.</span>
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => queries.forEach((q) => void q.query.refetch())}
-              >
+              <Button variant="outline" size="sm" onClick={retry}>
                 <RotateCw />
                 Retry
               </Button>
@@ -239,8 +242,8 @@ export function ExitLiquidity() {
         </div>
         {failed ? null : (
           <div aria-hidden className="flex flex-col gap-2">
-            {assets.map((a) => (
-              <div key={a.id} className="h-6 rounded-sm bg-muted" />
+            {assets.map((a, i) => (
+              <div key={i} className="h-6 rounded-sm bg-muted" />
             ))}
           </div>
         )}
@@ -265,8 +268,9 @@ export function ExitLiquidity() {
         <>
           <LegendTable assets={assets} />
           <p className="text-label text-tertiary">
-            Dry quotes from NEAR Intents 1Click (mainnet, read-only), platform fee excluded, written on chain
-            by the keeper. Exit capacity is the largest quoted size that moves the price 1% or less.
+            The {assets.length} deepest of {markets.data?.length ?? assets.length} markets. Dry quotes from NEAR
+            Intents 1Click (mainnet, read-only), platform fee excluded, written on chain by the keeper. Exit capacity
+            is the largest quoted size that moves the price 1% or less.
           </p>
         </>
       ) : (

@@ -142,6 +142,10 @@ Positions can be closed or moved from Isolated to Cross after a risk confirmatio
 
 [`/leaderboard`](web/components/leaderboard/leaderboard-screen.tsx) reads the whole indexed cohort with one `get_leaderboard` call (500 rows max) and ranks it client-side by realized PnL, ROI, volume or trades, all-time. Ties break on descending account id, as in the contract indexes. The connected account is highlighted and its rank shown above the table; accounts without an executed entry or exit are not ranked. The hosted website gains this screen at its next release.
 
+### Landing stats
+
+The [home page](web/app/page.tsx) reads everything live: open/listed markets and total open interest from `get_markets`, vault TVL from `get_vaults`, and 24h volume summed from the `get_history` ring of every trader in the `get_leaderboard` cohort (open, close and liquidation size only, as in the contract's volume totals; shown as a lower bound if the cohort or a history ring is full). The hero's ASCII depth chart draws the four deepest markets of the registry. Calculation: [`volume.ts`](web/lib/near/volume.ts).
+
 ### Risk center
 
 The current client serves `/risk`; `/liquidity` redirects there. The hosted demo keeps its previous liquidity screen until the next deployment.

@@ -19,12 +19,12 @@ function Block({ title, detail, className }: { title: string; detail: ReactNode;
 
 const dash = "border-dashed border-accent";
 
-function Diagram({ ketosContract }: { ketosContract: string }) {
+function Diagram() {
   const intents = <Block title="NEAR Intents" detail="1Click dry quotes, mainnet" />;
   const depth = <Block title="Depth" detail="set_depth · 48 samples per asset" />;
-  const ketos = <Block title="Perps contract" detail={ketosContract} />;
-  const traders = <Block title="Traders" detail="long / short, isolated margin" />;
-  const vault = <Block title="Vault" detail="LPs, counterparty to traders" />;
+  const ketos = <Block title="Perps contract" detail="markets · margin · orders · vaults" />;
+  const traders = <Block title="Traders" detail="long / short, isolated or cross" />;
+  const vault = <Block title="Vaults" detail="Core and Long-tail, counterparty" />;
   const oracleDetail = `${nearConfig().network === "testnet" ? "OutLayer" : "price oracle"} on ${networkName()}`;
 
   return (
@@ -33,7 +33,7 @@ function Diagram({ ketosContract }: { ketosContract: string }) {
       <div
         className="hidden grid-cols-[minmax(0,1fr)_2.5rem_minmax(0,1fr)_2.5rem_minmax(0,1fr)_3.5rem_minmax(0,1fr)] grid-rows-[5rem_5rem_5rem] gap-y-6 md:grid"
         role="img"
-        aria-label="NEAR Intents 1Click quotes feed Depth, Depth feeds the Perps contract, the OutLayer price oracle feeds the Perps contract, and the Perps contract serves Traders and the Vault."
+        aria-label="NEAR Intents 1Click quotes feed Depth, Depth feeds the Perps contract, the OutLayer price oracle feeds the Perps contract, and the Perps contract serves Traders and the Vaults."
       >
         <div className="col-start-1 row-start-2">{intents}</div>
         <div className={cn("col-start-2 row-start-2 self-center border-t", dash)} />
@@ -61,7 +61,7 @@ function Diagram({ ketosContract }: { ketosContract: string }) {
       <div
         className="grid grid-cols-2 gap-x-6 md:hidden"
         role="img"
-        aria-label="NEAR Intents 1Click quotes feed Depth, Depth feeds the Perps contract, the OutLayer price oracle feeds the Perps contract, and the Perps contract serves Traders and the Vault."
+        aria-label="NEAR Intents 1Click quotes feed Depth, Depth feeds the Perps contract, the OutLayer price oracle feeds the Perps contract, and the Perps contract serves Traders and the Vaults."
       >
         <div className="col-start-1">{intents}</div>
         <div className={cn("col-start-1 mx-auto h-6 border-l", dash)} />
@@ -96,7 +96,7 @@ const steps = [
     body: (
       <>
         A keeper asks NEAR Intents 1Click for dry quotes to sell <span className="text-foreground">$1k to $1M</span>{" "}
-        of BTC, ETH, NEAR and ZEC into USDC, and writes the price impact of each size to the contract.
+        of every listed token into USDC, and writes the price impact of each size to the contract.
       </>
     ),
   },
@@ -116,16 +116,16 @@ const steps = [
     title: "Trade",
     body: (
       <>
-        Traders go long or short against the LP vault at OutLayer oracle prices. An order above the cap is{" "}
-        <span className="text-foreground">refused on chain</span>, so the vault never takes on more than the
-        measured exit.
+        Traders go long or short against an LP vault at OutLayer oracle prices, with market, limit, stop, take
+        profit and stop loss orders. Anything above the cap is{" "}
+        <span className="text-foreground">refused on chain</span>, triggered orders included, so a vault never
+        takes on more than the measured exit.
       </>
     ),
   },
 ];
 
 export function HowItWorks() {
-  const { ketosContract } = nearConfig();
   return (
     <section id="how-it-works" aria-labelledby="how-it-works-title" className="scroll-mt-8">
       <Container className="flex flex-col gap-16">
@@ -136,7 +136,7 @@ export function HowItWorks() {
           </h2>
         </div>
         <div className="mx-auto w-full max-w-5xl">
-          <Diagram ketosContract={ketosContract} />
+          <Diagram />
         </div>
         <ol className="mx-auto grid w-full max-w-5xl gap-10 md:grid-cols-3 md:gap-12">
           {steps.map((step) => (
