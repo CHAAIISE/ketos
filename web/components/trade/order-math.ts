@@ -57,19 +57,28 @@ export interface OrderPreview {
   exceedsCap: boolean;
 }
 
-/** What `open_position(margin, leverage)` would produce at the current mark price. */
-export function previewOrder(market: Market, side: Side, margin: bigint, leverage: number): OrderPreview {
+/**
+ * What `open_position(margin, leverage)` would produce at `entryPrice`: the mark price for a
+ * market order, the trigger price for a Limit or Stop Market entry.
+ */
+export function previewOrder(
+  market: Market,
+  side: Side,
+  margin: bigint,
+  leverage: number,
+  entryPrice: bigint = market.price,
+): OrderPreview {
   const size = margin * BigInt(leverage);
   const openFee = tradeFee(size);
   const positionMargin = margin > openFee ? margin - openFee : 0n;
   const maintenance = maintenanceMargin(size, market.max_leverage);
   const buffer = positionMargin - maintenance;
   let liquidationPrice = 0n;
-  if (size > 0n && market.price > 0n) {
+  if (size > 0n && entryPrice > 0n) {
     const absBuffer = buffer < 0n ? -buffer : buffer;
-    const move = (market.price * absBuffer) / size;
+    const move = (entryPrice * absBuffer) / size;
     const below = (side === "long") === buffer > 0n;
-    liquidationPrice = below ? (market.price > move ? market.price - move : 0n) : market.price + move;
+    liquidationPrice = below ? (entryPrice > move ? entryPrice - move : 0n) : entryPrice + move;
   }
   const room = capRoom(market, side);
   return {
@@ -82,4 +91,54 @@ export function previewOrder(market: Market, side: Side, margin: bigint, leverag
     capRoom: room,
     exceedsCap: size > room,
   };
+}
+
+export type EntryKind = "market" | "limit" | "stop_market";
+export type BracketKind = "take_profit" | "stop_loss";
+
+/**
+ * Price where a bracket sits `moveBps` away from `reference`, on the profitable side for a take
+ * profit and the losing side for a stop loss. Null when a stop loss would reach zero.
+ */
+export function bracketPriceFromMove(side: Side, kind: BracketKind, reference: bigint, moveBps: bigint): bigint | null {
+  const up = (side === "long") === (kind === "take_profit");
+  if (!up && moveBps >= BPS) return null;
+  return (reference * (up ? BPS + moveBps : BPS - moveBps)) / BPS;
+}
+
+/** Distance of `price` from `reference` in basis points, always positive. */
+export function moveBpsFromPrice(reference: bigint, price: bigint): bigint {
+  if (reference === 0n) return 0n;
+  const diff = price > reference ? price - reference : reference - price;
+  return (diff * BPS) / reference;
+}
+
+/**
+ * Same rule as `Brackets::validate` in the contract: a take profit strictly beyond the reference
+ * price in the position's favour, a stop loss strictly on the other side.
+ */
+export function bracketError(side: Side, kind: BracketKind, reference: bigint, price: bigint): string | null {
+  if (price <= 0n) return "Enter a price above zero.";
+  const above = (side === "long") === (kind === "take_profit");
+  const ok = above ? price > reference : price < reference;
+  if (ok) return null;
+  const label = kind === "take_profit" ? "Take profit" : "Stop loss";
+  const where = above ? "above" : "below";
+  return `${label} must be ${where} the ${side === "long" ? "long" : "short"} entry.`;
+}
+
+/** PnL of `size` USDC of notional entered at `entry` and closed at `exit`, before fees. */
+export function pnlAt(side: Side, size: bigint, entry: bigint, exit: bigint): bigint {
+  if (entry === 0n) return 0n;
+  const move = ((exit - entry) * size) / entry;
+  return side === "long" ? move : -move;
+}
+
+/**
+ * Whether an entry order would fill at the given oracle price, as `execute_orders` decides:
+ * a long Limit buys at or below its price, a long Stop Market at or above, shorts the reverse.
+ */
+export function entryTriggered(kind: Exclude<EntryKind, "market">, side: Side, trigger: bigint, price: bigint): boolean {
+  const above = kind === "limit" ? side === "short" : side === "long";
+  return above ? price >= trigger : price <= trigger;
 }

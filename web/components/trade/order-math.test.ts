@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Market } from "@/lib/near/types";
-import { borrowRatePerHour, capRoom, previewOrder, tradeFee } from "./order-math";
+import {
+  borrowRatePerHour,
+  bracketError,
+  bracketPriceFromMove,
+  capRoom,
+  entryTriggered,
+  previewOrder,
+  tradeFee,
+} from "./order-math";
 
 const USD = 1_000_000n;
 const PRICE = 100_000_000n;
@@ -70,5 +78,41 @@ describe("contract formulas", () => {
 
   it("never reports negative room", () => {
     expect(capRoom(market({ oi_long: 200_000n * USD }), "long")).toBe(0n);
+  });
+});
+
+describe("entry and bracket triggers match the contract", () => {
+  const p = 4n * PRICE;
+
+  it("fills a long Limit at or below its price and a long Stop Market at or above", () => {
+    expect(entryTriggered("limit", "long", p, p)).toBe(true);
+    expect(entryTriggered("limit", "long", p, p + 1n)).toBe(false);
+    expect(entryTriggered("stop_market", "long", p, p)).toBe(true);
+    expect(entryTriggered("stop_market", "long", p, p - 1n)).toBe(false);
+  });
+
+  it("mirrors both entry kinds for shorts", () => {
+    expect(entryTriggered("limit", "short", p, p + 1n)).toBe(true);
+    expect(entryTriggered("limit", "short", p, p - 1n)).toBe(false);
+    expect(entryTriggered("stop_market", "short", p, p - 1n)).toBe(true);
+    expect(entryTriggered("stop_market", "short", p, p + 1n)).toBe(false);
+  });
+
+  it("refuses a take profit or stop loss at the entry price itself", () => {
+    expect(bracketError("long", "take_profit", p, p)).not.toBeNull();
+    expect(bracketError("long", "take_profit", p, p + 1n)).toBeNull();
+    expect(bracketError("long", "stop_loss", p, p)).not.toBeNull();
+    expect(bracketError("long", "stop_loss", p, p - 1n)).toBeNull();
+    expect(bracketError("short", "take_profit", p, p - 1n)).toBeNull();
+    expect(bracketError("short", "stop_loss", p, p + 1n)).toBeNull();
+    expect(bracketError("short", "stop_loss", p, p - 1n)).not.toBeNull();
+  });
+
+  it("turns a percent move into a price on the right side", () => {
+    expect(bracketPriceFromMove("long", "take_profit", p, 1_000n)).toBe(440_000_000n);
+    expect(bracketPriceFromMove("long", "stop_loss", p, 500n)).toBe(380_000_000n);
+    expect(bracketPriceFromMove("short", "take_profit", p, 1_000n)).toBe(360_000_000n);
+    expect(bracketPriceFromMove("short", "stop_loss", p, 2_500n)).toBe(500_000_000n);
+    expect(bracketPriceFromMove("long", "stop_loss", p, 10_000n)).toBeNull();
   });
 });

@@ -113,7 +113,7 @@ Funding is available on the V2 contract and checkpointed by the local keeper. Th
 - `open_position` and entry orders accept optional `brackets: { "take_profit": "...", "stop_loss": "..." }`. Targets must be on the appropriate side of the entry price. Pending entries create exits only after filling; a price gap past an attached target rejects the entry. Each position allows one TP and one SL. Closing or liquidating a position cancels both; executing either exit cancels its sibling.
 - `get_orders({ "account_id": "..." })` returns active orders; `get_open_orders({ "from_index": 0, "limit": 100 })` supports executor discovery. Accounts hold at most 50 active orders, execution batches at most 50 ids. Order placement, cancellation, fill and rejection emit onchain events.
 
-These methods are available on the V2 contract and executed by the local keeper. The hosted demo's deployed order controls and keeper remain on their previous version.
+These methods are available on the V2 contract and executed by the local keeper. On `/trade`, the order panel has Market · Limit · Stop tabs, optional TP/SL (price or % from the entry, validated with the contract's side rules before signing) and an Isolated / Cross switch; the bottom tabs list Open Orders (cancellable), Trade History, Funding History and Order History from `get_orders` and `get_history`. The history records a fill but not its order type, so Order History labels an exit fill as take profit or stop loss from its price versus the entry. The hosted demo's deployed order controls and keeper remain on their previous version.
 
 ### Cross margin on fresh deployments
 
@@ -187,6 +187,7 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 ## Built with
 
 - **NEAR Intents 1Click API** — `dry` quotes on mainnet, read-only, server-side, as the liquidity measurement: [`web/lib/intents/oneclick.ts`](web/lib/intents/oneclick.ts), [`scripts/depth-sample.ts`](scripts/depth-sample.ts).
+- **NEAR Intents 1Click API, route preview** — the Deposit modal's "From another chain" tab quotes ETH (Base), SOL or BTC into USDC on NEAR with a `dry` ORIGIN_CHAIN quote (amount received, route cost, time estimate). Nothing is deposited: [`web/app/api/route-preview/route.ts`](web/app/api/route-preview/route.ts), [`web/lib/intents/route-preview.ts`](web/lib/intents/route-preview.ts).
 - **OutLayer price oracle** (`price-oracle.testnet`, a TEE oracle) — `oracle_call` / `oracle_on_call` for BTC, ETH, NEAR and ZEC prices: [`oracle.rs`](contracts/ketos/src/oracle.rs).
 - **near-sdk 5.29** and `near-contract-standards` — the trading contract and the NEP-141 test USDC with a faucet: [`contracts/mock-usdc/src/lib.rs`](contracts/mock-usdc/src/lib.rs).
 - **@hot-labs/near-connect** — wallet connection and transaction signing in the app: [`web/lib/near/wallet.ts`](web/lib/near/wallet.ts).

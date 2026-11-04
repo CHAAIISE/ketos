@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
 import { ChevronDown } from "lucide-react";
@@ -10,7 +10,7 @@ import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useCandles } from "@/hooks/use-candles";
-import { formatPrice, formatUsd } from "@/lib/near/format";
+import { formatFundingRate, formatPrice, formatUsd } from "@/lib/near/format";
 import { isMeasuring, type Market, type MarketId } from "@/lib/near/types";
 import { CANDLE_SOURCE, change24h } from "@/lib/prices/candles";
 import { cn } from "@/lib/utils";
@@ -43,6 +43,44 @@ function Change24h({ market }: { market: MarketId }) {
       {up ? "+" : "−"}
       {Math.abs(change.percent).toFixed(2)}%
     </span>
+  );
+}
+
+function subscribeSeconds(onTick: () => void) {
+  const timer = setInterval(onTick, 1_000);
+  return () => clearInterval(timer);
+}
+
+/** Time left in the current UTC hour as "mm:ss"; null while hydrating. */
+function useHourCountdown(): string | null {
+  const second = useSyncExternalStore(
+    subscribeSeconds,
+    () => Math.floor(Date.now() / 1_000),
+    () => null,
+  );
+  if (second === null) return null;
+  const left = 3_600 - (second % 3_600);
+  return `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
+}
+
+/** Signed hourly funding rate of the market and the time left in the hour it is quoted for. */
+function FundingStat({ market }: { market: Market }) {
+  const countdown = useHourCountdown();
+  const rate = market.funding_rate_per_hour;
+  return (
+    <Stat
+      label={
+        <Term hint="Hourly rate between traders: positive means longs pay shorts, negative the reverse. It follows the long/short imbalance of open interest, is capped at ±0.05% per hour and accrues every block into each position. The countdown runs to the next full UTC hour.">
+          Funding / Countdown
+        </Term>
+      }
+    >
+      <span data-testid="funding-rate" className={rate > 0n ? "text-success" : rate < 0n ? "text-destructive" : undefined}>
+        {formatFundingRate(rate)}
+      </span>
+      <span className="text-tertiary"> · </span>
+      <span data-testid="funding-countdown">{countdown ?? "—"}</span>
+    </Stat>
   );
 }
 
@@ -211,6 +249,7 @@ export function MarketHeader({
         >
           <Change24h market={market.id} />
         </Stat>
+        <FundingStat market={market} />
         <Stat
           label={<Term hint="Total size of open positions on this market: longs / shorts.">Open Interest</Term>}
         >

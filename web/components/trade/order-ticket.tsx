@@ -9,16 +9,18 @@ import { Term } from "@/components/vault/term";
 import { Button } from "@/components/ui/button";
 import { FieldMessage } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { PanelTabs } from "@/components/ui/panel-tabs";
 import { useWallet } from "@/hooks/near-provider";
 import { usePositions, type AccountSummary } from "@/hooks/use-ketos-queries";
-import { useOpenPosition } from "@/hooks/use-ketos-mutations";
+import { useOpenPosition, usePlaceOrder } from "@/hooks/use-ketos-mutations";
 import { toNearActionError } from "@/lib/near/errors";
-import { formatPrice, formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
-import type { Market, Side } from "@/lib/near/types";
+import { formatPrice, formatUnits, formatUsd, formatUsdc, parseUnits, parseUsdc, PRICE_DECIMALS } from "@/lib/near/format";
+import type { MarginMode, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { marketStatus } from "./market-status";
 import type { TradeStep } from "./onboarding";
-import { borrowRatePercent, MIN_POSITION_MARGIN, previewOrder } from "./order-math";
+import { borrowRatePercent, entryTriggered, MIN_POSITION_MARGIN, previewOrder, type EntryKind } from "./order-math";
+import { BracketFields, EMPTY_BRACKET, MarginModeControl, readBracket, TicketInput, type BracketDraft } from "./ticket-controls";
 
 const PERCENT_MARKS = [0, 25, 50, 75, 100];
 
@@ -113,7 +115,15 @@ function LeverageControl({
   );
 }
 
-/** Market-order panel for one market: side, size in USDC, leverage, preview and the main action. */
+const ENTRY_TABS = [
+  { id: "market", label: "Market", testId: "order-type-market" },
+  { id: "limit", label: "Limit", testId: "order-type-limit" },
+  { id: "stop_market", label: "Stop", testId: "order-type-stop" },
+] as const satisfies readonly { id: EntryKind; label: string; testId: string }[];
+
+const KIND_LABEL: Record<Exclude<EntryKind, "market">, string> = { limit: "Limit", stop_market: "Stop Market" };
+
+/** Order panel for one market: type, side, size in USDC, leverage, margin mode, TP/SL, preview. */
 export function OrderTicket({
   market,
   step,
@@ -128,20 +138,32 @@ export function OrderTicket({
   const wallet = useWallet();
   const funding = useFundingDialog();
   const open = useOpenPosition();
+  const place = usePlaceOrder();
   const positions = usePositions();
   const { track } = useTxToast();
   const nowMs = useNow();
+  const [kind, setKind] = useState<EntryKind>("market");
   const [side, setSide] = useState<Side>("long");
   const [sizeInput, setSizeInput] = useState("");
+  const [triggerInput, setTriggerInput] = useState("");
   const [leverageChoice, setLeverageChoice] = useState(5);
+  const [marginMode, setMarginMode] = useState<MarginMode>("isolated");
+  const [bracketsOn, setBracketsOn] = useState(false);
+  const [takeProfit, setTakeProfit] = useState<BracketDraft>(EMPTY_BRACKET);
+  const [stopLoss, setStopLoss] = useState<BracketDraft>(EMPTY_BRACKET);
   const [connectError, setConnectError] = useState<string | null>(null);
 
+  const isMarket = kind === "market";
+  const mutation = isMarket ? open : place;
   const leverage = Math.min(Math.max(1, leverageChoice), market.max_leverage);
   const lev = BigInt(leverage);
   const sizeUnits = parseUsdc(sizeInput);
   // The contract takes margin and leverage; the order value is margin × leverage.
   const margin = sizeUnits === null ? null : sizeUnits / lev;
-  const preview = previewOrder(market, side, margin ?? 0n, leverage);
+  const trigger = isMarket ? null : parseUnits(triggerInput, PRICE_DECIMALS);
+  // Brackets and the liquidation preview refer to where the position will be entered.
+  const entryPrice = isMarket ? market.price : (trigger ?? 0n);
+  const preview = previewOrder(market, side, margin ?? 0n, leverage, entryPrice);
   const status = marketStatus(market, nowMs);
   const freeMargin = account?.margin ?? 0n;
   const maxSize = freeMargin * lev;
@@ -150,6 +172,10 @@ export function OrderTicket({
   const held = (positions.data ?? []).filter((p) => p.market_id === market.id);
   const heldLong = held.filter((p) => p.side === "long").reduce((sum, p) => sum + p.size, 0n);
   const heldShort = held.filter((p) => p.side === "short").reduce((sum, p) => sum + p.size, 0n);
+
+  const tp = bracketsOn ? readBracket(takeProfit, side, "take_profit", entryPrice) : { price: null, error: null };
+  const sl = bracketsOn ? readBracket(stopLoss, side, "stop_loss", entryPrice) : { price: null, error: null };
+  const bracketsInvalid = Boolean(tp.error ?? sl.error);
 
   const sizeError =
     sizeInput.trim() === ""
@@ -161,13 +187,26 @@ export function OrderTicket({
           : trading && margin !== null && margin > freeMargin
             ? `Needs ${formatUsd(margin)} of margin; ${formatUsd(freeMargin)} is available. Deposit more or lower the size.`
             : null;
+  const triggerError =
+    isMarket || triggerInput.trim() === ""
+      ? null
+      : trigger === null || trigger === 0n
+        ? "Enter a price like 3.95."
+        : null;
+  const firesNow =
+    !isMarket && trigger !== null && trigger > 0n && market.price > 0n && entryTriggered(kind, side, trigger, market.price);
 
-  const refusal = open.error;
+  const refusal = mutation.error;
   const capUsdc = refusal?.capUsdc;
+
+  function resetResult() {
+    open.reset();
+    place.reset();
+  }
 
   function setSize(units: bigint) {
     setSizeInput(units > 0n ? formatUsdc(units, { grouping: false }) : "");
-    open.reset();
+    resetResult();
   }
 
   function applyMaxSize(capUnits: bigint) {
@@ -176,17 +215,32 @@ export function OrderTicket({
     setSize(fitted * lev);
   }
 
+  const ready =
+    Boolean(margin) && !sizeError && !bracketsInvalid && (isMarket ? status.open : trigger !== null && trigger > 0n);
+
   async function submit() {
-    if (!margin || sizeError) return;
-    const result = await track(
-      () => open.mutateAsync({ marketId: market.id, side, margin, leverage }),
-      {
-        pending: `Opening ${side} ${market.id} ${leverage}×…`,
-        success: `${side === "long" ? "Long" : "Short"} ${market.id} ${leverage}× opened · ${formatUsd(preview.size)}`,
-        errorInline: true,
-      },
-    );
-    if (result) setSizeInput("");
+    if (!margin || !ready) return;
+    const brackets = tp.price !== null || sl.price !== null ? { takeProfit: tp.price, stopLoss: sl.price } : undefined;
+    const sideLabel = side === "long" ? "Long" : "Short";
+    const base = { marketId: market.id, side, margin, leverage, marginMode, brackets };
+    const done =
+      isMarket || trigger === null
+        ? await track(() => open.mutateAsync(base), {
+            pending: `Opening ${side} ${market.id} ${leverage}×…`,
+            success: `${sideLabel} ${market.id} ${leverage}× opened · ${formatUsd(preview.size)}`,
+            errorInline: true,
+          })
+        : await track(() => place.mutateAsync({ ...base, kind, triggerPrice: trigger }), {
+            pending: `Placing ${KIND_LABEL[kind].toLowerCase()} ${side} ${market.id} at ${formatPrice(trigger)}…`,
+            success: `${KIND_LABEL[kind]} ${sideLabel.toLowerCase()} ${market.id} placed at ${formatPrice(trigger)}`,
+            successDescription: () => `${formatUsd(margin)} of margin reserved until it fills or you cancel it.`,
+            errorInline: true,
+          });
+    if (done) {
+      setSizeInput("");
+      setTakeProfit(EMPTY_BRACKET);
+      setStopLoss(EMPTY_BRACKET);
+    }
   }
 
   let action: ReactNode;
@@ -222,19 +276,27 @@ export function OrderTicket({
       </Button>
     );
   } else {
+    const verb = side === "long" ? "Buy / Long" : "Sell / Short";
     action = (
       <Button
         data-primary=""
         data-testid="open-position"
         variant={side}
         className="h-10 w-full"
-        disabled={!margin || Boolean(sizeError) || open.isPending || !status.open}
+        disabled={!ready || mutation.isPending}
         onClick={submit}
       >
-        {open.isPending ? "Placing order…" : side === "long" ? "Buy / Long" : "Sell / Short"}
+        {mutation.isPending ? "Placing order…" : isMarket ? verb : `Place ${KIND_LABEL[kind]} · ${verb}`}
       </Button>
     );
   }
+
+  const keeperNote = (
+    <p data-testid="keeper-note" className="text-label text-tertiary">
+      Executed at oracle price by the keeper once the oracle {kind === "limit" ? "reaches" : "crosses"} your price. No
+      price guarantee; the exit-liquidity cap is checked again at execution.
+    </p>
+  );
 
   return (
     <section
@@ -242,33 +304,43 @@ export function OrderTicket({
       className={cn("flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3", className)}
     >
       <div className="grid grid-cols-2 gap-2">
-        <span
-          title="Isolated margin only: each position has its own margin, so a liquidation never touches your other positions or free margin."
-          className="flex h-8 items-center justify-center rounded-md bg-muted text-ui text-foreground"
-        >
-          Isolated
-        </span>
+        <MarginModeControl
+          mode={marginMode}
+          onChange={(next) => {
+            setMarginMode(next);
+            resetResult();
+          }}
+        />
         <LeverageControl
           leverage={leverage}
           max={market.max_leverage}
           onChange={(next) => {
             setLeverageChoice(next);
-            open.reset();
+            resetResult();
           }}
         />
       </div>
 
-      <div className="flex border-b border-border">
-        <span className="relative px-3 pb-2 text-ui text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-foreground">
-          Market
-        </span>
-      </div>
+      <PanelTabs
+        tabs={ENTRY_TABS}
+        value={kind}
+        onChange={(next) => {
+          setKind(next);
+          if (next !== "market" && triggerInput === "" && market.price > 0n) {
+            setTriggerInput(formatUnits(market.price, PRICE_DECIMALS, { grouping: false, maxFractionDigits: 4 }));
+          }
+          resetResult();
+        }}
+        label="Order type"
+        idPrefix="order-type"
+        className="-mx-3"
+      />
 
       <SideToggle
         side={side}
         onChange={(next) => {
           setSide(next);
-          open.reset();
+          resetResult();
         }}
       />
 
@@ -289,29 +361,40 @@ export function OrderTicket({
         </Row>
       </dl>
 
-      <div className="flex flex-col gap-2">
-        <label
-          htmlFor="order-size"
-          className="flex h-10 items-center gap-2 rounded-md border border-border bg-input px-3 focus-within:border-ring aria-invalid:border-destructive"
-          aria-invalid={sizeError ? true : undefined}
-        >
-          <span className="text-ui text-tertiary">Size</span>
-          <input
-            id="order-size"
-            name="order-size"
-            inputMode="decimal"
-            autoComplete="off"
-            placeholder="0.00"
-            value={sizeInput}
-            aria-invalid={sizeError ? true : undefined}
-            onChange={(event) => {
-              setSizeInput(event.target.value);
-              open.reset();
-            }}
-            className="min-w-0 flex-1 bg-transparent text-right text-ui text-foreground tabular-nums outline-none placeholder:text-tertiary"
-          />
-          <span className="text-ui text-foreground">USDC</span>
-        </label>
+      <div id="order-type-panel" role="tabpanel" aria-labelledby={`order-type-tab-${kind}`} className="flex flex-col gap-2">
+        {!isMarket ? (
+          <>
+            <TicketInput
+              id="order-trigger"
+              label={kind === "limit" ? "Limit Price" : "Stop Price"}
+              value={triggerInput}
+              suffix="USD"
+              invalid={Boolean(triggerError)}
+              onChange={(value) => {
+                setTriggerInput(value);
+                resetResult();
+              }}
+            />
+            {triggerError ? (
+              <FieldMessage tone="error">{triggerError}</FieldMessage>
+            ) : firesNow ? (
+              <p className="text-label text-warning">
+                The oracle price {formatPrice(market.price)} is already past this price: the keeper fills it on its next run.
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        <TicketInput
+          id="order-size"
+          label="Size"
+          value={sizeInput}
+          suffix="USDC"
+          invalid={Boolean(sizeError)}
+          onChange={(value) => {
+            setSizeInput(value);
+            resetResult();
+          }}
+        />
         <div className="flex items-center gap-3">
           <div className="relative flex-1">
             <input
@@ -341,12 +424,39 @@ export function OrderTicket({
           </div>
         </div>
         {sizeError ? <FieldMessage tone="error">{sizeError}</FieldMessage> : null}
+
+        <BracketFields
+          enabled={bracketsOn}
+          onToggle={(next) => {
+            setBracketsOn(next);
+            resetResult();
+          }}
+          side={side}
+          reference={entryPrice}
+          size={preview.size}
+          takeProfit={takeProfit}
+          stopLoss={stopLoss}
+          onTakeProfit={(draft) => {
+            setTakeProfit(draft);
+            resetResult();
+          }}
+          onStopLoss={(draft) => {
+            setStopLoss(draft);
+            resetResult();
+          }}
+        />
       </div>
 
       {action}
+      {!isMarket || bracketsOn ? keeperNote : null}
 
-      {!status.open ? (
+      {isMarket && !status.open ? (
         <FieldMessage tone="error">{status.label}: this market takes no new positions right now.</FieldMessage>
+      ) : null}
+      {!isMarket && !status.open ? (
+        <p className="text-label text-warning">
+          {status.label}: the order waits onchain, but it is refused at execution while the market stays closed.
+        </p>
       ) : null}
       {refusal ? (
         <div role="alert" data-testid="order-error" className="flex flex-col gap-2 rounded-md border border-destructive/50 p-3">
@@ -360,16 +470,33 @@ export function OrderTicket({
       ) : null}
       {preview.exceedsCap && preview.size > 0n ? (
         <p className="text-label text-warning">
-          This size is above what NEAR Intents can absorb on exit right now; the contract will refuse it.
+          This size is above what NEAR Intents can absorb on exit right now; the contract will refuse it
+          {isMarket ? "" : " unless the cap grows before the order fills"}.
         </p>
       ) : null}
 
       <dl className="flex flex-col gap-1.5 border-t border-border pt-3">
-        <Row label={<Term hint="Oracle price at which this position would be liquidated, from its margin after fees.">Liquidation Price</Term>}>
-          {preview.size > 0n && preview.liquidationPrice > 0n ? formatPrice(preview.liquidationPrice) : "N/A"}
+        <Row
+          label={
+            <Term
+              hint={
+                marginMode === "cross"
+                  ? "Cross positions have no price of their own: the whole cross pool is liquidated when its equity falls to its maintenance margin."
+                  : "Oracle price at which this position would be liquidated, from its margin after fees."
+              }
+            >
+              Liquidation Price
+            </Term>
+          }
+        >
+          {marginMode === "cross"
+            ? "Shared (cross)"
+            : preview.size > 0n && preview.liquidationPrice > 0n
+              ? formatPrice(preview.liquidationPrice)
+              : "N/A"}
         </Row>
         <Row label="Order Value">{preview.size > 0n ? formatUsd(preview.size) : "N/A"}</Row>
-        <Row label="Margin Required">{margin ? formatUsd(margin) : "N/A"}</Row>
+        <Row label={isMarket ? "Margin Required" : "Margin Reserved"}>{margin ? formatUsd(margin) : "N/A"}</Row>
         <Row label={<Term hint="Opening fee, paid to the vault. Closing charges the same rate.">Fees</Term>}>
           {preview.size > 0n ? `${formatUsd(preview.openFee)} · 0.10%` : "0.10%"}
         </Row>

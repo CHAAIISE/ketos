@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useClosePosition } from "@/hooks/use-ketos-mutations";
 import { formatPrice, formatUnits, formatUsd, PRICE_DECIMALS, USDC_DECIMALS } from "@/lib/near/format";
-import { isLiquidatable, type Position } from "@/lib/near/types";
+import { isLiquidatable, type Order, type Position } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 
 /** What closing now would credit to free margin: equity minus the closing fee, never below zero. */
@@ -40,9 +40,37 @@ const pnlClass = (pnl: bigint) => (pnl > 0n ? "text-success" : pnl < 0n ? "text-
 const th = "px-3 font-normal whitespace-nowrap";
 
 /** Open positions: a table from tablet width, stacked cards on phones so Close stays in reach. */
-export function PositionsTable({ positions }: { positions: readonly Position[] }) {
+export function PositionsTable({ positions, orders }: { positions: readonly Position[]; orders: readonly Order[] }) {
   const close = useClosePosition();
   const { track } = useTxToast();
+  const triggers = new Map(orders.map((o) => [o.id, o.request.trigger_price]));
+
+  const bracket = (id: number | null) => {
+    const price = id === null ? undefined : triggers.get(id);
+    return price === undefined ? "—" : formatPrice(price);
+  };
+  const tpsl = (p: Position) => (
+    <span data-testid={`brackets-${p.id}`}>
+      <span className="text-success">{bracket(p.take_profit)}</span>
+      <span className="text-tertiary"> / </span>
+      <span className="text-destructive">{bracket(p.stop_loss)}</span>
+    </span>
+  );
+  // `funding_payment` is positive when the position pays.
+  const fundingValue = (p: Position) => (
+    <span className={p.funding_payment > 0n ? "text-destructive" : p.funding_payment < 0n ? "text-success" : undefined}>
+      {formatUsd(-p.funding_payment, { signed: true })}
+    </span>
+  );
+  const liqValue = (p: Position) =>
+    p.margin_mode === "cross" ? (
+      <Term hint="Cross positions share one margin pool: the pool is liquidated when its equity falls to its maintenance margin, not at a price of this position alone.">
+        Cross
+      </Term>
+    ) : (
+      formatPrice(p.liquidation_price)
+    );
+  const modeLabel = (p: Position) => (p.margin_mode === "cross" ? "(Cross)" : "(Isolated)");
 
   const closeButton = (p: Position) => {
     const payout = closePayout(p);
@@ -86,6 +114,14 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
       Fees
     </Term>
   );
+  const fundingTerm = (
+    <Term hint="Funding accrued since opening: positive when you receive it, negative when you pay. Settled when the position closes.">
+      Funding
+    </Term>
+  );
+  const tpslTerm = (
+    <Term hint="Take profit / stop loss trigger prices, executed by the keeper at the oracle price.">TP / SL</Term>
+  );
   const pnl = (p: Position) => (
     <span className={pnlClass(p.unrealized_pnl)}>
       {formatUsd(p.unrealized_pnl, { signed: true })} ({roe(p)})
@@ -109,8 +145,10 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
                   ["Position Value", formatUsd(positionValue(p))],
                   ["Entry Price", formatPrice(p.entry_price)],
                   ["Mark Price", formatPrice(p.mark_price)],
-                  [liqTerm, <span key="liq" className="text-warning">{formatPrice(p.liquidation_price)}</span>],
-                  ["Margin", formatUsd(p.margin)],
+                  [liqTerm, <span key="liq" className="text-warning">{liqValue(p)}</span>],
+                  ["Margin", `${formatUsd(p.margin)} ${modeLabel(p)}`],
+                  [fundingTerm, fundingValue(p)],
+                  [tpslTerm, tpsl(p)],
                   [feesTerm, formatUsd(p.borrow_fee + p.close_fee)],
                 ] as const
               ).map(([label, value], i) => (
@@ -125,7 +163,7 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
       </ul>
 
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[920px] text-label tabular-nums">
+        <table className="w-full min-w-[1120px] text-label tabular-nums">
           <thead className="text-tertiary">
             <tr className="h-8">
               <th scope="col" className={cn(th, "text-left")}>Coin</th>
@@ -136,6 +174,8 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
               <th scope="col" className={cn(th, "text-right")}>PNL (ROE %)</th>
               <th scope="col" className={cn(th, "text-right")}>{liqTerm}</th>
               <th scope="col" className={cn(th, "text-right")}>Margin</th>
+              <th scope="col" className={cn(th, "text-right")}>{fundingTerm}</th>
+              <th scope="col" className={cn(th, "text-right")}>{tpslTerm}</th>
               <th scope="col" className={cn(th, "text-right")}>{feesTerm}</th>
               <th scope="col" className={cn(th, "text-right")}>Close</th>
             </tr>
@@ -151,8 +191,10 @@ export function PositionsTable({ positions }: { positions: readonly Position[] }
                 <td className="px-3 text-right">{formatPrice(p.entry_price)}</td>
                 <td className="px-3 text-right">{formatPrice(p.mark_price)}</td>
                 <td className="px-3 text-right">{pnl(p)}</td>
-                <td className="px-3 text-right text-warning">{formatPrice(p.liquidation_price)}</td>
-                <td className="px-3 text-right">{formatUsd(p.margin)} <span className="text-tertiary">(Isolated)</span></td>
+                <td className="px-3 text-right text-warning">{liqValue(p)}</td>
+                <td className="px-3 text-right">{formatUsd(p.margin)} <span className="text-tertiary">{modeLabel(p)}</span></td>
+                <td className="px-3 text-right">{fundingValue(p)}</td>
+                <td className="px-3 text-right whitespace-nowrap">{tpsl(p)}</td>
                 <td className="px-3 text-right">{formatUsd(p.borrow_fee + p.close_fee)}</td>
                 <td className="px-3 text-right">{closeButton(p)}</td>
               </tr>
