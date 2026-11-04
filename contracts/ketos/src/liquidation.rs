@@ -38,7 +38,7 @@ pub struct LiquidationRecord {
     pub funding_payment: I128,
     pub penalty: U128,
     pub reward: U128,
-    /// Equity left after penalty and reward, credited back to the trader's free margin.
+    /// Positive settlement credit: free margin for isolated, shared cash for cross.
     pub returned: U128,
     pub liquidator: AccountId,
     pub timestamp_ms: u64,
@@ -60,6 +60,10 @@ impl Ketos {
     /// Liquidates `position_id` at the oracle price if its equity is at or below its
     /// maintenance margin (the position's liquidation price has been reached).
     pub fn liquidate(&mut self, position_id: PositionId) -> LiquidationRecord {
+        require!(
+            self.positions.get(&position_id).map(|p| p.margin_mode) != Some(crate::cross::MarginMode::Cross),
+            "ERR_USE_CROSS_LIQUIDATION"
+        );
         let liquidator = env::predecessor_account_id();
         let now_ms = env::block_timestamp_ms();
         let position = self
@@ -78,8 +82,10 @@ impl Ketos {
         );
 
         let (position, marked) = self.remove_position(position_id, price, now_ms);
-        let (reward, penalty, returned) = split_equity(marked.equity, position.size);
         let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
+        let vault = &self.vaults[vault_id.index()];
+        let available = vault.balance - vault.cross_receivable + position.margin;
+        let (reward, penalty, returned) = split_equity(marked.equity.min(crate::math::to_i128(available)), position.size);
         let borrow_paid = fees_covered(&position, &marked, marked.borrow_fee);
         self.record_settlement(
             vault_id, position.margin, reward + returned, borrow_paid,
@@ -121,15 +127,7 @@ impl Ketos {
             liquidator,
             timestamp_ms: now_ms,
         };
-        emit_event("liquidation", json!(record));
-
-        let slot = self.liquidation_count % LIQUIDATION_HISTORY_LEN;
-        if slot < self.liquidations.len() as u64 {
-            self.liquidations.set(slot as u32, record.clone());
-        } else {
-            self.liquidations.push(record.clone());
-        }
-        self.liquidation_count += 1;
+        self.record_liquidation(record.clone());
         record
     }
 
@@ -143,6 +141,19 @@ impl Ketos {
                 self.liquidations.get(slot as u32).cloned()
             })
             .collect()
+    }
+}
+
+impl Ketos {
+    pub(crate) fn record_liquidation(&mut self, record: LiquidationRecord) {
+        emit_event("liquidation", json!(record));
+        let slot = self.liquidation_count % LIQUIDATION_HISTORY_LEN;
+        if slot < self.liquidations.len() as u64 {
+            self.liquidations.set(slot as u32, record);
+        } else {
+            self.liquidations.push(record);
+        }
+        self.liquidation_count += 1;
     }
 }
 

@@ -24,6 +24,10 @@ pub struct Account {
     pub positions: Vec<PositionId>,
     pub orders: Vec<OrderId>,
     pub reserved_margin: u128,
+    /// Signed settlement cash; a negative balance is owed to the assigned vaults.
+    pub cross_cash: i128,
+    pub cross_debt: [u128; 2],
+    pub cross_positions: Vec<PositionId>,
 }
 
 #[near(serializers = [json])]

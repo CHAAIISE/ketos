@@ -30,7 +30,7 @@ impl VaultId {
     }
 }
 
-/// Realized revenue, in USDC units. Deposits and withdrawals are not revenue.
+/// Settlement revenue in USDC units, including cross claims. Deposits and withdrawals are not revenue.
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Revenue {
@@ -46,6 +46,8 @@ pub struct Revenue {
 #[derive(Default)]
 pub(crate) struct Vault {
     pub balance: u128,
+    /// Cross settlement claims are included in balance but cannot fund withdrawals or gains.
+    pub cross_receivable: u128,
     pub total_shares: u128,
     pub revenue: Revenue,
     pub fee_log: FeeLog,
@@ -85,6 +87,7 @@ impl FeeLog {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VaultView {
     pub id: VaultId,
+    /// Accounting assets, including cross receivables; cash is balance minus cross_receivable.
     pub balance: U128,
     /// balance − traders' unrealized PnL + borrow fees + net funding due.
     pub nav: U128,
@@ -92,6 +95,7 @@ pub struct VaultView {
     pub share_price: U128,
     pub reserved: U128,
     pub available: U128,
+    pub cross_receivable: U128,
     pub traders_unrealized_pnl: I128,
     pub borrow_fees_due: U128,
     pub funding_net_due: I128,
@@ -115,7 +119,7 @@ pub struct VaultSnapshot {
     pub timestamp_ms: u64,
     pub nav: U128,
     pub share_price: U128,
-    /// USDC owned by the vault, excluding trader collateral.
+    /// Accounting assets, including cross receivables and excluding trader collateral.
     pub tvl: U128,
     pub revenue: Revenue,
 }
@@ -293,7 +297,7 @@ impl Ketos {
             (to_i128(vault.balance) + to_i128(borrow) + funding - traders_pnl).max(0),
         )
         .unwrap();
-        let reserved = exposure.min(vault.balance);
+        let reserved = exposure.saturating_add(vault.cross_receivable).min(vault.balance);
         let fees_7d = vault.fee_log.trailing(now_ms);
         let share_price = if vault.total_shares == 0 {
             USD
@@ -314,6 +318,7 @@ impl Ketos {
             share_price: U128(share_price),
             reserved: U128(reserved),
             available: U128(vault.balance - reserved),
+            cross_receivable: U128(vault.cross_receivable),
             traders_unrealized_pnl: I128(traders_pnl),
             borrow_fees_due: U128(borrow),
             funding_net_due: I128(funding),

@@ -94,7 +94,7 @@ fn funding_history_is_realized_once_at_exit_and_keeps_payer_receiver_signs() {
     deposit(&mut ketos, "bob.test", 100 * USD);
     let long = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 3);
     ctx_at("bob.test", T0_MS);
-    let short = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 1, None);
+    let short = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 1, None, None);
     let now = T0_MS + HOUR_MS;
     ctx_at("executor.test", now);
     ketos.settle_funding("NEAR".into());
@@ -163,17 +163,15 @@ fn liquidation_history_charges_penalties_to_owner_not_executor() {
 fn order_fills_annotate_entry_and_bracket_exit_without_duplicate_trades() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let order = ketos.place_order(OrderRequest::Limit(EntryOrder {
-        market_id: "NEAR".into(),
-        side: Side::Long,
-        margin: U128(100 * USD),
-        leverage: 5,
-        trigger_price: U128(P4),
-        brackets: Some(Brackets {
-            take_profit: Some(U128(440_000_000)),
-            stop_loss: Some(U128(380_000_000)),
-        }),
-    }));
+    let order = ketos.place_order(OrderRequest::Limit(EntryOrder { market_id: "NEAR".into(),
+    side: Side::Long,
+    margin: U128(100 * USD),
+    leverage: 5,
+    trigger_price: U128(P4),
+    brackets: Some(Brackets {
+        take_profit: Some(U128(440_000_000)),
+        stop_loss: Some(U128(380_000_000)),
+    }), margin_mode: crate::cross::MarginMode::Isolated }));
     ctx_at("executor.test", T0_MS);
     let filled = ketos.execute_orders(vec![order.id, order.id]);
     let OrderExecution::Filled { position_id, .. } = filled[0] else {
@@ -216,14 +214,12 @@ fn order_fills_annotate_entry_and_bracket_exit_without_duplicate_trades() {
 fn rejected_cancelled_and_untriggered_orders_do_not_create_trade_history() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let entry = EntryOrder {
-        market_id: "NEAR".into(),
-        side: Side::Long,
-        margin: U128(100 * USD),
-        leverage: 5,
-        trigger_price: U128(380_000_000),
-        brackets: None,
-    };
+    let entry = EntryOrder { market_id: "NEAR".into(),
+    side: Side::Long,
+    margin: U128(100 * USD),
+    leverage: 5,
+    trigger_price: U128(380_000_000),
+    brackets: None, margin_mode: crate::cross::MarginMode::Isolated };
     let cancel = ketos.place_order(OrderRequest::Limit(entry.clone()));
     ketos.cancel_order(cancel.id);
     let reject = ketos.place_order(OrderRequest::Limit(entry));
@@ -294,7 +290,7 @@ fn history_ring_preserves_absolute_cursors_and_all_time_stats_after_wrap() {
         .is_empty());
     deposit(&mut ketos, "bob.test", 5 * USD);
     ctx_at("bob.test", T0_MS);
-    ketos.open_position("NEAR".into(), Side::Short, U128(USD), 1, None);
+    ketos.open_position("NEAR".into(), Side::Short, U128(USD), 1, None, None);
     assert_eq!(history(&ketos, "bob.test")[0].sequence, 0);
     assert_eq!(history(&ketos, "alice.test"), events);
 }
@@ -305,7 +301,7 @@ fn leaderboard_sorts_signed_pnl_and_volume_and_reindexes_existing_accounts() {
     let alice = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     deposit(&mut ketos, "bob.test", 100 * USD);
     ctx_at("bob.test", T0_MS);
-    let bob = ketos.open_position("NEAR".into(), Side::Short, U128(10 * USD), 5, None);
+    let bob = ketos.open_position("NEAR".into(), Side::Short, U128(10 * USD), 5, None, None);
     close_at(&mut ketos, alice.id, 360_000_000, T0_MS);
     ctx_at("bob.test", T0_MS);
     ketos.close_position(bob.id);
@@ -347,7 +343,7 @@ fn leaderboard_evicts_oldest_activity_without_losing_history_and_allows_reentry(
         let owner = format!("trader{i:03}.test");
         deposit(&mut ketos, &owner, 5 * USD);
         ctx_at(&owner, T0_MS);
-        ketos.open_position("NEAR".into(), Side::Long, U128(USD), 1, None);
+        ketos.open_position("NEAR".into(), Side::Long, U128(USD), 1, None, None);
         near_sdk::env::state_write(&ketos);
         drop(ketos);
         ketos = near_sdk::env::state_read().unwrap();
@@ -359,7 +355,7 @@ fn leaderboard_evicts_oldest_activity_without_losing_history_and_allows_reentry(
     assert_eq!(board.last().unwrap().account_id, id("trader001.test"));
     assert_eq!(history(&ketos, "trader000.test")[0].sequence, 0);
     ctx_at("trader000.test", T0_MS);
-    ketos.open_position("NEAR".into(), Side::Short, U128(USD), 1, None);
+    ketos.open_position("NEAR".into(), Side::Short, U128(USD), 1, None, None);
     ctx_at("viewer.test", T0_MS);
     let board = ketos.get_leaderboard(None, Some(500));
     assert!(board.iter().all(|e| e.account_id != id("trader001.test")));

@@ -177,13 +177,28 @@ impl Ketos {
 
     pub(crate) fn record_exit(
         &mut self,
-        mut event: HistoryEvent,
+        event: HistoryEvent,
         position: &Position,
         marked: &Marked,
         payout: u128,
         fees: u128,
     ) {
-        let net_funding = realized_funding(position, marked);
+        self.record_signed_exit(event, position, marked, to_i128(payout), fees);
+    }
+
+    pub(crate) fn record_signed_exit(
+        &mut self,
+        mut event: HistoryEvent,
+        position: &Position,
+        marked: &Marked,
+        payout: i128,
+        fees: u128,
+    ) {
+        let net_funding = if position.margin_mode == crate::cross::MarginMode::Cross {
+            to_i128(marked.funding_paid) - to_i128(marked.funding_received)
+        } else {
+            realized_funding(position, marked)
+        };
         if marked.funding_paid > 0 || marked.funding_received > 0 {
             let mut funding = HistoryEvent::position(
                 HistoryKind::Funding,
@@ -198,7 +213,7 @@ impl Ketos {
             self.record_history(&position.account_id, funding);
         }
         event.pnl = I128(marked.pnl);
-        event.realized_pnl = I128(to_i128(payout) - to_i128(position.margin));
+        event.realized_pnl = I128(payout - to_i128(position.margin));
         event.fees = U128(fees);
         event.funding_paid = U128(marked.funding_paid);
         event.funding_received = U128(marked.funding_received);

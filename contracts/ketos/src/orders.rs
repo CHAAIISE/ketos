@@ -2,6 +2,7 @@ use near_sdk::json_types::U128;
 use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId};
 
+use crate::cross::MarginMode;
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::{MarketId, MAX_PRICE_AGE_MS};
 use crate::math::trade_fee;
@@ -60,6 +61,8 @@ pub struct EntryOrder {
     pub leverage: u32,
     pub trigger_price: U128,
     pub brackets: Option<Brackets>,
+    #[serde(default)]
+    pub margin_mode: MarginMode,
 }
 
 #[near(serializers = [json, borsh])]
@@ -404,7 +407,7 @@ impl Ketos {
             let order = self.remove_order(id).unwrap();
             let position_id = match order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
-                    match self.try_open_position_for(order.account_id.clone(), entry.market_id, entry.side, entry.margin, entry.leverage, entry.brackets) {
+                    match self.try_open_position_for(order.account_id.clone(), entry.market_id, entry.side, entry.margin, entry.leverage, entry.brackets, entry.margin_mode) {
                         Ok(position) => position.id,
                         Err(reason) => {
                             emit_event("order_rejected", json!({ "order_id": id, "reason": reason, "refunded_margin": entry.margin }));

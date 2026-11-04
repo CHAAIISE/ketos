@@ -1,10 +1,11 @@
-//! Ketos perpetual futures: isolated-margin markets against an LP vault, with open interest
+//! Ketos perpetual futures: isolated and cross margin against LP vaults, with open interest
 //! and leverage capped by exit liquidity measured on NEAR Intents.
 //!
 //! There is no admin method that can pause markets or move user funds: the only privileged
 //! account is the keeper, limited to publishing depth samples. Prices come from the oracle.
 
 pub mod account;
+pub mod cross;
 pub mod depth;
 pub mod funding;
 pub mod history;

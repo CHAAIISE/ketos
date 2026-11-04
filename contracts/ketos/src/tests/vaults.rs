@@ -191,7 +191,7 @@ fn realized_funding_fees_and_liquidations_reconcile_per_vault() {
     assert_eq!(ketos.get_vault(VaultId::Core), core_before);
     set_depth_at(&mut ketos, "ZEC", measured_curve(), at);
     ctx_at("alice.test", at);
-    let p = ketos.open_position("ZEC".into(), Side::Long, U128(100 * USD), 5, None);
+    let p = ketos.open_position("ZEC".into(), Side::Long, U128(100 * USD), 5, None, None);
     set_price(&mut ketos, "ZEC", p.liquidation_price.0, at);
     ctx_at("stranger.test", at);
     let record = ketos.liquidate(p.id);

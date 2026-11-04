@@ -2,14 +2,12 @@ use super::*;
 use crate::orders::{Brackets, EntryOrder, Order, OrderExecution, OrderRequest, MAX_OPEN_ORDERS};
 
 fn entry(side: Side, trigger_price: u128, margin: u128, leverage: u32) -> EntryOrder {
-    EntryOrder {
-        market_id: "NEAR".into(),
-        side,
-        margin: U128(margin),
-        leverage,
-        trigger_price: U128(trigger_price),
-        brackets: None,
-    }
+    EntryOrder { market_id: "NEAR".into(),
+    side,
+    margin: U128(margin),
+    leverage,
+    trigger_price: U128(trigger_price),
+    brackets: None, margin_mode: crate::cross::MarginMode::Isolated }
 }
 
 fn place(ketos: &mut Ketos, request: OrderRequest) -> Order {
@@ -319,13 +317,7 @@ fn tightened_leverage_and_stale_depth_reject_and_refund_triggered_entries() {
 fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(100 * USD),
-        5,
-        Some(brackets()),
-    );
+    let position = ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
     let tp = position.take_profit.unwrap();
     let sl = position.stop_loss.unwrap();
     assert_eq!(
@@ -364,16 +356,10 @@ fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
 fn short_take_profit_closes_at_threshold_and_cancels_stop_loss() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position(
-        "NEAR".into(),
-        Side::Short,
-        U128(100 * USD),
-        5,
-        Some(Brackets {
-            take_profit: Some(U128(380_000_000)),
-            stop_loss: Some(U128(440_000_000)),
-        }),
-    );
+    let position = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 5, Some(Brackets {
+        take_profit: Some(U128(380_000_000)),
+        stop_loss: Some(U128(440_000_000)),
+    }), None);
     let tp = position.take_profit.unwrap();
     let sl = position.stop_loss.unwrap();
     let result = execute(&mut ketos, vec![tp, sl], 380_000_000, T0_MS);
@@ -403,13 +389,7 @@ fn pending_entry_attaches_brackets_only_after_fill_and_manual_close_cleans_them(
 fn liquidation_cleans_brackets_without_refunding_position_collateral_twice() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(100 * USD),
-        5,
-        Some(brackets()),
-    );
+    let position = ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
     set_price(&mut ketos, "NEAR", 350_000_000, T0_MS);
     ctx_at("executor.test", T0_MS);
     let liquidation = ketos.liquidate(position.id);
@@ -473,13 +453,7 @@ fn cannot_place_an_exit_on_another_accounts_position() {
 fn duplicate_exit_is_rejected_instead_of_orphaning_first_order() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(100 * USD),
-        5,
-        Some(brackets()),
-    );
+    let position = ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
     ketos.place_order(OrderRequest::StopLoss {
         position_id: position.id,
         trigger_price: U128(390_000_000),
@@ -516,13 +490,7 @@ fn account_order_limit_includes_exit_orders() {
         );
         ctx_at("alice.test", T0_MS);
     }
-    ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(10 * USD),
-        5,
-        Some(brackets()),
-    );
+    ketos.open_position("NEAR".into(), Side::Long, U128(10 * USD), 5, Some(brackets()), None);
 }
 
 #[test]

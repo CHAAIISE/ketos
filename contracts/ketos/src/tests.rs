@@ -11,6 +11,7 @@ use crate::math;
 use crate::position::{PositionView, Side};
 use crate::Ketos;
 
+mod cross;
 mod funding;
 mod history;
 mod listing;
@@ -334,7 +335,7 @@ fn trading_setup() -> Ketos {
 
 fn open(ketos: &mut Ketos, market: &str, side: Side, margin: u128, leverage: u32) -> PositionView {
     ctx_at("alice.test", T0_MS);
-    ketos.open_position(market.into(), side, U128(margin), leverage, None)
+    ketos.open_position(market.into(), side, U128(margin), leverage, None, None)
 }
 
 fn close_at(ketos: &mut Ketos, position: u64, price: u128, now_ms: u64) -> u128 {
@@ -418,7 +419,7 @@ fn losing_long_pays_the_vault() {
 fn winning_short_on_price_drop() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let p = ketos.open_position("NEAR".into(), Side::Short, U128(50 * USD), 2, None);
+    let p = ketos.open_position("NEAR".into(), Side::Short, U128(50 * USD), 2, None, None);
     assert_eq!(p.size.0, 100 * USD);
     // -20%: short PnL +20 USDC.
     let payout = close_at(&mut ketos, p.id, 320_000_000, T0_MS);
@@ -462,7 +463,7 @@ fn borrow_rate_is_charged_at_the_utilization_in_force() {
     set_price(&mut ketos, "NEAR", P4, T0_MS + 5 * HOUR_MS);
     set_depth_at(&mut ketos, "NEAR", measured_curve(), T0_MS + 5 * HOUR_MS);
     ctx_at("alice.test", T0_MS + 5 * HOUR_MS);
-    ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, None);
+    ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, None, None);
     ctx_at("alice.test", T0_MS + 5 * HOUR_MS);
     let fee = ketos.get_position(first.id).unwrap().borrow_fee.0;
     let rate = math::borrow_rate_per_hour(100 * USD, 100_000 * USD);
@@ -474,7 +475,7 @@ fn borrow_rate_is_charged_at_the_utilization_in_force() {
 fn stale_price_is_refused() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS + 120_001);
-    ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, None);
+    ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, None, None);
 }
 
 #[test]
@@ -492,7 +493,7 @@ fn missing_price_is_refused() {
     let mut ketos = trading_setup();
     set_depth_at(&mut ketos, "BTC", measured_curve(), T0_MS);
     ctx_at("alice.test", T0_MS);
-    ketos.open_position("BTC".into(), Side::Long, U128(100 * USD), 2, None);
+    ketos.open_position("BTC".into(), Side::Long, U128(100 * USD), 2, None, None);
 }
 
 #[test]
@@ -563,19 +564,19 @@ fn size_beyond_exit_capacity_is_refused_with_remaining_cap() {
     let mut ketos = trading_setup();
     deposit(&mut ketos, "whale.test", 30_000 * USD);
     ctx_at("whale.test", T0_MS);
-    ketos.open_position("ZEC".into(), Side::Short, U128(12_000 * USD), 5, None);
+    ketos.open_position("ZEC".into(), Side::Short, U128(12_000 * USD), 5, None, None);
     ctx_at("whale.test", T0_MS);
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ketos.open_position("ZEC".into(), Side::Short, U128(8_001 * USD), 5, None);
+        ketos.open_position("ZEC".into(), Side::Short, U128(8_001 * USD), 5, None, None);
     }))
     .unwrap_err();
     let msg = err.downcast_ref::<String>().unwrap();
     assert!(msg.contains("ERR_EXCEEDS_EXIT_LIQUIDITY: cap 40000000000"), "{msg}");
     // Exactly the remaining cap fits; the other side has its own cap.
     ctx_at("whale.test", T0_MS);
-    ketos.open_position("ZEC".into(), Side::Short, U128(8_000 * USD), 5, None);
+    ketos.open_position("ZEC".into(), Side::Short, U128(8_000 * USD), 5, None, None);
     ctx_at("whale.test", T0_MS);
-    ketos.open_position("ZEC".into(), Side::Long, U128(2_000 * USD), 5, None);
+    ketos.open_position("ZEC".into(), Side::Long, U128(2_000 * USD), 5, None, None);
     let zec = ketos.get_market("ZEC".into()).unwrap().market;
     assert_eq!((zec.oi_short.0, zec.oi_long.0), (100_000 * USD, 10_000 * USD));
 }
@@ -587,13 +588,13 @@ fn market_closes_when_depth_is_older_than_30_minutes() {
     set_price(&mut ketos, "NEAR", P4, limit);
     ctx_at("alice.test", limit);
     assert!(ketos.get_market("NEAR".into()).unwrap().is_open);
-    let p = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5, None);
+    let p = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5, None, None);
 
     set_price(&mut ketos, "NEAR", P4, limit + 1);
     ctx_at("alice.test", limit + 1);
     assert!(!ketos.get_market("NEAR".into()).unwrap().is_open);
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5, None);
+        ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5, None, None);
     }))
     .unwrap_err();
     assert!(err
@@ -612,7 +613,7 @@ fn market_with_thin_exit_liquidity_takes_no_positions() {
     set_depth_at(&mut ketos, "NEAR", curve_up_to(1_000), T0_MS + 1);
     set_price(&mut ketos, "NEAR", P4, T0_MS + 1);
     ctx_at("alice.test", T0_MS + 1);
-    ketos.open_position("NEAR".into(), Side::Long, U128(10 * USD), 2, None);
+    ketos.open_position("NEAR".into(), Side::Long, U128(10 * USD), 2, None, None);
 }
 
 #[test]
@@ -726,7 +727,7 @@ fn negative_equity_is_absorbed_by_the_vault() {
 fn short_is_liquidated_when_price_rises() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let p = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 5, None);
+    let p = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 5, None, None);
     assert_eq!(p.liquidation_price.0, 439_600_000);
     let r = liquidate_at(&mut ketos, p.id, 439_600_000, T0_MS);
     assert_eq!(r.side, Side::Short);

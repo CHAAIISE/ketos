@@ -2,6 +2,7 @@ use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId};
 
+use crate::cross::MarginMode;
 use crate::funding::side_index;
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::{Market, MarketId, USD};
@@ -28,6 +29,7 @@ pub struct Position {
     pub account_id: AccountId,
     pub market_id: MarketId,
     pub side: Side,
+    pub margin_mode: MarginMode,
     /// Collateral locked in the position, after the opening fee.
     pub margin: u128,
     /// Notional size in USDC units (margin committed × leverage).
@@ -52,6 +54,7 @@ pub struct PositionView {
     pub account_id: AccountId,
     pub market_id: MarketId,
     pub side: Side,
+    pub margin_mode: MarginMode,
     pub margin: U128,
     pub size: U128,
     pub entry_price: U128,
@@ -147,6 +150,7 @@ impl Position {
             account_id: self.account_id.clone(),
             market_id: self.market_id.clone(),
             side: self.side,
+            margin_mode: self.margin_mode,
             margin: U128(self.margin),
             size: U128(self.size),
             entry_price: U128(self.entry_price),
@@ -165,12 +169,11 @@ impl Position {
             maintenance_margin: U128(marked.maintenance),
             take_profit: self.take_profit,
             stop_loss: self.stop_loss,
-            liquidation_price: U128(liquidation_price(
-                self.is_long(),
-                self.size,
-                self.entry_price,
-                buffer,
-            )),
+            liquidation_price: U128(if self.margin_mode == MarginMode::Cross {
+                0
+            } else {
+                liquidation_price(self.is_long(), self.size, self.entry_price, buffer)
+            }),
         }
     }
 }
@@ -226,6 +229,9 @@ impl Ketos {
             .get_mut(&position.account_id)
             .unwrap_or_else(|| env::panic_str("ERR_NO_ACCOUNT"));
         account.positions.retain(|p| *p != id);
+        if position.margin_mode == MarginMode::Cross {
+            account.cross_positions.retain(|p| *p != id);
+        }
         self.cancel_position_orders(&position);
         (position, marked)
     }
@@ -243,7 +249,8 @@ impl Ketos {
         let owed = marked.equity - to_i128(marked.close_fee);
         let mut payout = u128::try_from(owed.max(0)).unwrap_or(0);
         let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
-        let available = self.vaults[vault_id.index()].balance + position.margin;
+        let vault = &self.vaults[vault_id.index()];
+        let available = vault.balance - vault.cross_receivable + position.margin;
         if payout > available {
             payout = available;
         }
@@ -271,12 +278,16 @@ impl Ketos {
         margin: U128,
         leverage: u32,
         brackets: Option<Brackets>,
+        margin_mode: MarginMode,
     ) -> Result<PositionView, String> {
         let now_ms = env::block_timestamp_ms();
         let margin = margin.0;
         let (price, size, fee) = self.opening_terms(
             &account_id, &market_id, side, margin, leverage, brackets.as_ref(), now_ms,
         )?;
+        if margin_mode == MarginMode::Cross {
+            self.cross_admission(&account_id, to_i128(margin - fee), maintenance_margin(size, self.markets.get(&market_id).unwrap().max_leverage), 1)?;
+        }
         let market = self.market_mut(&market_id);
 
         market.accrue(now_ms);
@@ -299,12 +310,16 @@ impl Ketos {
         let id = self.next_position_id;
         self.next_position_id += 1;
         account.positions.push(id);
+        if margin_mode == MarginMode::Cross {
+            account.cross_positions.push(id);
+        }
         self.record_opening_fee(vault_id, now_ms, fee);
 
         let position = Position {
             account_id: account_id.clone(),
             market_id: market_id.clone(),
             side,
+            margin_mode,
             margin: margin - fee,
             size,
             entry_price: price,
@@ -328,6 +343,7 @@ impl Ketos {
                 "size": U128(size),
                 "entry_price": U128(price),
                 "fee": U128(fee),
+                "margin_mode": margin_mode,
             }),
         );
         self.record_entry(id, &position, margin, fee);
@@ -337,6 +353,9 @@ impl Ketos {
     }
 
     pub(crate) fn close_position_at(&mut self, position_id: PositionId, price: u128, now_ms: u64) -> U128 {
+        if self.positions.get(&position_id).unwrap().margin_mode == MarginMode::Cross {
+            return self.close_cross_position_at(position_id, price, now_ms);
+        }
         let (position, marked, payout) = self.settle_position(position_id, price, now_ms);
         let account_id = position.account_id.clone();
         let account = self
@@ -379,8 +398,9 @@ impl Ketos {
         margin: U128,
         leverage: u32,
         brackets: Option<Brackets>,
+        margin_mode: Option<MarginMode>,
     ) -> PositionView {
-        self.try_open_position_for(env::predecessor_account_id(), market_id, side, margin, leverage, brackets)
+        self.try_open_position_for(env::predecessor_account_id(), market_id, side, margin, leverage, brackets, margin_mode.unwrap_or_default())
             .unwrap_or_else(|reason| env::panic_str(&reason))
     }
 
