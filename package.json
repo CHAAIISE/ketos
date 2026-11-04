@@ -1,5 +1,7 @@
 {
   "name": "ketos",
+  "description": "Perps on NEAR with an LP vault as counterparty; open interest and leverage capped by exit liquidity measured on NEAR Intents 1Click quotes.",
+  "keywords": ["near", "perpetuals", "defi", "near-intents", "1click", "outlayer", "vault", "liquidity"],
   "private": true,
   "scripts": {
     "typecheck": "pnpm -r typecheck",
