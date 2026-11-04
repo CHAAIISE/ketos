@@ -70,7 +70,7 @@ pub fn to_price8(price: &OraclePrice) -> Option<u128> {
 
 #[near]
 impl Ketos {
-    /// Anyone can request fresh prices; attach 200 Tgas for both adapters and their callbacks.
+    /// Anyone can request fresh prices; attach 300 Tgas for both adapters and their callbacks.
     pub fn refresh_prices(&mut self) -> Promise {
         let worker_assets: Vec<String> = self
             .markets
@@ -102,7 +102,8 @@ impl Ketos {
             args.to_string().into_bytes(),
             ORACLE_CALL_DEPOSIT,
             ORACLE_CALL_GAS,
-            GasWeight(1),
+            // The TEE oracle has an extra request/callback layer before our callback.
+            GasWeight(3),
         );
         for assets in worker_assets.chunks(WORKER_BATCH_SIZE) {
             request = request.and(self.request_worker_prices(assets));

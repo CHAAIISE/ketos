@@ -19,7 +19,7 @@ const DEPTH_FIXTURE = root("web/e2e/fixtures/depth-2026-11-03.json");
 const USD = 1_000_000n;
 const VAULT_SEED = 10_000n * USD;
 const MARKETS = ["BTC", "ETH", "NEAR", "ZEC"];
-const KEEPER_METHODS = ["refresh_prices", "set_depth", "liquidate"];
+const KEEPER_METHODS = ["refresh_prices", "set_depth", "liquidate", "liquidate_cross", "execute_orders", "settle_funding", "snapshot_vaults"];
 // Mock oracle values for sandbox trading; the first four match the 2026-11-03 feed.
 const PRICES = [
   ["nbtc.bridge.near", 7_756_150_000_000n],
@@ -160,7 +160,7 @@ async function seed(rpcUrl) {
   for (const [assetId, price] of PRICES) {
     await call(rootAccount, ids.oracle, "set_price", { asset_id: assetId, multiplier: price.toString(), decimals: 8 });
   }
-  await call(keeper, ids.ketos, "refresh_prices");
+  await call(keeper, ids.ketos, "refresh_prices", {}, { gas: teraToGas("300") });
 
   const fixture = JSON.parse(readFileSync(DEPTH_FIXTURE, "utf8"));
   const block = await provider.viewBlock({ finality: "final" });

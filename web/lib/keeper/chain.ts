@@ -35,7 +35,7 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
     ketosBalanceYocto: () => views.nearBalance(ketosContract),
     setDepth: (market, samples, measuredAtMs) =>
       call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30),
-    refreshPrices: () => call("refresh_prices", {}, 200),
+    refreshPrices: () => call("refresh_prices", {}, 300),
     liquidate: (positionId) => call("liquidate", { position_id: positionId }, 50),
   };
 }

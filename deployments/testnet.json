@@ -1,9 +1,10 @@
 {
   "network": "testnet",
   "owner": "ketos-dev.testnet",
-  "ketos": "perps.ketos-dev.testnet",
-  "usdc": "usdc.ketos-dev.testnet",
+  "ketos": "ketos.testnet",
+  "usdc": "usdc.ketos.testnet",
   "oracle": "price-oracle.testnet",
-  "keeper": "keeper.ketos-dev.testnet",
+  "outlayer": "outlayer.testnet",
+  "keeper": "keeper.ketos.testnet",
   "rpc": "https://test.rpc.fastnear.com"
 }
