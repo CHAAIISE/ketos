@@ -6,7 +6,7 @@ import { Check, ChevronDown, Copy, LogOut, Wallet as WalletIcon } from "lucide-r
 import { Skeleton } from "@/components/app/states";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/near-provider";
-import { useAccount, usePositions, useVaultAccount } from "@/hooks/use-perps-queries";
+import { useAccount, usePositions, useVaultAccount } from "@/hooks/use-ketos-queries";
 import { toNearActionError } from "@/lib/near/errors";
 import { formatUsd } from "@/lib/near/format";
 import type { WalletOption } from "@/lib/near/wallet";

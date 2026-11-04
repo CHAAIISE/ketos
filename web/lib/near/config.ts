@@ -6,7 +6,7 @@ export type NearNetwork = z.infer<typeof networkSchema>;
 export interface NearConfig {
   network: NearNetwork;
   rpcUrl: string;
-  perpsContract: string;
+  ketosContract: string;
   usdcContract: string;
 }
 
@@ -19,13 +19,13 @@ export function nearConfig(): NearConfig {
     .object({
       network: networkSchema,
       rpcUrl: z.url(),
-      perpsContract: z.string().min(2),
+      ketosContract: z.string().min(2),
       usdcContract: z.string().min(2),
     })
     .safeParse({
       network: process.env.NEXT_PUBLIC_NEAR_NETWORK ?? "testnet",
       rpcUrl: process.env.NEXT_PUBLIC_RPC_URL ?? "https://test.rpc.fastnear.com",
-      perpsContract: process.env.NEXT_PUBLIC_PERPS_CONTRACT,
+      ketosContract: process.env.NEXT_PUBLIC_KETOS_CONTRACT,
       usdcContract: process.env.NEXT_PUBLIC_USDC_CONTRACT,
     });
   if (!config.success) {

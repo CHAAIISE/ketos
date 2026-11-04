@@ -198,22 +198,22 @@ mod tests {
     #[should_panic(expected = "ERR_DEPOSIT_TOO_LOW")]
     fn oracle_call_requires_deposit() {
         let mut oracle = seeded();
-        ctx("perps.test", NearToken::from_yoctonear(1));
-        let _ = oracle.oracle_call("perps.test".parse().unwrap(), None, "refresh".into());
+        ctx("ketos.test", NearToken::from_yoctonear(1));
+        let _ = oracle.oracle_call("ketos.test".parse().unwrap(), None, "refresh".into());
     }
 
     #[test]
     fn oracle_call_pushes_to_receiver() {
         let mut oracle = seeded();
-        ctx("perps.test", MIN_ORACLE_CALL_DEPOSIT);
+        ctx("ketos.test", MIN_ORACLE_CALL_DEPOSIT);
         let _ = oracle.oracle_call(
-            "perps.test".parse().unwrap(),
+            "ketos.test".parse().unwrap(),
             Some(vec!["wrap.near".into()]),
             "refresh".into(),
         );
         let receipts = get_created_receipts();
         assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0].receiver_id.as_str(), "perps.test");
+        assert_eq!(receipts[0].receiver_id.as_str(), "ketos.test");
         let MockAction::FunctionCallWeight {
             method_name, args, ..
         } = &receipts[0].actions[0]
@@ -222,7 +222,7 @@ mod tests {
         };
         assert_eq!(method_name.as_slice(), b"oracle_on_call");
         let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
-        assert_eq!(args["sender_id"], "perps.test");
+        assert_eq!(args["sender_id"], "ketos.test");
         assert_eq!(args["msg"], "refresh");
         assert_eq!(
             args["data"]["prices"][0]["price"]["multiplier"],

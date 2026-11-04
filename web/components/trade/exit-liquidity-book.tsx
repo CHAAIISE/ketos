@@ -7,7 +7,7 @@ import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { Term } from "@/components/vault/term";
 import { PanelTabs } from "@/components/ui/panel-tabs";
 import { formatSizeUsd } from "@/components/liquidity/format";
-import { useAllOpenPositions, useDepth, useLiquidations } from "@/hooks/use-perps-queries";
+import { useAllOpenPositions, useDepth, useLiquidations } from "@/hooks/use-ketos-queries";
 import { MAX_EXIT_IMPACT_BPS } from "@/lib/intents/depth";
 import { formatPrice, formatUsd } from "@/lib/near/format";
 import type { Market, Side } from "@/lib/near/types";

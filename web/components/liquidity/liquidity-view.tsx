@@ -9,7 +9,7 @@ import { Eyebrow } from "@/components/ui/page-shell";
 import { PanelHeading } from "@/components/vault/panel-heading";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { formatAge, formatUtc, STALE_AFTER_MS, useNow } from "@/components/landing/live-time";
-import { useDepth } from "@/hooks/use-perps-queries";
+import { useDepth } from "@/hooks/use-ketos-queries";
 import { useNear } from "@/hooks/near-provider";
 import {
   MAX_EXIT_IMPACT_BPS,
@@ -285,7 +285,7 @@ function History({ history }: { history: DepthRecord[] }) {
 
 function RerunCallout({ asset, oracleAssetId }: { asset: MarketId; oracleAssetId?: string }) {
   const { views } = useNear();
-  const perpsConfig = useQuery({ queryKey: ["perps", "config"], queryFn: () => views.config(), staleTime: Infinity });
+  const ketosConfig = useQuery({ queryKey: ["ketos", "config"], queryFn: () => views.config(), staleTime: Infinity });
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -344,7 +344,7 @@ function RerunCallout({ asset, oracleAssetId }: { asset: MarketId; oracleAssetId
           </dd>
           <dt className="text-tertiary">Oracle</dt>
           <dd className="font-mono text-label break-all text-muted-foreground">
-            {perpsConfig.data?.oracle_id ?? "—"} · {oracleAssetId ?? "—"}
+            {ketosConfig.data?.oracle_id ?? "—"} · {oracleAssetId ?? "—"}
           </dd>
         </dl>
       </details>

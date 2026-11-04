@@ -1,5 +1,5 @@
 // Starts a local NEAR sandbox node in the background, deploys Ketos (mock tUSDC, mock oracle,
-// perps), seeds it like testnet and writes web/.env.e2e for the end-to-end tests.
+// trading contract), seeds it like testnet and writes web/.env.e2e for the end-to-end tests.
 // Stop it with `node scripts/sandbox-down.mjs`.
 //
 // The node runs in a detached helper process (`--node`) so it outlives this script; its pid,
@@ -113,7 +113,7 @@ async function seed(rpcUrl) {
   const rootAccount = new Account(DEFAULT_ACCOUNT_ID, provider, DEFAULT_PRIVATE_KEY);
   const rootPublicKey = KeyPair.fromString(DEFAULT_PRIVATE_KEY).getPublicKey();
   const id = (name) => `${name}.${DEFAULT_ACCOUNT_ID}`;
-  const ids = { usdc: id("usdc"), oracle: id("oracle"), perps: id("perps"), lp: id("lp"), keeper: id("keeper"), trader: id("trader") };
+  const ids = { usdc: id("usdc"), oracle: id("oracle"), ketos: id("ketos"), lp: id("lp"), keeper: id("keeper"), trader: id("trader") };
   // Contract and helper accounts share the root key; the trader gets its own key for the browser signer.
   const as = (accountId) => new Account(accountId, provider, DEFAULT_PRIVATE_KEY);
   const traderKey = KeyPair.fromRandom("ed25519");
@@ -134,13 +134,13 @@ async function seed(rpcUrl) {
   await deploy(ids.usdc, 10, "mock_usdc", { owner_id: DEFAULT_ACCOUNT_ID });
   await deploy(ids.oracle, 10, "mock_oracle", { owner_id: DEFAULT_ACCOUNT_ID });
   await create(ids.keeper, 10);
-  // 20 NEAR: the keeper tick refuses to run below 2 NEAR on the perps contract.
-  await deploy(ids.perps, 20, "perps", { usdc_id: ids.usdc, oracle_id: ids.oracle, keeper_id: ids.keeper });
+  // 20 NEAR: the keeper tick refuses to run below 2 NEAR on the Ketos contract.
+  await deploy(ids.ketos, 20, "ketos", { usdc_id: ids.usdc, oracle_id: ids.oracle, keeper_id: ids.keeper });
   await create(ids.lp, 10);
   await create(ids.trader, 50, traderKey.getPublicKey());
   await as(ids.keeper).addFunctionCallAccessKey({
     publicKey: keeperKey.getPublicKey(),
-    contractId: ids.perps,
+    contractId: ids.ketos,
     methodNames: KEEPER_METHODS,
     allowance: nearToYocto("5"),
   });
@@ -149,20 +149,20 @@ async function seed(rpcUrl) {
   for (const [assetId, price] of PRICES) {
     await call(rootAccount, ids.oracle, "set_price", { asset_id: assetId, multiplier: price.toString(), decimals: 8 });
   }
-  await call(keeper, ids.perps, "refresh_prices");
+  await call(keeper, ids.ketos, "refresh_prices");
 
   const fixture = JSON.parse(readFileSync(DEPTH_FIXTURE, "utf8"));
   const block = await provider.viewBlock({ finality: "final" });
   const measuredAtMs = Math.floor(Number(block.header.timestamp_nanosec) / 1e6);
   for (const market of MARKETS) {
-    await call(keeper, ids.perps, "set_depth", {
+    await call(keeper, ids.ketos, "set_depth", {
       market_id: market,
       samples: fixture.assets[market].samples,
       measured_at_ms: measuredAtMs,
     });
   }
 
-  for (const accountId of [ids.perps, ids.lp]) {
+  for (const accountId of [ids.ketos, ids.lp]) {
     await call(rootAccount, ids.usdc, "storage_deposit", { account_id: accountId }, { deposit: nearToYocto("0.0125") });
   }
   await call(rootAccount, ids.usdc, "mint", { account_id: ids.lp, amount: VAULT_SEED.toString() });
@@ -170,14 +170,14 @@ async function seed(rpcUrl) {
     as(ids.lp),
     ids.usdc,
     "ft_transfer_call",
-    { receiver_id: ids.perps, amount: VAULT_SEED.toString(), msg: "deposit_vault" },
+    { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: "deposit_vault" },
     { deposit: 1n },
   );
 
   const [markets, prices, vault] = await Promise.all([
-    view(ids.perps, "get_markets"),
-    view(ids.perps, "get_prices"),
-    view(ids.perps, "get_vault"),
+    view(ids.ketos, "get_markets"),
+    view(ids.ketos, "get_prices"),
+    view(ids.ketos, "get_vault"),
   ]);
   const openMarkets = markets.filter((m) => m.is_open).map((m) => m.id);
   if (openMarkets.length !== MARKETS.length || MARKETS.some((m) => !openMarkets.includes(m))) {
@@ -191,7 +191,7 @@ async function seed(rpcUrl) {
     NEXT_PUBLIC_E2E: "1",
     NEXT_PUBLIC_NEAR_NETWORK: "sandbox",
     NEXT_PUBLIC_RPC_URL: rpcUrl,
-    NEXT_PUBLIC_PERPS_CONTRACT: ids.perps,
+    NEXT_PUBLIC_KETOS_CONTRACT: ids.ketos,
     NEXT_PUBLIC_USDC_CONTRACT: ids.usdc,
     NEXT_PUBLIC_E2E_SIGNER: `${ids.trader}:${traderKey.toString()}`,
     // Server side: the keeper route signs with the sandbox keeper's function-call key.

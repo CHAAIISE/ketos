@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { OnboardingSteps } from "@/components/ui/onboarding-steps";
 import { useAccountId } from "@/hooks/near-provider";
-import { useAccount, useMarkets, usePositions } from "@/hooks/use-perps-queries";
+import { useAccount, useMarkets, usePositions } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
 import type { MarketId } from "@/lib/near/types";
 import { AccountPanel } from "./account-panel";

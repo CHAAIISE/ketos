@@ -8,7 +8,7 @@ const SECRET = KeyPair.fromRandom("ed25519").toString();
 const sandbox: NearConfig = {
   network: "sandbox",
   rpcUrl: "http://127.0.0.1:3030",
-  perpsContract: "perps.test.near",
+  ketosContract: "perps.test.near",
   usdcContract: "usdc.test.near",
 };
 

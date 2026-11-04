@@ -3,7 +3,7 @@ import { sampleAsset } from "../intents/depth";
 import { getTokens, ORIGIN_ASSETS } from "../intents/oneclick";
 import { nearConfig } from "../near/config";
 import { MARKET_IDS } from "../near/types";
-import { PerpsViews } from "../near/views";
+import { KetosViews } from "../near/views";
 import type { DepthSource, KeeperChain } from "./tick";
 
 /**
@@ -12,15 +12,15 @@ import type { DepthSource, KeeperChain } from "./tick";
  * contract config, so only the private key is needed.
  */
 export async function keeperChain(privateKey: string): Promise<KeeperChain> {
-  const { rpcUrl, perpsContract, usdcContract } = nearConfig();
-  const views = new PerpsViews(rpcUrl, perpsContract, usdcContract);
+  const { rpcUrl, ketosContract, usdcContract } = nearConfig();
+  const views = new KetosViews(rpcUrl, ketosContract, usdcContract);
   const { keeper_id } = await views.config();
   const keeper = new Account(keeper_id, views.provider, KeyPairSigner.fromSecretKey(privateKey as KeyPairString));
 
   // Waits for every receipt (the oracle callback included) so the next read sees the result.
   const call = async (methodName: string, args: Record<string, unknown>, tgas: number) => {
     const outcome = await keeper.callFunctionRaw({
-      contractId: perpsContract,
+      contractId: ketosContract,
       methodName,
       args,
       gas: teraToGas(tgas),
@@ -32,7 +32,7 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
   return {
     markets: () => views.markets(),
     openPositions: () => views.allOpenPositions(),
-    perpsBalanceYocto: () => views.nearBalance(perpsContract),
+    ketosBalanceYocto: () => views.nearBalance(ketosContract),
     setDepth: (market, samples, measuredAtMs) =>
       call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30),
     refreshPrices: () => call("refresh_prices", {}, 200),

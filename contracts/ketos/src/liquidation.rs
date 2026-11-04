@@ -8,7 +8,7 @@ use near_sdk::{env, near, require, AccountId};
 use crate::market::MarketId;
 use crate::math::{mul_div_ceil, mul_div_floor, BPS};
 use crate::position::{fees_covered, PositionId, Side};
-use crate::{emit_event, Perps, PerpsExt};
+use crate::{emit_event, Ketos, KetosExt};
 
 /// Liquidation penalty paid to the vault: 1% of notional.
 pub const LIQUIDATION_PENALTY_BPS: u128 = 100;
@@ -55,7 +55,7 @@ pub fn split_equity(equity: i128, size: u128) -> (u128, u128, u128) {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Liquidates `position_id` at the oracle price if its equity is at or below its
     /// maintenance margin (the position's liquidation price has been reached).
     pub fn liquidate(&mut self, position_id: PositionId) -> LiquidationRecord {

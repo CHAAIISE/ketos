@@ -66,7 +66,7 @@ flowchart LR
 
 ### Market registry
 
-Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA. Each entry stores its oracle asset id, Intents asset id, price source (`tee` or `signed`), vault assignment, hard cap, trading fee and leverage ceiling ([`market.rs`](contracts/perps/src/market.rs)). `id` is the market symbol. Duplicate symbols or assets cannot replace an existing market.
+Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA. Each entry stores its oracle asset id, Intents asset id, price source (`tee` or `signed`), vault assignment, hard cap, trading fee and leverage ceiling ([`market.rs`](contracts/ketos/src/market.rs)). `id` is the market symbol. Duplicate symbols or assets cannot replace an existing market.
 
 `get_markets({ "from_index": 0, "limit": 100 })` returns markets in listing order (default 50, maximum 100 per page). The client reads every page. A new market has no exit capacity and cannot accept positions until measured; its leverage is the lower of its configured ceiling and the live liquidity tier. Oracle callbacks match asset ids rather than ticker order and update only TEE-priced entries.
 
@@ -74,7 +74,7 @@ The deployed demo still uses the four-market contract listed below. The new regi
 
 ### Funding on fresh deployments
 
-[`funding.rs`](contracts/perps/src/funding.rs) adds hourly funding based on open interest:
+[`funding.rs`](contracts/ketos/src/funding.rs) adds hourly funding based on open interest:
 
 `rate = 0.05% × (long OI − short OI) / max(total OI, 1)`.
 
@@ -91,7 +91,7 @@ The deployed four-market demo does **not** have funding yet. The new fields chan
 
 ### Triggered orders on fresh deployments
 
-[`orders.rs`](contracts/perps/src/orders.rs) stores Limit and Stop Market entries, plus full-position Take Profit and Stop Loss exits. `place_order({ "request": ... })` uses a `kind` tag: `limit`, `stop_market`, `take_profit` or `stop_loss`. Entry requests contain `market_id`, `side`, `margin`, `leverage`, `trigger_price` and optional `brackets`; exit requests contain `position_id` and `trigger_price`. USDC amounts and 8-decimal prices are integer strings.
+[`orders.rs`](contracts/ketos/src/orders.rs) stores Limit and Stop Market entries, plus full-position Take Profit and Stop Loss exits. `place_order({ "request": ... })` uses a `kind` tag: `limit`, `stop_market`, `take_profit` or `stop_loss`. Entry requests contain `market_id`, `side`, `margin`, `leverage`, `trigger_price` and optional `brackets`; exit requests contain `position_id` and `trigger_price`. USDC amounts and 8-decimal prices are integer strings.
 
 - A long limit triggers at or below its price; a short limit at or above. Stop Market entries reverse those conditions. Long TP / short SL trigger at or above; short TP / long SL at or below. Equality counts.
 - Entry collateral moves from free `margin` to `reserved_margin` immediately, so it cannot be spent or withdrawn twice. Placement does not consume open interest or charge fees. Owner-only `cancel_order({ "order_id": 0 })` releases the full reservation.
@@ -101,7 +101,7 @@ The deployed four-market demo does **not** have funding yet. The new fields chan
 
 These methods require a fresh contract account. The deployed demo, order controls and existing keeper have not been switched to this contract yet.
 
-All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/perps/src/) (`position.rs`, `funding.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
+All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/ketos/src/) (`position.rs`, `funding.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
 
 The keeper signs with a function-call key limited to `refresh_prices`, `set_depth` and `liquidate` ([`scripts/deploy-testnet.ts`](scripts/deploy-testnet.ts), [`web/lib/keeper/`](web/lib/keeper/)); it cannot move funds. The integration tests check that the key is refused on any other method.
 
@@ -120,7 +120,7 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 ## Built with
 
 - **NEAR Intents 1Click API** — `dry` quotes on mainnet, read-only, server-side, as the liquidity measurement: [`web/lib/intents/oneclick.ts`](web/lib/intents/oneclick.ts), [`scripts/depth-sample.ts`](scripts/depth-sample.ts).
-- **OutLayer price oracle** (`price-oracle.testnet`, a TEE oracle) — `oracle_call` / `oracle_on_call` for BTC, ETH, NEAR and ZEC prices: [`oracle.rs`](contracts/perps/src/oracle.rs).
+- **OutLayer price oracle** (`price-oracle.testnet`, a TEE oracle) — `oracle_call` / `oracle_on_call` for BTC, ETH, NEAR and ZEC prices: [`oracle.rs`](contracts/ketos/src/oracle.rs).
 - **near-sdk 5.29** and `near-contract-standards` — the trading contract and the NEP-141 test USDC with a faucet: [`contracts/mock-usdc/src/lib.rs`](contracts/mock-usdc/src/lib.rs).
 - **@hot-labs/near-connect** — wallet connection and transaction signing in the app: [`web/lib/near/wallet.ts`](web/lib/near/wallet.ts).
 - **Coinbase Exchange public candles** (no key, proxied and cached 30 s server-side) and **TradingView Lightweight Charts** (Apache-2.0) — the spot price chart and 24h change on `/trade`: [`web/app/api/candles/route.ts`](web/app/api/candles/route.ts), [`web/components/trade/price-chart.tsx`](web/components/trade/price-chart.tsx).
@@ -134,7 +134,7 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 | Test USDC (tUSDC, NEP-141) | [usdc.ketos-dev.testnet](https://testnet.nearblocks.io/address/usdc.ketos-dev.testnet) |
 | Price oracle (OutLayer) | [price-oracle.testnet](https://testnet.nearblocks.io/address/price-oracle.testnet) |
 
-Ids are also in [`deployments/testnet.json`](deployments/testnet.json).
+Ids are also in [`deployments/testnet.json`](deployments/testnet.json), under the `ketos`, `usdc`, `oracle` and `keeper` keys. They still identify the deployed four-market version. The deployment script now targets `ketos.testnet`, `usdc.ketos.testnet` and `keeper.ketos.testnet`, using `KETOS_PRIVATE_KEY`; it does not upgrade the old accounts. The `owner` field retains the funding account used with `NEAR_PRIVATE_KEY`.
 
 ## Run locally
 
@@ -148,11 +148,13 @@ pnpm --dir web exec playwright install chromium
 pnpm --dir web exec playwright test   # local sandbox + app in test-wallet mode, full journey
 ```
 
+The contract crate is `ketos` (`cargo test -p ketos` from `contracts/`), producing `contracts/res/ketos.wasm`. The web package is `ketos-web`; its typed RPC client is `KetosViews`, with `use-ketos-queries` and `use-ketos-mutations` hooks. Configure its contract address with `NEXT_PUBLIC_KETOS_CONTRACT` in `web/.env.local`.
+
 Against testnet:
 
 ```bash
-cp .env.example .env.local      # NEAR_PRIVATE_KEY (+ NEAR_ACCOUNT_ID for a first deploy) of a testnet account, optional ONECLICK_JWT
-bash scripts/deploy-testnet.sh  # idempotent: subaccounts, contracts, keeper key, vault seed
+cp .env.example .env.local      # KETOS_PRIVATE_KEY for ketos.testnet; optional ONECLICK_JWT
+bash scripts/deploy-testnet.sh  # idempotent: ketos.testnet, token/keeper subaccounts, vault seed
 pnpm depth:sample               # print today's exit-liquidity table and save it as JSON
 pnpm keeper --once              # one keeper tick: depth, prices, liquidations
 pnpm --dir web dev

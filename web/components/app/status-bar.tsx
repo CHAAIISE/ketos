@@ -2,7 +2,7 @@
 
 import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { useKeeperTick, type KeeperStatus } from "@/hooks/use-keeper-tick";
-import { useMarkets } from "@/hooks/use-perps-queries";
+import { useMarkets } from "@/hooks/use-ketos-queries";
 import { cn } from "@/lib/utils";
 
 function keeperText(status: KeeperStatus, nowMs: number): string {

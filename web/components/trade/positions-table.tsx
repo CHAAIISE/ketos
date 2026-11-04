@@ -4,7 +4,7 @@ import { useTxToast } from "@/components/app/tx-toast";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useClosePosition } from "@/hooks/use-perps-mutations";
+import { useClosePosition } from "@/hooks/use-ketos-mutations";
 import { formatPrice, formatUnits, formatUsd, PRICE_DECIMALS, USDC_DECIMALS } from "@/lib/near/format";
 import { isLiquidatable, type Position } from "@/lib/near/types";
 import { cn } from "@/lib/utils";

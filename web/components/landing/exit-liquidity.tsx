@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useDepth } from "@/hooks/use-perps-queries";
+import { useDepth } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
 import type { DepthRecord, DepthView, MarketId } from "@/lib/near/types";

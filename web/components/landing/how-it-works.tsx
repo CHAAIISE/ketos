@@ -19,10 +19,10 @@ function Block({ title, detail, className }: { title: string; detail: ReactNode;
 
 const dash = "border-dashed border-accent";
 
-function Diagram({ perpsContract }: { perpsContract: string }) {
+function Diagram({ ketosContract }: { ketosContract: string }) {
   const intents = <Block title="NEAR Intents" detail="1Click dry quotes, mainnet" />;
   const depth = <Block title="Depth" detail="set_depth · 48 samples per asset" />;
-  const perps = <Block title="Perps contract" detail={perpsContract} />;
+  const ketos = <Block title="Perps contract" detail={ketosContract} />;
   const traders = <Block title="Traders" detail="long / short, isolated margin" />;
   const vault = <Block title="Vault" detail="LPs, counterparty to traders" />;
   const oracleDetail = `${nearConfig().network === "testnet" ? "OutLayer" : "price oracle"} on ${networkName()}`;
@@ -39,7 +39,7 @@ function Diagram({ perpsContract }: { perpsContract: string }) {
         <div className={cn("col-start-2 row-start-2 self-center border-t", dash)} />
         <div className="col-start-3 row-start-2">{depth}</div>
         <div className={cn("col-start-4 row-start-2 self-center border-t", dash)} />
-        <div className="col-start-5 row-start-2">{perps}</div>
+        <div className="col-start-5 row-start-2">{ketos}</div>
         <div className="col-start-5 row-start-3">
           <Block
             title="OutLayer price oracle"
@@ -67,7 +67,7 @@ function Diagram({ perpsContract }: { perpsContract: string }) {
         <div className={cn("col-start-1 mx-auto h-6 border-l", dash)} />
         <div className="col-start-1">{depth}</div>
         <div className={cn("col-start-1 mx-auto h-6 border-l", dash)} />
-        <div className="col-start-1">{perps}</div>
+        <div className="col-start-1">{ketos}</div>
         <div className="col-start-2">
           <Block
             title="OutLayer oracle"
@@ -125,7 +125,7 @@ const steps = [
 ];
 
 export function HowItWorks() {
-  const { perpsContract } = nearConfig();
+  const { ketosContract } = nearConfig();
   return (
     <section id="how-it-works" aria-labelledby="how-it-works-title" className="scroll-mt-8">
       <Container className="flex flex-col gap-16">
@@ -136,7 +136,7 @@ export function HowItWorks() {
           </h2>
         </div>
         <div className="mx-auto w-full max-w-5xl">
-          <Diagram perpsContract={perpsContract} />
+          <Diagram ketosContract={ketosContract} />
         </div>
         <ol className="mx-auto grid w-full max-w-5xl gap-10 md:grid-cols-3 md:gap-12">
           {steps.map((step) => (

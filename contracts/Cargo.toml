@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["perps", "mock-usdc", "mock-oracle"]
+members = ["ketos", "mock-usdc", "mock-oracle"]
 # Own lockfile: near-workspaces and near-sdk pin incompatible near-crypto versions.
 exclude = ["tests"]
 

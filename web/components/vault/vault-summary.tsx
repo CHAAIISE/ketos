@@ -5,7 +5,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { useWallet } from "@/hooks/near-provider";
-import { useVaultAccount } from "@/hooks/use-perps-queries";
+import { useVaultAccount } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
 import { formatBps, formatUsd } from "@/lib/near/format";
 import type { Vault } from "@/lib/near/types";

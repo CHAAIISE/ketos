@@ -294,16 +294,16 @@ mod tests {
         let mut c = setup();
         ctx("alice.testnet", 1_000, 0);
         c.faucet();
-        c.mint_for_test_registration("perps.testnet");
+        c.mint_for_test_registration("ketos.testnet");
         ctx("alice.testnet", 1_000, 1);
         let _ = c.ft_transfer_call(
-            acc("perps.testnet"),
+            acc("ketos.testnet"),
             U128(100_000_000),
             None,
             "deposit".to_string(),
         );
         assert_eq!(c.ft_balance_of(acc("alice.testnet")).0, 900_000_000);
-        assert_eq!(c.ft_balance_of(acc("perps.testnet")).0, 100_000_000);
+        assert_eq!(c.ft_balance_of(acc("ketos.testnet")).0, 100_000_000);
     }
 
     impl MockUsdc {

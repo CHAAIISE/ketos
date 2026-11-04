@@ -12,12 +12,12 @@ import {
 } from "react";
 import { nearConfig, type NearConfig } from "@/lib/near/config";
 import { toNearActionError, type NearActionError } from "@/lib/near/errors";
-import { PerpsViews } from "@/lib/near/views";
+import { KetosViews } from "@/lib/near/views";
 import { createWallet, type Wallet, type WalletOption } from "@/lib/near/wallet";
 
 export interface NearContextValue {
   config: NearConfig;
-  views: PerpsViews;
+  views: KetosViews;
   /** Null during prerendering and until the wallet module has loaded in the browser. */
   wallet: Wallet | null;
   walletError: NearActionError | null;
@@ -42,7 +42,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(makeQueryClient);
   const [base] = useState(() => {
     const config = nearConfig();
-    return { config, views: new PerpsViews(config.rpcUrl, config.perpsContract, config.usdcContract) };
+    return { config, views: new KetosViews(config.rpcUrl, config.ketosContract, config.usdcContract) };
   });
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [walletError, setWalletError] = useState<NearActionError | null>(null);

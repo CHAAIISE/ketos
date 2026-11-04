@@ -18,12 +18,12 @@ export const OPEN_POSITIONS_PAGE = 100;
 export const MARKETS_PAGE = 100;
 
 /** Typed read-only calls to the perps and tUSDC contracts over JSON-RPC. */
-export class PerpsViews {
+export class KetosViews {
   readonly provider: JsonRpcProvider;
 
   constructor(
     rpcUrl: string,
-    readonly perpsContract: string,
+    readonly ketosContract: string,
     readonly usdcContract: string,
   ) {
     // near-api-js retries 12 times with backoff by default (minutes when the RPC is down);
@@ -46,11 +46,11 @@ export class PerpsViews {
   }
 
   config() {
-    return this.view(configSchema, this.perpsContract, "get_config");
+    return this.view(configSchema, this.ketosContract, "get_config");
   }
 
   marketPage(fromIndex: number, limit = MARKETS_PAGE) {
-    return this.view(z.array(marketSchema), this.perpsContract, "get_markets", {
+    return this.view(z.array(marketSchema), this.ketosContract, "get_markets", {
       from_index: fromIndex,
       limit,
     });
@@ -67,15 +67,15 @@ export class PerpsViews {
   }
 
   account(accountId: string) {
-    return this.view(accountSchema.nullable(), this.perpsContract, "get_account", { account_id: accountId });
+    return this.view(accountSchema.nullable(), this.ketosContract, "get_account", { account_id: accountId });
   }
 
   positions(accountId: string) {
-    return this.view(z.array(positionSchema), this.perpsContract, "get_positions", { account_id: accountId });
+    return this.view(z.array(positionSchema), this.ketosContract, "get_positions", { account_id: accountId });
   }
 
   openPositions(fromIndex: number, limit = OPEN_POSITIONS_PAGE) {
-    return this.view(z.array(positionSchema), this.perpsContract, "get_open_positions", {
+    return this.view(z.array(positionSchema), this.ketosContract, "get_open_positions", {
       from_index: fromIndex,
       limit,
     });
@@ -92,23 +92,23 @@ export class PerpsViews {
   }
 
   depth(marketId: MarketId) {
-    return this.view(depthViewSchema.nullable(), this.perpsContract, "get_depth", { market_id: marketId });
+    return this.view(depthViewSchema.nullable(), this.ketosContract, "get_depth", { market_id: marketId });
   }
 
   liquidations(limit = 20) {
-    return this.view(z.array(liquidationSchema), this.perpsContract, "get_liquidations", { limit });
+    return this.view(z.array(liquidationSchema), this.ketosContract, "get_liquidations", { limit });
   }
 
   prices() {
-    return this.view(z.array(priceSchema), this.perpsContract, "get_prices");
+    return this.view(z.array(priceSchema), this.ketosContract, "get_prices");
   }
 
   vault() {
-    return this.view(vaultSchema, this.perpsContract, "get_vault");
+    return this.view(vaultSchema, this.ketosContract, "get_vault");
   }
 
   vaultAccount(accountId: string) {
-    return this.view(vaultAccountSchema, this.perpsContract, "get_vault_account", { account_id: accountId });
+    return this.view(vaultAccountSchema, this.ketosContract, "get_vault_account", { account_id: accountId });
   }
 
   /** tUSDC wallet balance (6 decimals). */

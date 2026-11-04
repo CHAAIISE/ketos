@@ -1,5 +1,5 @@
 [package]
-name = "perps"
+name = "ketos"
 version = "0.1.0"
 description = "Ketos perpetual futures markets with exit-liquidity-sized open interest"
 edition.workspace = true

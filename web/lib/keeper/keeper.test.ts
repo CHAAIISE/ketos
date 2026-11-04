@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Market, MarketId, Position } from "../near/types";
 import { findLiquidatable } from "./scan";
 import { MIN_TICK_INTERVAL_MS, TickGate, retryAfterMs } from "./throttle";
-import { MIN_PERPS_BALANCE_YOCTO, runTick, type KeeperChain } from "./tick";
+import { MIN_KETOS_BALANCE_YOCTO, runTick, type KeeperChain } from "./tick";
 
 const NOW = 1_762_190_000_000;
 const USD = 1_000_000n;
@@ -99,7 +99,7 @@ function fakeChain(overrides: Partial<KeeperChain> = {}): KeeperChain & { calls:
     calls,
     markets: async () => [market("NEAR")],
     openPositions: async () => [position(1, "NEAR", 10n * USD), position(2, "NEAR", 90n * USD), position(3, "NEAR", 0n)],
-    perpsBalanceYocto: async () => MIN_PERPS_BALANCE_YOCTO,
+    ketosBalanceYocto: async () => MIN_KETOS_BALANCE_YOCTO,
     setDepth: async (m) => (calls.push(`set_depth ${m}`), `tx-depth-${m}`),
     refreshPrices: async () => (calls.push("refresh_prices"), "tx-prices"),
     liquidate: async (id) => (calls.push(`liquidate ${id}`), `tx-liq-${id}`),
@@ -116,7 +116,7 @@ const depthSource = {
 
 describe("keeper tick", () => {
   it("refuses to run when the perps contract cannot fund oracle requests", async () => {
-    const chain = fakeChain({ perpsBalanceYocto: async () => MIN_PERPS_BALANCE_YOCTO - 1n });
+    const chain = fakeChain({ ketosBalanceYocto: async () => MIN_KETOS_BALANCE_YOCTO - 1n });
     const summary = await runTick(chain, depthSource, () => NOW);
     expect(summary.ok).toBe(false);
     expect(chain.calls).toEqual([]);

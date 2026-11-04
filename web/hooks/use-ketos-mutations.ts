@@ -16,7 +16,7 @@ import { NearActionError } from "@/lib/near/errors";
 import type { NearTransaction, TxResult } from "@/lib/near/tx";
 import { positionSchema, type Position } from "@/lib/near/types";
 import { useNear } from "./near-provider";
-import { perpsKeys } from "./use-perps-queries";
+import { ketosKeys } from "./use-ketos-queries";
 
 export interface TxReceipt {
   /** Null when the wallet did not report the outcome. */
@@ -54,17 +54,17 @@ function useTxMutation<TVars, TData extends TxReceipt>(options: {
 const receipt = ({ txHash }: TxResult): TxReceipt => ({ txHash });
 
 const tradingKeys = (accountId: string | null): QueryKey[] => [
-  perpsKeys.account(accountId),
-  perpsKeys.positions(accountId),
-  perpsKeys.markets(),
-  perpsKeys.vault(),
-  perpsKeys.openPositions(),
+  ketosKeys.account(accountId),
+  ketosKeys.positions(accountId),
+  ketosKeys.markets(),
+  ketosKeys.vault(),
+  ketosKeys.openPositions(),
 ];
 
 const vaultKeys = (accountId: string | null): QueryKey[] => [
-  perpsKeys.account(accountId),
-  perpsKeys.vault(),
-  perpsKeys.vaultAccount(accountId),
+  ketosKeys.account(accountId),
+  ketosKeys.vault(),
+  ketosKeys.vaultAccount(accountId),
 ];
 
 /** Claims 1,000 tUSDC; `amount` is the minted amount in USDC units. */
@@ -72,7 +72,7 @@ export function useFaucet() {
   return useTxMutation<void, TxReceipt & { amount: bigint | null }>({
     build: (config) => faucetTx(config),
     parse: (result) => ({ txHash: result.txHash, amount: toAmount(result.value) }),
-    invalidate: (accountId) => [perpsKeys.account(accountId)],
+    invalidate: (accountId) => [ketosKeys.account(accountId)],
   });
 }
 
@@ -81,7 +81,7 @@ export function useDepositMargin() {
   return useTxMutation<bigint, TxReceipt>({
     build: depositMarginTx,
     parse: receipt,
-    invalidate: (accountId) => [perpsKeys.account(accountId)],
+    invalidate: (accountId) => [ketosKeys.account(accountId)],
   });
 }
 
@@ -90,7 +90,7 @@ export function useWithdrawMargin() {
   return useTxMutation<bigint, TxReceipt>({
     build: withdrawMarginTx,
     parse: receipt,
-    invalidate: (accountId) => [perpsKeys.account(accountId)],
+    invalidate: (accountId) => [ketosKeys.account(accountId)],
   });
 }
 

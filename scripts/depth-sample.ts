@@ -14,7 +14,7 @@ import {
   type AssetDepth,
 } from "../web/lib/intents/depth.ts";
 
-// Mirrors DEFAULT_HARD_CAP in the perps contract.
+// Mirrors DEFAULT_HARD_CAP in the Ketos contract.
 const HARD_CAP_USD = 500_000;
 const SOURCE = "1Click dry quotes (mainnet)";
 

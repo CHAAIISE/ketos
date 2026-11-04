@@ -1144,6 +1144,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ketos"
+version = "0.1.0"
+dependencies = [
+ "near-contract-standards",
+ "near-sdk",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1689,14 +1697,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "perps"
-version = "0.1.0"
-dependencies = [
- "near-contract-standards",
- "near-sdk",
 ]
 
 [[package]]

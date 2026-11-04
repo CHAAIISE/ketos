@@ -33,8 +33,8 @@ export function optionalEnv(name: string): string | undefined {
 const deploymentFile = fileURLToPath(new URL("../../deployments/testnet.json", import.meta.url));
 
 /**
- * The testnet account that owns the deployment. It is public, so after the first deploy it is read
- * from `deployments/testnet.json` and does not need to live next to the private key in `.env.local`.
+ * The testnet funding account. It is public, so it is read from `deployments/testnet.json`
+ * when not supplied explicitly and need not live next to its private key in `.env.local`.
  */
 export function nearAccountId(): string {
   const fromEnv = optionalEnv("NEAR_ACCOUNT_ID");

@@ -6,7 +6,7 @@ use crate::funding::side_index;
 use crate::market::{Market, MarketId, USD};
 use crate::math::{borrow_fee, liquidation_price, maintenance_margin, pnl, to_i128, trade_fee};
 use crate::orders::{Brackets, OrderId};
-use crate::{emit_event, Perps, PerpsExt};
+use crate::{emit_event, Ketos, KetosExt};
 
 /// Smallest collateral a position can be opened with.
 pub const MIN_POSITION_MARGIN: u128 = USD;
@@ -163,7 +163,7 @@ impl Position {
     }
 }
 
-impl Perps {
+impl Ketos {
     pub(crate) fn market_mut(&mut self, market_id: &MarketId) -> &mut Market {
         self.markets
             .get_mut(market_id)
@@ -249,7 +249,7 @@ impl Perps {
     }
 }
 
-impl Perps {
+impl Ketos {
     pub(crate) fn try_open_position_for(
         &mut self,
         account_id: AccountId,
@@ -353,7 +353,7 @@ impl Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Opens at the fresh oracle price, optionally attaching full-position TP/SL exits.
     pub fn open_position(
         &mut self,

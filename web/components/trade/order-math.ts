@@ -1,6 +1,6 @@
 import type { Market, Side } from "@/lib/near/types";
 
-// Mirrors contracts/perps/src/math.rs so the ticket previews exactly what `open_position` will do.
+// Mirrors contracts/ketos/src/math.rs so the ticket previews exactly what `open_position` will do.
 const BPS = 10_000n;
 const TRADE_FEE_BPS = 10n;
 const RATE_PRECISION = 1_000_000_000_000n;

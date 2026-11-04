@@ -8,8 +8,8 @@ import { Field, FieldLabel, FieldMessage, Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PanelTabs } from "@/components/ui/panel-tabs";
 import { Skeleton } from "@/components/app/states";
-import { useAccount, type AccountSummary } from "@/hooks/use-perps-queries";
-import { useDepositMargin, useFaucet, useWithdrawMargin } from "@/hooks/use-perps-mutations";
+import { useAccount, type AccountSummary } from "@/hooks/use-ketos-queries";
+import { useDepositMargin, useFaucet, useWithdrawMargin } from "@/hooks/use-ketos-mutations";
 import { formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
 
 /** Wait in whole minutes, rounded up and capped at the faucet's one-hour cooldown, e.g. "42 min". */

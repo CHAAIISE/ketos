@@ -1,4 +1,4 @@
-// Deploys or updates Ketos on NEAR testnet under NEAR_ACCOUNT_ID. Safe to run repeatedly:
+// Deploys or updates Ketos on NEAR testnet at ketos.testnet. Safe to run repeatedly:
 // accounts, keys, registrations and the vault seed are only created when missing, and code is
 // only redeployed when the local wasm differs from the deployed one.
 import { createHash } from "node:crypto";
@@ -13,25 +13,25 @@ const KEEPER_METHODS = ["refresh_prices", "set_depth", "liquidate"];
 const USD = 1_000_000n;
 const VAULT_SEED = 10_000n * USD;
 // Initial balances cover code storage (~1 NEAR per 100 kB) plus headroom; the keeper tick
-// refuses to run when the perps contract holds less than 2 NEAR.
-const BALANCES = { usdc: 3, perps: 6, keeper: 3 };
-const PERPS_MIN_AVAILABLE = nearToYocto("2");
+// refuses to run when the Ketos contract holds less than 2 NEAR.
+const BALANCES = { usdc: 3, ketos: 6, keeper: 3 };
+const KETOS_MIN_AVAILABLE = nearToYocto("2");
 
 const root = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 
 loadEnv();
-const parentId = nearAccountId();
-const parentKey = requireEnv("NEAR_PRIVATE_KEY") as KeyPairString;
+const parentId = "ketos.testnet";
+const parentKey = requireEnv("KETOS_PRIVATE_KEY") as KeyPairString;
 const rpcUrl = optionalEnv("NEAR_RPC_URL") ?? "https://test.rpc.fastnear.com";
 const provider = new JsonRpcProvider({ url: rpcUrl });
 const parentPublicKey = KeyPair.fromString(parentKey).getPublicKey();
 
 const ids = {
   usdc: `usdc.${parentId}`,
-  perps: `perps.${parentId}`,
+  ketos: parentId,
   keeper: `keeper.${parentId}`,
 };
-// Sub-accounts share the burner's full-access key so they never need a second secret.
+// Sub-accounts share Ketos's full-access key so they never need a second secret.
 const signer = (accountId: string) => new Account(accountId, provider, parentKey);
 const parent = signer(parentId);
 
@@ -151,7 +151,7 @@ async function ensureKeeperKey(): Promise<string> {
       onChain &&
       typeof onChain === "object" &&
       "FunctionCall" in onChain &&
-      onChain.FunctionCall.receiver_id === ids.perps
+      onChain.FunctionCall.receiver_id === ids.ketos
     ) {
       console.log(`keeper key present on ${ids.keeper}`);
       return existing;
@@ -168,7 +168,7 @@ async function ensureKeeperKey(): Promise<string> {
   const keyPair = KeyPair.fromRandom("ed25519");
   await signer(ids.keeper).addFunctionCallAccessKey({
     publicKey: keyPair.getPublicKey(),
-    contractId: ids.perps,
+    contractId: ids.ketos,
     methodNames: KEEPER_METHODS,
   });
   console.log(`added keeper function-call key on ${ids.keeper} (${KEEPER_METHODS.join(", ")})`);
@@ -188,7 +188,7 @@ async function ensureRegistered(accountId: string): Promise<void> {
 }
 
 async function seedVault(): Promise<void> {
-  const vault = await view<{ total_shares: string }>(ids.perps, "get_vault");
+  const vault = await view<{ total_shares: string }>(ids.ketos, "get_vault");
   if (BigInt(vault.total_shares) > 0n) {
     console.log("vault already seeded");
     return;
@@ -201,38 +201,38 @@ async function seedVault(): Promise<void> {
   await parent.callFunction({
     contractId: ids.usdc,
     methodName: "ft_transfer_call",
-    args: { receiver_id: ids.perps, amount: VAULT_SEED.toString(), msg: "deposit_vault" },
+    args: { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: "deposit_vault" },
     deposit: 1n,
     gas: teraToGas("100"),
   });
   console.log(`seeded the vault with ${VAULT_SEED / USD} tUSDC`);
 }
 
-async function topUpPerps(): Promise<void> {
-  const state = await signer(ids.perps).getState();
-  if (state.balance.available >= PERPS_MIN_AVAILABLE) return;
-  const amount = PERPS_MIN_AVAILABLE - state.balance.available + nearToYocto("1");
-  await parent.signAndSendTransaction({ receiverId: ids.perps, actions: [actions.transfer(amount)] });
-  console.log(`topped up ${ids.perps} for oracle requests`);
+async function topUpKetos(): Promise<void> {
+  const state = await signer(ids.ketos).getState();
+  if (state.balance.available >= KETOS_MIN_AVAILABLE) return;
+  const amount = KETOS_MIN_AVAILABLE - state.balance.available + nearToYocto("1");
+  await parent.signAndSendTransaction({ receiverId: ids.ketos, actions: [actions.transfer(amount)] });
+  console.log(`topped up ${ids.ketos} for oracle requests`);
 }
 
 await ensureContract(ids.usdc, BALANCES.usdc, "mock_usdc", { owner_id: parentId });
 await ensureAccount(ids.keeper, BALANCES.keeper);
-await ensureContract(ids.perps, BALANCES.perps, "perps", {
+await ensureContract(ids.ketos, BALANCES.ketos, "ketos", {
   usdc_id: ids.usdc,
   oracle_id: ORACLE_ID,
   keeper_id: ids.keeper,
 });
 const keeperKey = await ensureKeeperKey();
-await ensureRegistered(ids.perps);
+await ensureRegistered(ids.ketos);
 await ensureRegistered(parentId);
 await seedVault();
-await topUpPerps();
+await topUpKetos();
 
 const deployment = {
   network: "testnet",
-  owner: parentId,
-  perps: ids.perps,
+  owner: nearAccountId(),
+  ketos: ids.ketos,
   usdc: ids.usdc,
   oracle: ORACLE_ID,
   keeper: ids.keeper,
@@ -244,7 +244,7 @@ writeFileSync(root("deployments/testnet.json"), `${JSON.stringify(deployment, nu
 upsertEnv(root(".env.local"), { KEEPER_PRIVATE_KEY: keeperKey });
 const webEnv: Record<string, string> = {
   NEXT_PUBLIC_NEAR_NETWORK: "testnet",
-  NEXT_PUBLIC_PERPS_CONTRACT: ids.perps,
+  NEXT_PUBLIC_KETOS_CONTRACT: ids.ketos,
   NEXT_PUBLIC_USDC_CONTRACT: ids.usdc,
   NEXT_PUBLIC_RPC_URL: rpcUrl,
   KEEPER_PRIVATE_KEY: keeperKey,
@@ -253,5 +253,5 @@ const jwt = optionalEnv("ONECLICK_JWT");
 if (jwt) webEnv.ONECLICK_JWT = jwt;
 upsertEnv(root("web/.env.local"), webEnv);
 
-const markets = await view<unknown[]>(ids.perps, "get_markets");
-console.log(`\n${ids.perps}: ${markets.length} markets, deployments/testnet.json and .env.local files updated`);
+const markets = await view<unknown[]>(ids.ketos, "get_markets");
+console.log(`\n${ids.ketos}: ${markets.length} markets, deployments/testnet.json and .env.local files updated`);

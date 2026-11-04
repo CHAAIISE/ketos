@@ -7,7 +7,7 @@ use near_sdk::{
 use crate::market::USD;
 use crate::position::PositionId;
 use crate::orders::OrderId;
-use crate::{Perps, PerpsExt};
+use crate::{Ketos, KetosExt};
 
 /// First margin deposit must be at least 1 USDC: the contract pays the account's storage.
 pub const MIN_FIRST_DEPOSIT: u128 = USD;
@@ -34,7 +34,7 @@ pub struct AccountView {
     pub reserved_margin: U128,
 }
 
-impl Perps {
+impl Ketos {
     pub(crate) fn deposit_margin(&mut self, account_id: &AccountId, amount: u128) {
         let account = match self.accounts.get_mut(account_id) {
             Some(account) => account,
@@ -53,7 +53,7 @@ impl Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Sends free margin back to the caller's wallet. Requires 1 yoctoNEAR (full-access key).
     #[payable]
     pub fn withdraw_margin(&mut self, amount: U128) -> Promise {

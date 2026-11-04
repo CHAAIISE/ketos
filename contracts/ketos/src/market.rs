@@ -8,7 +8,7 @@ use crate::math::{
     RATE_PRECISION,
 };
 use crate::position::Side;
-use crate::{Perps, PerpsExt};
+use crate::{Ketos, KetosExt};
 
 /// USDC has 6 decimals: one dollar is 1_000_000 units.
 pub const USD: u128 = 1_000_000;
@@ -280,7 +280,7 @@ pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
     })
 }
 
-impl Perps {
+impl Ketos {
     /// Shared insertion path; no privileged endpoint can change a live market's terms.
     pub(crate) fn register_market(&mut self, config: MarketConfig) {
         require!(
@@ -307,7 +307,7 @@ impl Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// At most 100 markets per page, in listing order.
     pub fn get_markets(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<MarketView> {
         let now_ms = env::block_timestamp_ms();

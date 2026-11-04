@@ -57,7 +57,7 @@ pub struct Config {
 
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
-pub struct Perps {
+pub struct Ketos {
     usdc_id: AccountId,
     oracle_id: AccountId,
     keeper_id: AccountId,
@@ -81,7 +81,7 @@ pub struct Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     #[init]
     pub fn new(usdc_id: AccountId, oracle_id: AccountId, keeper_id: AccountId) -> Self {
         let mut contract = Self {
@@ -131,7 +131,7 @@ pub(crate) fn emit_event(event: &str, data: Value) {
 }
 
 #[near]
-impl FungibleTokenReceiver for Perps {
+impl FungibleTokenReceiver for Ketos {
     /// Entry point for all USDC deposits (`ft_transfer_call`). Any panic refunds the sender.
     fn ft_on_transfer(
         &mut self,

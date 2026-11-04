@@ -9,34 +9,34 @@ const LIVE_MS = 5_000;
 const SLOW_MS = 10_000;
 const DEPTH_MS = 15_000;
 
-export const perpsKeys = {
-  all: ["perps"] as const,
-  config: () => ["perps", "config"] as const,
-  markets: () => ["perps", "markets"] as const,
-  prices: () => ["perps", "prices"] as const,
-  account: (accountId: string | null) => ["perps", "account", accountId] as const,
-  positions: (accountId: string | null) => ["perps", "positions", accountId] as const,
-  vault: () => ["perps", "vault"] as const,
-  vaultAccount: (accountId: string | null) => ["perps", "vault-account", accountId] as const,
-  depth: (marketId: MarketId | null) => ["perps", "depth", marketId] as const,
-  liquidations: (limit: number) => ["perps", "liquidations", limit] as const,
-  openPositions: () => ["perps", "open-positions"] as const,
+export const ketosKeys = {
+  all: ["ketos"] as const,
+  config: () => ["ketos", "config"] as const,
+  markets: () => ["ketos", "markets"] as const,
+  prices: () => ["ketos", "prices"] as const,
+  account: (accountId: string | null) => ["ketos", "account", accountId] as const,
+  positions: (accountId: string | null) => ["ketos", "positions", accountId] as const,
+  vault: () => ["ketos", "vault"] as const,
+  vaultAccount: (accountId: string | null) => ["ketos", "vault-account", accountId] as const,
+  depth: (marketId: MarketId | null) => ["ketos", "depth", marketId] as const,
+  liquidations: (limit: number) => ["ketos", "liquidations", limit] as const,
+  openPositions: () => ["ketos", "open-positions"] as const,
 };
 
 /** Token, oracle and keeper accounts; fixed at deployment. */
 export function useConfig() {
   const { views } = useNear();
-  return useQuery({ queryKey: perpsKeys.config(), queryFn: () => views.config(), staleTime: Infinity });
+  return useQuery({ queryKey: ketosKeys.config(), queryFn: () => views.config(), staleTime: Infinity });
 }
 
 export function useMarkets() {
   const { views } = useNear();
-  return useQuery({ queryKey: perpsKeys.markets(), queryFn: () => views.markets(), refetchInterval: LIVE_MS });
+  return useQuery({ queryKey: ketosKeys.markets(), queryFn: () => views.markets(), refetchInterval: LIVE_MS });
 }
 
 export function usePrices() {
   const { views } = useNear();
-  return useQuery({ queryKey: perpsKeys.prices(), queryFn: () => views.prices(), refetchInterval: LIVE_MS });
+  return useQuery({ queryKey: ketosKeys.prices(), queryFn: () => views.prices(), refetchInterval: LIVE_MS });
 }
 
 export interface AccountSummary {
@@ -56,7 +56,7 @@ export function useAccount() {
   const { views } = useNear();
   const accountId = useAccountId();
   return useQuery({
-    queryKey: perpsKeys.account(accountId),
+    queryKey: ketosKeys.account(accountId),
     queryFn: accountId
       ? async (): Promise<AccountSummary> => {
           const [account, usdcBalance, faucetAvailableAtMs] = await Promise.all([
@@ -82,7 +82,7 @@ export function usePositions() {
   const { views } = useNear();
   const accountId = useAccountId();
   return useQuery({
-    queryKey: perpsKeys.positions(accountId),
+    queryKey: ketosKeys.positions(accountId),
     queryFn: accountId ? () => views.positions(accountId) : skipToken,
     refetchInterval: LIVE_MS,
   });
@@ -90,7 +90,7 @@ export function usePositions() {
 
 export function useVault() {
   const { views } = useNear();
-  return useQuery({ queryKey: perpsKeys.vault(), queryFn: () => views.vault(), refetchInterval: SLOW_MS });
+  return useQuery({ queryKey: ketosKeys.vault(), queryFn: () => views.vault(), refetchInterval: SLOW_MS });
 }
 
 /** Vault shares of the signed-in account. */
@@ -98,7 +98,7 @@ export function useVaultAccount() {
   const { views } = useNear();
   const accountId = useAccountId();
   return useQuery({
-    queryKey: perpsKeys.vaultAccount(accountId),
+    queryKey: ketosKeys.vaultAccount(accountId),
     queryFn: accountId ? () => views.vaultAccount(accountId) : skipToken,
     refetchInterval: SLOW_MS,
   });
@@ -108,7 +108,7 @@ export function useVaultAccount() {
 export function useDepth(marketId: MarketId | null) {
   const { views } = useNear();
   return useQuery({
-    queryKey: perpsKeys.depth(marketId),
+    queryKey: ketosKeys.depth(marketId),
     queryFn: marketId ? () => views.depth(marketId) : skipToken,
     refetchInterval: DEPTH_MS,
   });
@@ -118,7 +118,7 @@ export function useDepth(marketId: MarketId | null) {
 export function useLiquidations(limit = 20) {
   const { views } = useNear();
   return useQuery({
-    queryKey: perpsKeys.liquidations(limit),
+    queryKey: ketosKeys.liquidations(limit),
     queryFn: () => views.liquidations(limit),
     refetchInterval: SLOW_MS,
   });
@@ -128,7 +128,7 @@ export function useLiquidations(limit = 20) {
 export function useAllOpenPositions() {
   const { views } = useNear();
   return useQuery({
-    queryKey: perpsKeys.openPositions(),
+    queryKey: ketosKeys.openPositions(),
     queryFn: () => views.allOpenPositions(),
     refetchInterval: SLOW_MS,
   });

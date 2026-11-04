@@ -7,7 +7,7 @@ import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { Button } from "@/components/ui/button";
 import { PanelTabs } from "@/components/ui/panel-tabs";
 import { useAccountId } from "@/hooks/near-provider";
-import { useAccount, useConfig, useLiquidations, usePositions, useVaultAccount } from "@/hooks/use-perps-queries";
+import { useAccount, useConfig, useLiquidations, usePositions, useVaultAccount } from "@/hooks/use-ketos-queries";
 import { formatUsd } from "@/lib/near/format";
 import { formatShares } from "@/components/vault/vault-math";
 import { cn } from "@/lib/utils";

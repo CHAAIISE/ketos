@@ -9,7 +9,7 @@ use near_sdk::{
 
 use crate::market::USD;
 use crate::math::{mul_div_floor, to_i128, BPS};
-use crate::{emit_event, Perps, PerpsExt};
+use crate::{emit_event, Ketos, KetosExt};
 
 pub const MIN_VAULT_DEPOSIT: u128 = USD;
 
@@ -81,7 +81,7 @@ pub struct VaultAccountView {
     pub value: U128,
 }
 
-impl Perps {
+impl Ketos {
     pub(crate) fn record_fee(&mut self, now_ms: u64, amount: u128) {
         self.fee_log.record(now_ms, amount);
     }
@@ -147,7 +147,7 @@ impl Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Burns `shares` for USDC at the current NAV (rounded down) and sends it to the caller.
     /// Fails when the amount exceeds what is not reserved for open positions.
     #[payable]

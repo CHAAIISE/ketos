@@ -7,7 +7,7 @@ use near_sdk::serde_json::json;
 use near_sdk::{env, near, require};
 
 use crate::market::{MarketId, MarketView, USD};
-use crate::{emit_event, Perps, PerpsExt};
+use crate::{emit_event, Ketos, KetosExt};
 
 /// Largest acceptable impact for a size to count as exit capacity.
 pub const MAX_EXIT_IMPACT_BPS: u32 = 100;
@@ -70,7 +70,7 @@ pub fn max_leverage_for(capacity_usd: u64) -> u32 {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Keeper only: records a depth curve for `market_id` and re-derives its caps. Existing
     /// positions keep their terms; the new cap and leverage apply to new positions.
     pub fn set_depth(&mut self, market_id: MarketId, samples: Vec<DepthSample>, measured_at_ms: u64) {

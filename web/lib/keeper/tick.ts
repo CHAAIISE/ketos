@@ -2,12 +2,12 @@ import type { DepthSample, Market, MarketId, Position } from "../near/types";
 import { findLiquidatable } from "./scan";
 
 /** Below this the perps contract may not cover the 0.02 NEAR oracle deposit and storage. */
-export const MIN_PERPS_BALANCE_YOCTO = 2n * 10n ** 24n;
+export const MIN_KETOS_BALANCE_YOCTO = 2n * 10n ** 24n;
 
 export interface KeeperChain {
   markets(): Promise<Market[]>;
   openPositions(): Promise<Position[]>;
-  perpsBalanceYocto(): Promise<bigint>;
+  ketosBalanceYocto(): Promise<bigint>;
   /** Each call returns the transaction hash. */
   setDepth(market: MarketId, samples: DepthSample[], measuredAtMs: number): Promise<string>;
   refreshPrices(): Promise<string>;
@@ -48,8 +48,8 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
   const started = now();
   const startedAt = new Date(started).toISOString();
 
-  const balance = await chain.perpsBalanceYocto();
-  if (balance < MIN_PERPS_BALANCE_YOCTO) {
+  const balance = await chain.ketosBalanceYocto();
+  if (balance < MIN_KETOS_BALANCE_YOCTO) {
     return {
       ok: false,
       startedAt,

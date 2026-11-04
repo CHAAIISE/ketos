@@ -7,7 +7,7 @@ use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId, Gas, GasWeight, NearToken, Promise};
 
 use crate::market::{MarketId, PriceSource, MAX_PRICE_AGE_MS};
-use crate::{Perps, PerpsExt};
+use crate::{Ketos, KetosExt};
 
 /// Guarantee attached to `oracle_call`; OutLayer sends it back in the same transaction.
 pub const ORACLE_CALL_DEPOSIT: NearToken = NearToken::from_millinear(20);
@@ -70,7 +70,7 @@ pub fn to_price8(price: &OraclePrice) -> Option<u128> {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Anyone can ask for fresh prices. The contract fronts the oracle's refundable deposit;
     /// the caller pays the gas (attach at least 50 Tgas).
     pub fn refresh_prices(&mut self) -> Promise {

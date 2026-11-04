@@ -1,5 +1,5 @@
 import type { OnboardingStep } from "@/components/ui/onboarding-steps";
-import type { AccountSummary } from "@/hooks/use-perps-queries";
+import type { AccountSummary } from "@/hooks/use-ketos-queries";
 
 export type TradeStep = "connect" | "fund" | "deposit" | "trade";
 

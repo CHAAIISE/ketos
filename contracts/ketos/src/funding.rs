@@ -8,7 +8,7 @@ use near_sdk::{env, near};
 use crate::market::{Market, MarketId};
 use crate::math::{mul_div_ceil, mul_div_floor, to_i128, MS_PER_HOUR, RATE_PRECISION};
 use crate::position::Side;
-use crate::{emit_event, Perps, PerpsExt};
+use crate::{emit_event, Ketos, KetosExt};
 
 /// 0.05% of notional per hour, at the maximum OI imbalance (RATE_PRECISION scale).
 pub const MAX_FUNDING_PER_HOUR: u128 = 500_000_000;
@@ -132,7 +132,7 @@ impl Market {
     }
 }
 
-impl Perps {
+impl Ketos {
     pub(crate) fn emit_position_funding(
         &self,
         position_id: u64,
@@ -155,7 +155,7 @@ impl Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Permissionless checkpoint. No price or depth freshness is needed to account for time;
     /// each position's accrued payment already affects equity and realizes when it exits.
     pub fn settle_funding(&mut self, market_id: MarketId) {

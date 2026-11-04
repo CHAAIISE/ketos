@@ -76,21 +76,21 @@ async fn ft_balance(usdc: &Contract, account: &Account) -> Result<u128> {
     Ok(v.as_str().unwrap().parse()?)
 }
 
-async fn margin(perps: &Contract, account: &Account) -> Result<u128> {
-    let v = view(perps, "get_account", json!({ "account_id": account.id() })).await?;
+async fn margin(ketos: &Contract, account: &Account) -> Result<u128> {
+    let v = view(ketos, "get_account", json!({ "account_id": account.id() })).await?;
     Ok(v["margin"].as_str().unwrap().parse()?)
 }
 
 async fn transfer_call(
     from: &Account,
     usdc: &Contract,
-    perps: &Contract,
+    ketos: &Contract,
     amount: u128,
     msg: &str,
 ) -> Result<()> {
     ok(from
         .call(usdc.id(), "ft_transfer_call")
-        .args_json(json!({ "receiver_id": perps.id(), "amount": amount.to_string(), "msg": msg }))
+        .args_json(json!({ "receiver_id": ketos.id(), "amount": amount.to_string(), "msg": msg }))
         .deposit(NearToken::from_yoctonear(1))
         .gas(Gas::from_tgas(100))
         .transact()
@@ -113,9 +113,9 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .deploy(&wasm("mock_oracle"))
         .await?
         .into_result()?;
-    let perps = sub(&root, "perps", 20)
+    let ketos = sub(&root, "ketos", 20)
         .await?
-        .deploy(&wasm("perps"))
+        .deploy(&wasm("ketos"))
         .await?
         .into_result()?;
     let trader = sub(&root, "trader", 10).await?;
@@ -132,7 +132,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .args_json(json!({ "owner_id": root.id() }))
         .transact()
         .await?);
-    ok(perps
+    ok(ketos
         .call("new")
         .args_json(
             json!({ "usdc_id": usdc.id(), "oracle_id": oracle.id(), "keeper_id": keeper.id() }),
@@ -140,18 +140,18 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .transact()
         .await?);
 
-    let markets = view(&perps, "get_markets", json!({})).await?;
+    let markets = view(&ketos, "get_markets", json!({})).await?;
     assert_eq!(markets.as_array().unwrap().len(), 7);
     let mut paged = Vec::new();
     for from in [0, 3, 6] {
-        let page = view(&perps, "get_markets", json!({ "from_index": from, "limit": 3 })).await?;
+        let page = view(&ketos, "get_markets", json!({ "from_index": from, "limit": 3 })).await?;
         paged.extend(page.as_array().unwrap().iter().cloned());
     }
     assert_eq!(json!(paged), markets);
     assert!(markets.as_array().unwrap().iter().all(|m| m["is_open"] == false));
     ok(root
         .call(usdc.id(), "storage_deposit")
-        .args_json(json!({ "account_id": perps.id() }))
+        .args_json(json!({ "account_id": ketos.id() }))
         .deposit(NearToken::from_millinear(10))
         .transact()
         .await?);
@@ -165,14 +165,14 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             .await?);
     }
 
-    // The keeper signs with a function-call key limited to the three keeper methods on perps.
+    // The keeper signs with a function-call key limited to the three keeper methods on Ketos.
     let keeper_sk = SecretKey::from_random(KeyType::ED25519);
     ok(keeper
         .batch(keeper.id())
         .add_key(
             keeper_sk.public_key(),
             AccessKey::function_call_access(
-                perps.id(),
+                ketos.id(),
                 &KEEPER_METHODS,
                 Some(NearToken::from_near(1)),
             ),
@@ -183,11 +183,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
 
     // Prices: pulled from the oracle through `refresh_prices`.
     ok(bot
-        .call(perps.id(), "refresh_prices")
+        .call(ketos.id(), "refresh_prices")
         .gas(Gas::from_tgas(100))
         .transact()
         .await?);
-    let prices = view(&perps, "get_prices", json!({})).await?;
+    let prices = view(&ketos, "get_prices", json!({})).await?;
     assert!(
         prices
             .as_array()
@@ -207,7 +207,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     let measured_at_ms = now_ms(&worker).await?;
     for market in ["BTC", "ETH", "NEAR", "ZEC"] {
         ok(bot
-            .call(perps.id(), "set_depth")
+            .call(ketos.id(), "set_depth")
             .args_json(json!({
                 "market_id": market,
                 "samples": fixture["assets"][market]["samples"],
@@ -216,7 +216,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             .transact()
             .await?);
     }
-    let near_market = view(&perps, "get_market", json!({ "market_id": "NEAR" })).await?;
+    let near_market = view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?;
     assert_eq!(near_market["is_open"], true);
     assert_eq!(near_market["max_leverage"], 5);
     assert_eq!(near_market["max_oi_per_side"], (100_000 * USD).to_string());
@@ -229,22 +229,22 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .args_json(json!({ "account_id": lp.id(), "amount": (10_000 * USD).to_string() }))
         .transact()
         .await?);
-    transfer_call(&trader, &usdc, &perps, 500 * USD, "deposit_margin").await?;
-    transfer_call(&lp, &usdc, &perps, 10_000 * USD, "deposit_vault").await?;
-    assert_eq!(margin(&perps, &trader).await?, 500 * USD);
-    let vault = view(&perps, "get_vault", json!({})).await?;
+    transfer_call(&trader, &usdc, &ketos, 500 * USD, "deposit_margin").await?;
+    transfer_call(&lp, &usdc, &ketos, 10_000 * USD, "deposit_vault").await?;
+    assert_eq!(margin(&ketos, &trader).await?, 500 * USD);
+    let vault = view(&ketos, "get_vault", json!({})).await?;
     assert_eq!(vault["nav"], (10_000 * USD).to_string());
 
     // Long NEAR 5x, then a ZEC short sized past the measured exit capacity.
     let long = ok(trader
-        .call(perps.id(), "open_position")
+        .call(ketos.id(), "open_position")
         .args_json(json!({ "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 5 }))
         .transact()
         .await?);
     assert_eq!(long["size"], (500 * USD).to_string());
     assert_eq!(long["entry_price"], "400000000");
     let refused = err(trader
-        .call(perps.id(), "open_position")
+        .call(ketos.id(), "open_position")
         .args_json(json!({ "market_id": "ZEC", "side": "short", "margin": (25_000 * USD).to_string(), "leverage": 5 }))
         .transact()
         .await);
@@ -253,7 +253,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         "{refused}"
     );
     let short = ok(trader
-        .call(perps.id(), "open_position")
+        .call(ketos.id(), "open_position")
         .args_json(json!({ "market_id": "NEAR", "side": "short", "margin": (50 * USD).to_string(), "leverage": 2 }))
         .transact()
         .await?);
@@ -265,35 +265,35 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .transact()
         .await?);
     ok(bot
-        .call(perps.id(), "refresh_prices")
+        .call(ketos.id(), "refresh_prices")
         .gas(Gas::from_tgas(100))
         .transact()
         .await?);
-    let marked = view(&perps, "get_position", json!({ "position_id": long["id"] })).await?;
+    let marked = view(&ketos, "get_position", json!({ "position_id": long["id"] })).await?;
     let liq_price: u128 = marked["liquidation_price"].as_str().unwrap().parse()?;
     assert!(liq_price > 350_000_000, "{marked}");
 
     let record = ok(bot
-        .call(perps.id(), "liquidate")
+        .call(ketos.id(), "liquidate")
         .args_json(json!({ "position_id": long["id"] }))
         .transact()
         .await?);
     assert_eq!(record["liquidator"], keeper.id().as_str());
     assert_eq!(record["price"], "350000000");
-    let liquidations = view(&perps, "get_liquidations", json!({})).await?;
+    let liquidations = view(&ketos, "get_liquidations", json!({})).await?;
     assert_eq!(liquidations[0]["position_id"], long["id"]);
     let reward: u128 = record["reward"].as_str().unwrap().parse()?;
     assert!(reward > 0);
-    assert_eq!(margin(&perps, &keeper).await?, reward);
+    assert_eq!(margin(&ketos, &keeper).await?, reward);
     assert!(
-        view(&perps, "get_position", json!({ "position_id": long["id"] }))
+        view(&ketos, "get_position", json!({ "position_id": long["id"] }))
             .await?
             .is_null()
     );
 
     // The winning short is closed, then all free margin goes back to the wallet.
     let payout: u128 = ok(trader
-        .call(perps.id(), "close_position")
+        .call(ketos.id(), "close_position")
         .args_json(json!({ "position_id": short["id"] }))
         .transact()
         .await?)
@@ -302,7 +302,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     .parse()?;
     assert!(payout > 50 * USD, "short payout {payout}");
     assert!(view(
-        &perps,
+        &ketos,
         "get_positions",
         json!({ "account_id": trader.id() })
     )
@@ -310,31 +310,31 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     .as_array()
     .unwrap()
     .is_empty());
-    let free = margin(&perps, &trader).await?;
+    let free = margin(&ketos, &trader).await?;
     ok(trader
-        .call(perps.id(), "withdraw_margin")
+        .call(ketos.id(), "withdraw_margin")
         .args_json(json!({ "amount": free.to_string() }))
         .deposit(NearToken::from_yoctonear(1))
         .gas(Gas::from_tgas(100))
         .transact()
         .await?);
-    assert_eq!(margin(&perps, &trader).await?, 0);
+    assert_eq!(margin(&ketos, &trader).await?, 0);
     assert_eq!(ft_balance(&usdc, &trader).await?, 500 * USD + free);
 
     // The vault earned the trader's loss net of the short's gain, plus fees.
-    let vault = view(&perps, "get_vault", json!({})).await?;
+    let vault = view(&ketos, "get_vault", json!({})).await?;
     let nav: u128 = vault["nav"].as_str().unwrap().parse()?;
     assert!(nav > 10_000 * USD, "{vault}");
 
     // The keeper key cannot reach anything beyond its three methods.
     let open = err(bot
-        .call(perps.id(), "open_position")
+        .call(ketos.id(), "open_position")
         .args_json(json!({ "market_id": "NEAR", "side": "long", "margin": USD.to_string(), "leverage": 2 }))
         .transact()
         .await);
     assert!(open.contains("MethodNameMismatch"), "{open}");
     let withdraw = err(bot
-        .call(perps.id(), "withdraw_margin")
+        .call(ketos.id(), "withdraw_margin")
         .args_json(json!({ "amount": reward.to_string() }))
         .deposit(NearToken::from_yoctonear(1))
         .transact()

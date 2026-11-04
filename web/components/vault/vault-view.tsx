@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { ExternalLink } from "lucide-react";
 import { useNear } from "@/hooks/near-provider";
-import { useMarkets, useVault } from "@/hooks/use-perps-queries";
+import { useMarkets, useVault } from "@/hooks/use-ketos-queries";
 import type { NearNetwork } from "@/lib/near/config";
 import { accountExplorerUrl } from "@/lib/near/explorer";
 import { ExposureTable } from "./exposure-table";
@@ -51,16 +51,16 @@ export function VaultView() {
   const { config } = useNear();
   const vault = useVault();
   const markets = useMarkets();
-  const history = useNavHistory(config.perpsContract);
+  const history = useNavHistory(config.ketosContract);
 
   useEffect(() => {
     if (!vault.data) return;
-    recordNavPoint(config.perpsContract, {
+    recordNavPoint(config.ketosContract, {
       t: vault.dataUpdatedAt,
       nav: vault.data.nav,
       sharePrice: vault.data.share_price,
     });
-  }, [config.perpsContract, vault.data, vault.dataUpdatedAt]);
+  }, [config.ketosContract, vault.data, vault.dataUpdatedAt]);
 
   return (
     <>
@@ -81,7 +81,7 @@ export function VaultView() {
         </section>
         <div className="flex min-w-0 flex-col gap-1 lg:col-span-8 lg:col-start-1 lg:row-start-2">
           <ExposureTable query={markets} />
-          <VaultDetails contractId={config.perpsContract} network={config.network} />
+          <VaultDetails contractId={config.ketosContract} network={config.network} />
         </div>
       </div>
     </>

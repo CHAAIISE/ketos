@@ -3,7 +3,7 @@
 import { createContext, use, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, ExternalLink, Loader2, X } from "lucide-react";
 import { useNear } from "@/hooks/near-provider";
-import type { TxReceipt } from "@/hooks/use-perps-mutations";
+import type { TxReceipt } from "@/hooks/use-ketos-mutations";
 import { txExplorerUrl } from "@/lib/near/explorer";
 import { toNearActionError } from "@/lib/near/errors";
 import { cn } from "@/lib/utils";

@@ -53,7 +53,7 @@ for (const [symbol, assetId] of Object.entries(ASSETS)) {
 }
 
 // The receiver has no contract, so the callback receipt fails, but its
-// FunctionCall action shows the exact `oracle_on_call` arguments the perps contract will get.
+// FunctionCall action shows the exact `oracle_on_call` arguments the Ketos contract will get.
 console.log(`\noracle_call → receiver ${accountId}`);
 let txHash;
 try {

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
-import { perpsKeys } from "./use-perps-queries";
+import { ketosKeys } from "./use-ketos-queries";
 
 /** The server runs at most one tick a minute, whoever asks. */
 const INTERVAL_MS = 60_000;
@@ -50,7 +50,7 @@ export function useKeeperTick(): KeeperStatus {
         if (body.success && body.data.ok) {
           const liquidated = (body.data.liquidations ?? []).filter((l) => l.tx).length;
           setStatus({ state: "ran", atMs: Date.now(), liquidated });
-          void queryClient.invalidateQueries({ queryKey: perpsKeys.all });
+          void queryClient.invalidateQueries({ queryKey: ketosKeys.all });
         } else {
           const reason = body.success ? body.data.reason : undefined;
           setStatus({ state: "unavailable", reason: reason ?? `keeper answered HTTP ${res.status}` });

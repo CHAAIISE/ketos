@@ -16,7 +16,7 @@ export const configSchema = z.object({
   oracle_id: z.string(),
   keeper_id: z.string(),
 });
-export type PerpsConfig = z.infer<typeof configSchema>;
+export type KetosConfig = z.infer<typeof configSchema>;
 
 export const marketSchema = z.object({
   id: marketIdSchema,

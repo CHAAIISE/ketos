@@ -38,7 +38,7 @@ export interface MarketView {
 
 export async function getMarket(marketId: string): Promise<MarketView> {
   return provider().callFunction({
-    contractId: env("NEXT_PUBLIC_PERPS_CONTRACT"),
+    contractId: env("NEXT_PUBLIC_KETOS_CONTRACT"),
     method: "get_market",
     args: { market_id: marketId },
   }) as Promise<MarketView>;
@@ -53,7 +53,7 @@ export async function fundTraderMargin(units: bigint): Promise<void> {
     trader,
     usdc,
     "ft_transfer_call",
-    { receiver_id: env("NEXT_PUBLIC_PERPS_CONTRACT"), amount: units.toString(), msg: "deposit_margin" },
+    { receiver_id: env("NEXT_PUBLIC_KETOS_CONTRACT"), amount: units.toString(), msg: "deposit_margin" },
     1n,
   );
 }

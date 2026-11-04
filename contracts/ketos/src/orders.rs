@@ -5,7 +5,7 @@ use near_sdk::{env, near, require, AccountId};
 use crate::market::{MarketId, MAX_PRICE_AGE_MS};
 use crate::math::trade_fee;
 use crate::position::{Position, PositionId, Side, MIN_POSITION_MARGIN};
-use crate::{emit_event, Perps, PerpsExt};
+use crate::{emit_event, Ketos, KetosExt};
 
 pub type OrderId = u64;
 pub const MAX_OPEN_ORDERS: usize = 50;
@@ -147,7 +147,7 @@ pub enum OrderExecution {
     },
 }
 
-impl Perps {
+impl Ketos {
     /// Shared, mutation-free admission check for immediate and triggered entries.
     pub(crate) fn opening_terms(
         &self,
@@ -290,7 +290,7 @@ impl Perps {
 }
 
 #[near]
-impl Perps {
+impl Ketos {
     /// Entry margin is reserved now; liquidity, leverage and price are checked again at execution.
     pub fn place_order(&mut self, request: OrderRequest) -> Order {
         let account_id = env::predecessor_account_id();

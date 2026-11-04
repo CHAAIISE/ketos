@@ -11,7 +11,7 @@ const ONE_YOCTO = 1n;
 export const MSG_DEPOSIT_MARGIN = "deposit_margin";
 export const MSG_DEPOSIT_VAULT = "deposit_vault";
 
-type Contracts = Pick<NearConfig, "perpsContract" | "usdcContract">;
+type Contracts = Pick<NearConfig, "ketosContract" | "usdcContract">;
 
 function call(
   receiverId: string,
@@ -31,7 +31,7 @@ function depositTx(c: Contracts, amount: bigint, msg: string): NearTransaction {
   return call(
     c.usdcContract,
     "ft_transfer_call",
-    { receiver_id: c.perpsContract, amount: amount.toString(), msg },
+    { receiver_id: c.ketosContract, amount: amount.toString(), msg },
     ONE_YOCTO,
   );
 }
@@ -43,7 +43,7 @@ export function depositMarginTx(c: Contracts, amount: bigint): NearTransaction {
 
 /** Sends `amount` USDC units of free margin back to the tUSDC wallet. */
 export function withdrawMarginTx(c: Contracts, amount: bigint): NearTransaction {
-  return call(c.perpsContract, "withdraw_margin", { amount: amount.toString() }, ONE_YOCTO);
+  return call(c.ketosContract, "withdraw_margin", { amount: amount.toString() }, ONE_YOCTO);
 }
 
 export interface OpenPositionArgs {
@@ -55,7 +55,7 @@ export interface OpenPositionArgs {
 }
 
 export function openPositionTx(c: Contracts, args: OpenPositionArgs): NearTransaction {
-  return call(c.perpsContract, "open_position", {
+  return call(c.ketosContract, "open_position", {
     market_id: args.marketId,
     side: args.side,
     margin: args.margin.toString(),
@@ -64,7 +64,7 @@ export function openPositionTx(c: Contracts, args: OpenPositionArgs): NearTransa
 }
 
 export function closePositionTx(c: Contracts, positionId: number): NearTransaction {
-  return call(c.perpsContract, "close_position", { position_id: positionId });
+  return call(c.ketosContract, "close_position", { position_id: positionId });
 }
 
 /** Moves `amount` USDC units from the tUSDC wallet into the liquidity vault. */
@@ -74,5 +74,5 @@ export function depositVaultTx(c: Contracts, amount: bigint): NearTransaction {
 
 /** Burns `shares` vault shares for USDC at the current NAV. */
 export function withdrawVaultTx(c: Contracts, shares: bigint): NearTransaction {
-  return call(c.perpsContract, "withdraw_vault", { shares: shares.toString() }, ONE_YOCTO);
+  return call(c.ketosContract, "withdraw_vault", { shares: shares.toString() }, ONE_YOCTO);
 }
