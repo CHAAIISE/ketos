@@ -44,7 +44,7 @@ const swatches = [
 
 const stepLabels = [
   { id: "wallet", label: "Connect wallet" },
-  { id: "faucet", label: "Get test USDC" },
+  { id: "faucet", label: "Get USDC" },
   { id: "deposit", label: "Deposit margin" },
   { id: "trade", label: "Open a position" },
 ] as const
@@ -196,14 +196,14 @@ export default function DesignPage() {
         <GallerySection label="Badges and form">
           <div className="flex flex-wrap items-center gap-2">
             <Badge>10x</Badge>
-            <Badge variant="outline">Testnet</Badge>
+            <Badge variant="outline">Live</Badge>
             <Badge variant="success">Long</Badge>
             <Badge variant="destructive">Short</Badge>
             <Badge variant="warning">Measurement 34 min old</Badge>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field>
-              <FieldLabel htmlFor="design-amount">Amount (tUSDC)</FieldLabel>
+              <FieldLabel htmlFor="design-amount">Amount (USDC)</FieldLabel>
               <Input id="design-amount" inputMode="decimal" placeholder="0.00" />
               <FieldMessage>Available in wallet appears here once connected.</FieldMessage>
             </Field>

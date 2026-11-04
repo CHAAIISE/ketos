@@ -114,17 +114,17 @@ function fromPanic(panic: string, details: string): NearActionError {
     case "ERR_LEVERAGE_TOO_LOW":
       return make("Leverage must be at least 1x.");
     case "ERR_INSUFFICIENT_MARGIN":
-      return make("Not enough free margin. Deposit more tUSDC or lower the amount.");
+      return make("Not enough free margin. Deposit more USDC or lower the amount.");
     case "ERR_MIN_POSITION_MARGIN":
       return make("A position needs at least $1 of margin.");
     case "ERR_MIN_FIRST_DEPOSIT":
-      return make("Your first margin deposit must be at least 1 tUSDC.");
+      return make("Your first margin deposit must be at least 1 USDC.");
     case "ERR_MIN_VAULT_DEPOSIT":
-      return make("Vault deposits must be at least 1 tUSDC.");
+      return make("Vault deposits must be at least 1 USDC.");
     case "ERR_ZERO_AMOUNT":
       return make("Enter an amount greater than zero.");
     case "ERR_NO_ACCOUNT":
-      return make("You have no margin account yet. Deposit tUSDC as margin first.");
+      return make("You have no margin account yet. Deposit USDC as margin first.");
     case "ERR_NO_POSITION":
       return make("This position no longer exists: it was already closed or liquidated. Refresh to see the latest state.");
     case "ERR_NOT_OWNER":
@@ -160,7 +160,7 @@ function fromPanic(panic: string, details: string): NearActionError {
     }
     case "ERR_WRONG_TOKEN":
     case "ERR_INVALID_MSG":
-      return make("The deposit was refused by the perps contract and your tUSDC was refunded.");
+      return make("The deposit was refused by the perps contract and your USDC was refunded.");
     case "ERR_OVERFLOW":
       return make("The amount is too large.");
     default:
@@ -187,17 +187,17 @@ const PATTERNS: Array<{ re: RegExp; code: string; message: string }> = [
   {
     re: /account \S+ is not registered/i,
     code: "NOT_REGISTERED",
-    message: "Your account holds no tUSDC yet. Claim tUSDC from the faucet first.",
+    message: "Your account holds no USDC yet. Use Fund in the top bar first.",
   },
   {
     re: /doesn't have enough balance|not enough balance to transfer|insufficient balance/i,
     code: "INSUFFICIENT_BALANCE",
-    message: "Not enough tUSDC in your wallet. Lower the amount or claim from the faucet.",
+    message: "Not enough USDC in your wallet. Lower the amount or use Fund in the top bar.",
   },
   {
     re: /NotEnoughBalance|LackBalanceForState|not enough (NEAR|tokens)|InsufficientFunds/i,
     code: "INSUFFICIENT_NEAR",
-    message: "Your account does not have enough NEAR to pay for gas. Top it up with the testnet NEAR faucet.",
+    message: "Your account does not have enough NEAR to pay for gas. Top it up with a NEAR faucet.",
   },
   {
     re: /Exceeded the prepaid gas|GasExceeded|GasLimitExceeded/i,

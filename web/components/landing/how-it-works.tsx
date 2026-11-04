@@ -25,7 +25,7 @@ function Diagram({ perpsContract }: { perpsContract: string }) {
   const perps = <Block title="Perps contract" detail={perpsContract} />;
   const traders = <Block title="Traders" detail="long / short, isolated margin" />;
   const vault = <Block title="Vault" detail="LPs, counterparty to traders" />;
-  const oracleDetail = nearConfig().network === "testnet" ? "price-oracle.testnet" : `mock oracle, ${networkName()}`;
+  const oracleDetail = `${nearConfig().network === "testnet" ? "OutLayer" : "price oracle"} on ${networkName()}`;
 
   return (
     <>

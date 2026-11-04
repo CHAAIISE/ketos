@@ -35,7 +35,7 @@ export function nearConfig(): NearConfig {
   return config.data;
 }
 
-/** How screens name the chain they read from; local runs must not claim to be on testnet. */
-export function networkName(network: NearNetwork = nearConfig().network): string {
-  return network === "testnet" ? "NEAR testnet" : "local NEAR sandbox";
+/** How screens name the chain they read from. */
+export function networkName(): string {
+  return "NEAR";
 }

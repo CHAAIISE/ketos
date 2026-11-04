@@ -51,7 +51,7 @@ export function LandingFooter() {
             </Link>
           ))}
         </nav>
-        <p className="text-label text-tertiary">Built at NEAR HACKATHON · {networkName()}, test USDC only</p>
+        <p className="text-label text-tertiary">Built at NEAR HACKATHON · {networkName()}</p>
       </Container>
       <Container className="pt-16">
         <svg aria-hidden width="0" height="0" className="absolute">

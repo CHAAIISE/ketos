@@ -53,7 +53,7 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
     return {
       ok: false,
       startedAt,
-      reason: `perps contract balance is ${Number(balance / 10n ** 21n) / 1000} NEAR, below the 2 NEAR needed for oracle requests; top it up from a testnet faucet`,
+      reason: `perps contract balance is ${Number(balance / 10n ** 21n) / 1000} NEAR, below the 2 NEAR needed for oracle requests; top it up from a NEAR faucet`,
     };
   }
   const depth: Step<{ market: MarketId }>[] = [];

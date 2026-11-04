@@ -56,7 +56,7 @@ export function LiveStrip() {
         <span className="text-foreground">
           Live numbers unavailable.{" "}
           <span className="text-muted-foreground">
-            The {networkName(config.network)} RPC did not answer get_markets or get_vault.
+            The {networkName()} RPC did not answer get_markets or get_vault.
           </span>
         </span>
         <Button
@@ -94,7 +94,7 @@ export function LiveStrip() {
         <Cell label={LABELS[2]} hint="longs + shorts">
           <FlashValue text={formatUsd(openInterest, { maxFractionDigits: 0 })} order={usdcToNumber(openInterest)} />
         </Cell>
-        <Cell label={LABELS[3]} hint="test USDC">
+        <Cell label={LABELS[3]} hint="USDC">
           <FlashValue text={formatUsd(vault.data.nav)} order={usdcToNumber(vault.data.nav)} />
         </Cell>
         <Cell
@@ -109,7 +109,7 @@ export function LiveStrip() {
         </Cell>
       </dl>
       <p className="text-label text-tertiary tabular-nums">
-        Read from {config.perpsContract} on {networkName(config.network)} at {formatUtc(readAt, true)}, refreshed while this page is open.
+        Read from {config.perpsContract} on {networkName()} at {formatUtc(readAt, true)}, refreshed while this page is open.
       </p>
     </div>
   );
