@@ -18,8 +18,19 @@ function waitLabel(ms: number): string {
   return `${Math.min(60, Math.max(1, Math.ceil(ms / 60_000)))} min`;
 }
 
-/** Claims 1,000 USDC from the token faucet; disabled with the time left while it cools down. */
-export function FundButton({ account, className }: { account: AccountSummary; className?: string }) {
+/**
+ * Claims 1,000 USDC from the token faucet; disabled with the time left while it cools down.
+ * `prominent` renders it as the trade ticket's main action while the wallet is still empty.
+ */
+export function FundButton({
+  account,
+  className,
+  prominent = false,
+}: {
+  account: AccountSummary;
+  className?: string;
+  prominent?: boolean;
+}) {
   const faucet = useFaucet();
   const { track } = useTxToast();
   const nowMs = useNow();
@@ -28,9 +39,10 @@ export function FundButton({ account, className }: { account: AccountSummary; cl
 
   return (
     <Button
-      variant="secondary"
-      size="sm"
-      data-testid="fund-button"
+      variant={prominent ? "default" : "secondary"}
+      size={prominent ? "default" : "sm"}
+      data-testid={prominent ? "ticket-fund-button" : "fund-button"}
+      {...(prominent ? { "data-primary": "" } : {})}
       className={className}
       disabled={faucet.isPending || coolingDown}
       title={coolingDown ? "The faucet gives 1,000 USDC once an hour" : "Get 1,000 USDC in your wallet"}
@@ -44,10 +56,16 @@ export function FundButton({ account, className }: { account: AccountSummary; cl
       {faucet.isPending ? (
         "Funding…"
       ) : coolingDown ? (
-        <>
-          <span className="sm:hidden">{waitLabel(waitMs)}</span>
-          <span className="hidden sm:inline">Available in {waitLabel(waitMs)}</span>
-        </>
+        prominent ? (
+          `Faucet used, try again in ${waitLabel(waitMs)}`
+        ) : (
+          <>
+            <span className="sm:hidden">{waitLabel(waitMs)}</span>
+            <span className="hidden sm:inline">Available in {waitLabel(waitMs)}</span>
+          </>
+        )
+      ) : prominent ? (
+        "Get 1,000 USDC"
       ) : (
         "Fund"
       )}
@@ -92,6 +110,9 @@ export function DepositMarginForm({ account, onDone }: { account: AccountSummary
         }
       }}
     >
+      <p className="text-label text-muted-foreground">
+        Margin backs your positions. Margin not used by a position can go back to your wallet at any time.
+      </p>
       <Field>
         <div className="flex items-baseline justify-between">
           <FieldLabel htmlFor={inputId}>Amount (USDC)</FieldLabel>

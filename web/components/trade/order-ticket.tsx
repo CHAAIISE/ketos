@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { useNow } from "@/components/landing/live-time";
-import { useFundingDialog } from "@/components/app/funding";
+import { FundButton, useFundingDialog } from "@/components/app/funding";
 import { Skeleton } from "@/components/app/states";
 import { useTxToast } from "@/components/app/tx-toast";
 import { Term } from "@/components/vault/term";
@@ -23,6 +23,13 @@ import { borrowRatePercent, entryTriggered, MIN_POSITION_MARGIN, previewOrder, t
 import { BracketFields, EMPTY_BRACKET, MarginModeControl, readBracket, TicketInput, type BracketDraft } from "./ticket-controls";
 
 const PERCENT_MARKS = [0, 25, 50, 75, 100];
+
+/** One line under the ticket's main action telling a new user what it does for them. */
+const STEP_HINT: Record<Exclude<TradeStep, "trade">, string> = {
+  connect: "Connect a NEAR wallet to start. Markets stay readable without one.",
+  fund: "You need USDC to trade. It's free: 1,000 USDC once an hour.",
+  deposit: "Move USDC from your wallet into your margin account to back positions.",
+};
 
 function Row({ label, children, tone }: { label: ReactNode; children: ReactNode; tone?: "warning" }) {
   return (
@@ -269,10 +276,12 @@ export function OrderTicket({
         ) : null}
       </>
     );
+  } else if (step === "fund" && account) {
+    action = <FundButton account={account} prominent className="h-10 w-full" />;
   } else if (!trading) {
     action = (
       <Button data-primary="" className="h-10 w-full" onClick={() => funding.open("deposit")}>
-        Enable trading
+        Deposit margin
       </Button>
     );
   } else {
@@ -448,6 +457,11 @@ export function OrderTicket({
       </div>
 
       {action}
+      {step !== null && step !== "trade" ? (
+        <p data-testid="step-hint" className="text-label text-muted-foreground">
+          {STEP_HINT[step]}
+        </p>
+      ) : null}
       {!isMarket || bracketsOn ? keeperNote : null}
 
       {isMarket && !status.open ? (

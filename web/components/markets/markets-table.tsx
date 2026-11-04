@@ -25,7 +25,10 @@ export const VAULT_LABEL: Record<VaultId, string> = { core: "Core", "long-tail":
 
 const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 
-/** Rows in display order; markets without a value for the sort key always go last. */
+/**
+ * Rows in display order; markets without a value for the sort key always go last. Ties go to the
+ * larger measured cap, so tradable markets come before ones still being measured.
+ */
 export function sortMarkets(
   markets: readonly Market[],
   sort: Sort,
@@ -48,17 +51,23 @@ export function sortMarkets(
         return m.max_leverage;
     }
   };
+  const tieBreak = (a: Market, b: Market) =>
+    a.max_oi_per_side === b.max_oi_per_side
+      ? a.id.localeCompare(b.id)
+      : a.max_oi_per_side > b.max_oi_per_side
+        ? -1
+        : 1;
   return [...markets].sort((a, b) => {
     const va = value(a);
     const vb = value(b);
-    if (va === null || vb === null) return va === vb ? a.id.localeCompare(b.id) : va === null ? 1 : -1;
+    if (va === null || vb === null) return va === vb ? tieBreak(a, b) : va === null ? 1 : -1;
     const c =
       typeof va === "bigint" && typeof vb === "bigint"
         ? (va > vb ? 1 : 0) - (va < vb ? 1 : 0)
         : typeof va === "string" && typeof vb === "string"
           ? va.localeCompare(vb)
           : Number(va) - Number(vb);
-    return c === 0 ? a.id.localeCompare(b.id) : c * sign;
+    return c === 0 ? tieBreak(a, b) : c * sign;
   });
 }
 

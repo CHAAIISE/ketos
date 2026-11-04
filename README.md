@@ -31,8 +31,8 @@ Above $100k, no solver quotes the trade at all. A market that lets traders open 
 
 1. Open https://ketos-three.vercel.app - see live exit capacity for BTC, ETH, NEAR and ZEC, with the time of the last measurement.
 2. Click **Launch app**, then **Connect** in the top bar and pick a NEAR testnet wallet - see the 4-step onboarding row: Connect wallet, Fund wallet, Deposit margin, Open a position.
-3. Click **Fund** in the top bar - 1,000 test USDC land in the wallet (faucet, once per hour; the button then shows when it opens again).
-4. Click **Enable trading** in the order panel and deposit 200 as margin - see Available to Trade update.
+3. Click **Get 1,000 USDC** in the order panel (or **Fund** in the top bar) - 1,000 test USDC land in the wallet (faucet, once per hour; the button then shows when it opens again).
+4. Click **Deposit margin** in the order panel and deposit 200 as margin - see Available to Trade update.
 5. Pick NEAR-USD in the market selector, Buy / Long, size 500 USDC at 5× - see Max OI (set by live exit liquidity) in the market bar, the Exit Liquidity ladder with its 100 bps cap line, then the position with PnL, liquidation price and fees.
 6. Pick ZEC-USD, Sell / Short, a size above the cap - the contract refuses the order and the app shows "Exceeds live exit liquidity … (cap $X)"; **Use max size** fits the order under the cap.
 7. Open **Vaults** and deposit 500 - see shares minted at the share price, TVL, fee APR, and the vault's net exposure per market next to each market's capacity.

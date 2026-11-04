@@ -210,6 +210,7 @@ export function MarketHeader({
         className,
       )}
     >
+      <h1 className="sr-only">Trade {marketName(market.id)}</h1>
       <div className="flex items-center justify-between gap-3">
         <MarketSelector markets={markets} market={market} onSelect={onSelect} />
         <span className="text-lg font-medium tabular-nums text-foreground md:hidden">

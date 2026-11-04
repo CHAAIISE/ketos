@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { ExternalLink } from "lucide-react";
-import { ErrorState } from "@/components/app/states";
+import { ErrorState, Skeleton } from "@/components/app/states";
 import { PanelTabs } from "@/components/ui/panel-tabs";
 import { useNear } from "@/hooks/near-provider";
 import {
@@ -92,7 +92,19 @@ function VaultDetails({
   );
 }
 
+const noSubscription = () => () => {};
+
+/**
+ * This view streams in behind the route's Suspense boundary and hydrates after the app shell, whose
+ * queries may already hold data by then. Rendering the server's placeholder until hydration is done
+ * keeps the first client render identical to the HTML.
+ */
 export function VaultView({ vaultId }: { vaultId: VaultId }) {
+  const hydrated = useSyncExternalStore(noSubscription, () => true, () => false);
+  return hydrated ? <VaultDashboard vaultId={vaultId} /> : <Skeleton className="h-96 w-full" />;
+}
+
+function VaultDashboard({ vaultId }: { vaultId: VaultId }) {
   const { config } = useNear();
   const vault = useVault(vaultId);
   const markets = useMarkets();

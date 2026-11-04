@@ -70,6 +70,8 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
     await expect(page.getByTestId("wallet-account")).toBeVisible();
 
     await expect(currentStep).toContainText(/Fund wallet/);
+    // The ticket's main action follows the guide: claim USDC before anything else.
+    await expectSinglePrimary(page, /^Get 1,000 USDC$/);
     await page.getByTestId("fund-button").click();
     await expectToast(page, /1,000 USDC added to your wallet/);
     await expect(page.getByTestId("fund-button")).toHaveText(/Available in \d+ min/);
@@ -77,7 +79,7 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
 
   await test.step("3. trade: enable trading with 200 USDC of margin", async () => {
     await expect(currentStep).toContainText(/Deposit margin/);
-    await expectSinglePrimary(page, /Enable trading/);
+    await expectSinglePrimary(page, /^Deposit margin$/);
     await page.locator("[data-primary]:visible").click();
     const dialog = page.getByRole("dialog", { name: "Margin" });
     await dialog.locator('input[name="deposit-margin"]').fill("200");

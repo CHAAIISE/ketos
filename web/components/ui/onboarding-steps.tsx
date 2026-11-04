@@ -39,16 +39,15 @@ function OnboardingSteps({
           >
             {step.status === "done" ? <Check className="size-2.5" /> : index + 1}
           </span>
-          <span>
-            <span className="sr-only">
-              {step.status === "done"
-                ? "Completed: "
-                : step.status === "current"
-                  ? "Current step: "
-                  : "Upcoming: "}
-            </span>
-            {step.label}
+          <span className="sr-only">
+            {step.status === "done"
+              ? "Completed: "
+              : step.status === "current"
+                ? "Current step: "
+                : "Upcoming: "}
           </span>
+          {/* Phones keep the current step's label only, so the whole row fits without scrolling. */}
+          <span className={cn(step.status !== "current" && "max-sm:sr-only")}>{step.label}</span>
           {index < steps.length - 1 ? (
             <ChevronRight aria-hidden className="mx-1 size-3 text-tertiary" />
           ) : null}
