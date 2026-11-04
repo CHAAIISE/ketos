@@ -24,7 +24,7 @@ Above $100k, no solver quotes the trade at all. A market that lets traders open 
 
 ## Demo
 
-- App: https://ketos-three.vercel.app — `/trade`, `/vault`, `/liquidity`, all reading the testnet contracts live.
+- App: https://ketos-three.vercel.app — `/trade`, `/markets`, `/portfolio`, `/vaults`, `/risk` and `/leaderboard`, all reading the V2 testnet contracts live.
 - Full journey, replayed on a local chain: `pnpm --dir web exec playwright test` runs the 12-step demo journey on a seeded NEAR sandbox with a test wallet: market order with TP/SL, a limit order filled by the keeper after a mock price move, a refused oversized order, a permissionless listing that opens after the keeper measures it, an LP deposit, a stress test, a stop loss and a liquidation, a cross-margin switch, withdrawal and the leaderboard. Tests tagged `@smoke` are read-only and run against any deployment with `BASE_URL=…`.
 
   The sandbox uses mock prices but real, read-only 1Click quotes, so this journey needs network access. Its price-drop scene reads the position's onchain liquidation threshold rather than assuming a fixed liquidity tier. Deployment smoke covers `/`, `/markets`, `/trade`, `/vaults`, `/risk` and `/leaderboard`, with automatic keeper requests blocked before they reach the server.
@@ -72,7 +72,7 @@ Fresh contract deployments initialize 16 markets: BTC, ETH, NEAR, ZEC, SOL, AURO
 
 `get_markets({ "from_index": 0, "limit": 100 })` returns markets in listing order (default 50, maximum 100 per page). The client reads every page. A new market has no exit capacity and cannot accept positions until measured; its leverage is the lower of its configured ceiling and the live liquidity tier. Both price adapters match oracle asset ids rather than ticker order and can update only their own source.
 
-The V2 contract is deployed at `ketos.testnet`, with the addresses in [`deployments/testnet.json`](deployments/testnet.json). It was initialized on a fresh account, not migrated over the original four-market state. The hosted website still uses the original deployment until its next release; local configuration now targets V2.
+The V2 contract is deployed at `ketos.testnet`, with the addresses in [`deployments/testnet.json`](deployments/testnet.json). It was initialized on a fresh account, not migrated over the original four-market state. Both the hosted website and local configuration target V2.
 
 ### Permissionless listing on fresh deployments
 
@@ -84,7 +84,7 @@ Anyone can register a market through the configured USDC contract's `ft_transfer
 
 The example describes the message format, not a supported live asset. Duplicate symbols, oracle assets or Intents assets, malformed requests, unknown fields and incorrect payments fail and are refunded by the token's transfer resolver. There is no direct unpaid `list_market` endpoint. The 5 USDC becomes Long-tail listing revenue, increasing its NAV without minting shares or margin; Core receives nothing. Listing fees are included in the trailing fee APR.
 
-Listed markets always belong to Long-tail, with a $500,000 hard cap, 0.1% trading fees and a 5× leverage ceiling. Callers cannot override these terms. They start measuring (`depth_measured_at_ms = 0`, zero exit capacity): registration does not attest price or liquidity support. Opening still requires a fresh authenticated oracle price and a keeper depth measurement with at least $10,000 of capacity; no quote means no capacity. Unsupported assets cannot trade merely by paying the fee. The `signed` source is stored but has no active price adapter yet. The hosted demo has no listing UI or multi-market keeper yet.
+Listed markets always belong to Long-tail, with a $500,000 hard cap, 0.1% trading fees and a 5× leverage ceiling. Callers cannot override these terms. They start measuring (`depth_measured_at_ms = 0`, zero exit capacity): registration does not attest price or liquidity support. Opening still requires a fresh authenticated oracle price and a keeper depth measurement with at least $10,000 of capacity; no quote means no capacity. Unsupported assets cannot trade merely by paying the fee. The `signed` source is stored but has no active price adapter yet.
 
 In the app, `/markets` has a "List a market" panel. [`GET /api/listable-markets`](web/app/api/listable-markets/route.ts) offers the assets that the configured oracle supports (`get_price_data` without ids lists them all) and that 1Click's `/v0/tokens` quotes as the same `nep141:` token on NEAR, minus anything already in the registry and the USDC collateral ([`listing.ts`](web/lib/intents/listing.ts)). On testnet that is currently FRAX, USDT and WBTC; the sandbox seeds a cNEAR oracle price so the end-to-end flow can list it (1Click quotes it well above the $10,000 opening threshold, so it opens after its first measurement).
 
@@ -103,7 +103,7 @@ Separate cumulative debit and credit indexes preserve past payments when the imb
 - `get_vault` includes `funding_net_due` in NAV and reserves gross funding credits in addition to maximum price gains. Funding losses from insolvent positions are borne by the vault, like price losses. The fee APR still covers trading fees, borrow fees and liquidation penalties, not funding.
 - `funding_accrued` events report public checkpoints; `funding_settled` events and close/liquidation records report the assessed position debits and credits included in settlement.
 
-Funding is available on the V2 contract and checkpointed by the local keeper. The hosted four-market demo still uses its original contract and does not expose funding; its deployed client and keeper have not been cut over.
+Funding is available on the V2 contract and checkpointed by both the hosted and CLI keeper.
 
 ### Triggered orders on fresh deployments
 
@@ -115,7 +115,7 @@ Funding is available on the V2 contract and checkpointed by the local keeper. Th
 - `open_position` and entry orders accept optional `brackets: { "take_profit": "...", "stop_loss": "..." }`. Targets must be on the appropriate side of the entry price. Pending entries create exits only after filling; a price gap past an attached target rejects the entry. Each position allows one TP and one SL. Closing or liquidating a position cancels both; executing either exit cancels its sibling.
 - `get_orders({ "account_id": "..." })` returns active orders; `get_open_orders({ "from_index": 0, "limit": 100 })` supports executor discovery. Accounts hold at most 50 active orders, execution batches at most 50 ids. Order placement, cancellation, fill and rejection emit onchain events.
 
-These methods are available on the V2 contract and executed by the local keeper. On `/trade`, the order panel has Market · Limit · Stop tabs, optional TP/SL (price or % from the entry, validated with the contract's side rules before signing) and an Isolated / Cross switch; the bottom tabs list Open Orders (cancellable), Trade History, Funding History and Order History from `get_orders` and `get_history`. The history records a fill but not its order type, so Order History labels an exit fill as take profit or stop loss from its price versus the entry. The hosted demo's deployed order controls and keeper remain on their previous version.
+These methods are available on the V2 contract and executed by both the hosted and CLI keeper. On `/trade`, the order panel has Market · Limit · Stop tabs, optional TP/SL (price or % from the entry, validated with the contract's side rules before signing) and an Isolated / Cross switch; the bottom tabs list Open Orders (cancellable), Trade History, Funding History and Order History from `get_orders` and `get_history`. The history records a fill but not its order type, so Order History labels an exit fill as take profit or stop loss from its price versus the entry.
 
 ### Cross margin on fresh deployments
 
@@ -130,7 +130,7 @@ These methods are available on the V2 contract and executed by the local keeper.
 
 Position views expose `margin_mode`. Cross `liquidation_price` is zero because a standalone trigger price is not defined; use account health instead. `close_position` returns the positive part of its settlement credit; the close event carries the signed `payout`, and `get_cross_account` is the authoritative pool state. Liquidation records' `returned` likewise reports only a positive credit, not immediately withdrawable free margin.
 
-Cross margin is available on the V2 contract. The local keeper uses `get_cross_account` before `liquidate_cross`, never individual leg equity. The hosted demo still uses the older isolated-only contract; its deployed views, controls and keeper remain unchanged.
+Cross margin is available on the V2 contract and hosted app. Both keeper entry points use `get_cross_account` before `liquidate_cross`, never individual leg equity.
 
 ### Portfolio
 
@@ -138,11 +138,11 @@ The current client serves [`/portfolio`](web/components/portfolio/portfolio-scre
 
 The cumulative realized-PnL chart uses retained open, close and liquidation events, anchored to `get_account_stats.realized_pnl` when older events have left the 200-event ring. Opening fees and settlement costs are included once; funding annotations, order fills and collateral transfers are excluded. It plots only observed trading timestamps, with no invented earlier history. Arrow keys inspect individual observations.
 
-Positions can be closed or moved from Isolated to Cross after a risk confirmation. Open Orders supports cancellation; Trade History includes liquidations; Funding History shows settled payments. Deposit and Withdraw use the shared margin dialog. Deposits & Withdrawals lists successful margin transfers from the onchain ring, including activity made outside this browser. Recording starts with the transfer-history contract update; older transfers are not backfilled, and vault movements remain on Vaults. The hosted website gains this screen at its next release.
+Positions can be closed or moved from Isolated to Cross after a risk confirmation. Open Orders supports cancellation; Trade History includes liquidations; Funding History shows settled payments. Deposit and Withdraw use the shared margin dialog. Deposits & Withdrawals lists successful margin transfers from the onchain ring, including activity made outside this browser. Recording starts with the transfer-history contract update; older transfers are not backfilled, and vault movements remain on Vaults.
 
 ### Leaderboard
 
-[`/leaderboard`](web/components/leaderboard/leaderboard-screen.tsx) reads the whole indexed cohort with one `get_leaderboard` call (500 rows max) and ranks it client-side by realized PnL, ROI, volume or trades, all-time. Ties break on descending account id, as in the contract indexes. The connected account is highlighted and its rank shown above the table; accounts without an executed entry or exit are not ranked. The hosted website gains this screen at its next release.
+[`/leaderboard`](web/components/leaderboard/leaderboard-screen.tsx) reads the whole indexed cohort with one `get_leaderboard` call (500 rows max) and ranks it client-side by realized PnL, ROI, volume or trades, all-time. Ties break on descending account id, as in the contract indexes. The connected account is highlighted and its rank shown above the table; accounts without an executed entry or exit are not ranked.
 
 ### Landing stats
 
@@ -150,7 +150,7 @@ The [home page](web/app/page.tsx) reads everything live: open/listed markets and
 
 ### Risk center
 
-The current client serves `/risk`; `/liquidity` redirects there. The hosted demo keeps its previous liquidity screen until the next deployment.
+The current client serves `/risk`; `/liquidity` redirects there, including on the hosted app.
 
 - The capacity heatmap covers the full market registry. Color compares the larger side's open interest with measured exit capacity; stale, unmeasured and zero-capacity states are explicit. Selecting a market also selects its stress scenario and capacity history.
 - Capacity history uses only real onchain observations inside the trailing 24 hours, at most 48 records. The ring can span minutes rather than a full day; gaps are not backfilled. The latest impact curve remains available below the chart. A recent reduction in capacity or maximum leverage displays a **Market tightened** alert with both observation times.
@@ -169,7 +169,7 @@ This is a scenario estimate, not an execution guarantee or a prediction of post-
 - Settlement revenue separates trading/borrow `fees`, net `funding`, counterparty `trader_pnl`, `liquidations` and `listing` fees. Positive signed amounts earn assets for LPs. Isolated settlements exclude uncollectible funding; cross settlements accrue claims as described above. Counterparty PnL includes unpaid-loss and capped-payout adjustments. The components sum exactly to accounting balance changes excluding LP deposits and withdrawals. Paid listings accrue only to Long-tail.
 - Anyone can call `snapshot_vaults()` once at least 3,600,000 ms have elapsed since the last snapshot. Earlier calls fail without changing either history. Both vaults are recorded together; each ring keeps 168 observations in chronological order through `get_vault_history({ "vault_id": "core" })`. Snapshots freeze timestamp, NAV, share price, TVL (vault accounting assets, including cross receivables but excluding trader collateral) and cumulative settlement revenue. Missed hours are not backfilled; valuations use the latest stored oracle prices.
 
-The sandbox and V2 deployment seed 10,000 test USDC per vault. On testnet the LP shares belong to the funding account `ketos-dev.testnet`, separate from the receiver contract: NEP-141 forbids self-transfers. The hosted demo still uses its original single-vault contract until the next frontend deployment. The local client requires V2 because vault deposits and withdrawals select an explicit `vault_id`.
+The sandbox and V2 deployment seed 10,000 test USDC per vault. On testnet the LP shares belong to the funding account `ketos-dev.testnet`, separate from the receiver contract: NEP-141 forbids self-transfers. Both the hosted and local client select an explicit `vault_id` for deposits and withdrawals.
 
 `/vaults` lists both vaults with live NAV (TVL), trailing 7-day fee APR, booked all-time PnL, connected-wallet shares/value and their assigned markets. `/vaults/core` and `/vaults/long-tail` show hourly onchain NAV and share-price history over 24H or 7D, with the latest live read explicitly appended. NAV moves with deposits and withdrawals; share price tracks performance per share. The revenue chart stacks positive and negative changes in the five cumulative counters, grouping each interval in the hour or UTC day of its later observation. Missing intervals are not filled with zero revenue; an interval spanning missed snapshots cannot be attributed to individual hours. Booked PnL excludes deposits, withdrawals and unrealized trader PnL, and cross settlement revenue can include receivables rather than collected cash.
 
@@ -186,7 +186,7 @@ Each detail page filters exposure to that vault's markets and scopes deposits, w
 - Margin-transfer kinds are `deposit` and `withdrawal`. `size` is the credited/sent USDC amount, `market_id` is `USDC`, and position/side/price fields are not applicable (stored as `0`/`long`/`0`). A deposit is recorded when collateral is credited; a withdrawal only in its successful token-transfer callback. Failed transfers restore collateral without a withdrawal record. Transfers advance `event_count` but never trading totals or leaderboard eligibility. These variants append to the existing serialized enum without changing old discriminants or the storage layout.
 - `get_leaderboard({ "sort": "pnl", "limit": 50 })` reads persistent sorted indexes; `sort` also accepts `volume`. Defaults are PnL and 50 rows, with a maximum of 500. Scores descend, ties break by descending account id. The indexed cohort is the 500 accounts with the most recent executed entry or exit, not every historical trader. New activity evicts the least recently active account without deleting its history or totals; trading again restores eligibility with all-time totals intact. `roi_bps` is net realized PnL divided by cumulative entry collateral, truncated toward zero, not an annualized return.
 
-These views are available on the V2 contract. The hosted demo and its client screens have not been switched to them.
+These views are available on the V2 contract and used by the hosted client screens.
 
 All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/ketos/src/) (`position.rs`, `funding.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
 
@@ -203,7 +203,7 @@ The [`keeper`](web/lib/keeper/) signs with a function-call key limited to `refre
 - Both vaults receive a snapshot only when the last onchain snapshot is at least 1 hour old, or no snapshot exists. Restarting the process does not reset the interval.
 - Transactions are serial and failures are reported per step. Oracle receipt failures count even when the outer transaction succeeds. The cost guard refuses the entire tick below 2 NEAR of **spendable** contract balance after storage staking. No full-access deployment key is loaded.
 
-The HTTP route allows up to 300 seconds for quotes and maintenance. Its in-memory lock is not a distributed lease: separate serverless instances can race, especially before the first depth publication. Onchain methods recheck execution conditions; snapshots and orders remain idempotent or reject races, but duplicate oracle requests can still cost NEAR. The hosted website will use this executor only after its next deployment.
+The HTTP route allows up to 300 seconds for quotes and maintenance. Its in-memory lock is not a distributed lease: separate serverless instances can race, especially before the first depth publication. Onchain methods recheck execution conditions; snapshots and orders remain idempotent or reject races, but duplicate oracle requests can still cost NEAR. The hosted website and CLI use the same executor.
 
 ## Why it matters
 
@@ -213,9 +213,9 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 
 ## What's new
 
-- Listing and sizing as a pure function of measured exit liquidity: open interest and leverage caps recomputed onchain from 1Click quotes, with history kept in the contract. The current client's `/risk` adds a registry-wide heatmap and read-only price-shock scenarios; the hosted demo still uses its previous liquidity screen.
+- Listing and sizing as a pure function of measured exit liquidity: open interest and leverage caps recomputed onchain from 1Click quotes, with history kept in the contract. `/risk` adds a registry-wide heatmap and read-only price-shock scenarios.
 - Refusal at the contract level, not in the UI: the order ticket only warns, so the onchain refusal and its cap are visible.
-- A keeper key restricted to seven maintenance methods, unable to move funds; the hosted demo currently executes the original three through a throttled HTTP endpoint.
+- A keeper key restricted to seven maintenance methods, unable to move funds, used by the hosted throttled HTTP endpoint and the CLI.
 
 ## Built with
 
@@ -235,7 +235,13 @@ The trading fees, borrow fees and liquidation penalties stay on NEAR, with the L
 | Test USDC (tUSDC, NEP-141) | [usdc.ketos.testnet](https://testnet.nearblocks.io/address/usdc.ketos.testnet) |
 | Price oracle (OutLayer) | [price-oracle.testnet](https://testnet.nearblocks.io/address/price-oracle.testnet) |
 
-Ids are also in [`deployments/testnet.json`](deployments/testnet.json), under the `ketos`, `usdc`, `oracle`, `outlayer` and `keeper` keys. The keeper account is `keeper.ketos.testnet`. Deployment uses `KETOS_PRIVATE_KEY`; the `owner` field is the separate funding/LP account signed with `NEAR_PRIVATE_KEY`. Full-access deployment keys stay local. Production environment variables are prepared for the next website release, without redeploying or changing the currently hosted version.
+Ids are also in [`deployments/testnet.json`](deployments/testnet.json), under the `ketos`, `usdc`, `oracle`, `outlayer` and `keeper` keys. The keeper account is `keeper.ketos.testnet`. Deployment uses `KETOS_PRIVATE_KEY`; the `owner` field is the separate funding/LP account signed with `NEAR_PRIVATE_KEY`. Full-access deployment keys stay local.
+
+### Website deployment
+
+The Vercel project uses `web/` as its Root Directory. Run `vercel deploy --prod --yes` from the repository root so the build receives the pnpm workspace and lockfile. Production uses `NEXT_PUBLIC_NEAR_NETWORK`, `NEXT_PUBLIC_RPC_URL`, `NEXT_PUBLIC_KETOS_CONTRACT` and `NEXT_PUBLIC_USDC_CONTRACT` from the deployment manifest. Store `KEEPER_PRIVATE_KEY`, optional `ONECLICK_JWT` and optional `OUTLAYER_PAYMENT_KEY` as server-only secrets, supplied through stdin to `vercel env add NAME production --force --yes --sensitive`. Never upload either full-access deployment key or enable E2E wallet settings in production.
+
+Verify the hosted release with `BASE_URL=https://ketos-three.vercel.app pnpm --dir web exec playwright test --grep @smoke`. To exercise maintenance separately, send `POST /api/keeper/tick` and compare its depth timestamps and transaction hashes with the onchain views. A 429 response means the 60-second gate is active; respect its `Retry-After` header.
 
 ## Run locally
 
@@ -265,7 +271,7 @@ The deployment script completes read-only code/state/key compatibility checks be
 
 ### Multisource price worker
 
-[`workers/ketos-prices`](workers/ketos-prices) is a separate Rust WASI component deployed as [`ketos.testnet/ketos-prices`](https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices). Its pinned WASM hash and public endpoint are in [`deployments/worker-testnet.json`](deployments/worker-testnet.json). The V2 trading contract requests it onchain through [`worker_prices.rs`](contracts/ketos/src/worker_prices.rs); the hosted demo still uses the older four-market oracle path.
+[`workers/ketos-prices`](workers/ketos-prices) is a separate Rust WASI component deployed as [`ketos.testnet/ketos-prices`](https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices). Its pinned WASM hash and public endpoint are in [`deployments/worker-testnet.json`](deployments/worker-testnet.json). The V2 trading contract requests it onchain through [`worker_prices.rs`](contracts/ketos/src/worker_prices.rs).
 
 ```bash
 rustup target add wasm32-wasip2
@@ -303,7 +309,7 @@ Live verification on November 4, 2026 returned 16 fresh nonzero prices after bot
 
 The worker callback accepts only assets requested in its batch and registered with `outlayer_worker`. It requires a positive integer price at 8 decimals, at least two distinct named venues from Coinbase/Kraken/Binance, a nonzero timestamp no more than 120 seconds old and not in the future, and a timestamp strictly newer than that market's stored observation. Missing assets, malformed entries, `None` and failed requests do not overwrite or refresh the previous observation. Failed worker delivery does not block the separate TEE update. Price agreement is checked by the pinned worker; the callback cannot independently recompute it from the aggregated output.
 
-On November 4, 2026, all nine new assets returned real 1Click `dry` quotes for approximately $1,000 into USDC on NEAR. This establishes route availability at that size, not an open-interest allowance: new markets still start closed until the keeper publishes sufficient measured exit capacity. Local integration tests use `mock-oracle::request_execution` with owner-controlled failure/omission responses, not live exchange data. V2 is deployed on testnet; the hosted website remains on its previous version.
+On November 4, 2026, all nine new assets returned real 1Click `dry` quotes for approximately $1,000 into USDC on NEAR. This establishes route availability at that size, not an open-interest allowance: new markets still start closed until the keeper publishes sufficient measured exit capacity. Local integration tests use `mock-oracle::request_execution` with owner-controlled failure/omission responses, not live exchange data. V2 is deployed on testnet and used by the hosted website.
 
 
 
@@ -313,5 +319,5 @@ On November 4, 2026, all nine new assets returned real 1Click `dry` quotes for a
 - No cross-chain deposits or settlement: everything settles in one NEAR contract. NEAR Intents is used only to measure liquidity.
 - Liquidity is measured on mainnet 1Click quotes while trading runs on testnet, so caps reflect real markets but trades do not touch them.
 - The local sandbox and the end-to-end tests use a mock oracle with the same interface as the OutLayer one; prices there are set by the test.
-- The hosted demo measures four markets (BTC, ETH, NEAR, ZEC); the local keeper discovers the V2 registry (16 markets at deployment) and measures rotating batches of 8. Sandbox prices are mocked for all 16, but only the four markets with recorded depth start open. V2 testnet markets require live depth measurements before trading. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
+- The keeper discovers the V2 registry (16 markets at deployment) and measures rotating batches of 8, plus up to 4 never-measured markets outside the batch. Sandbox prices are mocked for all 16, but only the four markets with recorded depth start open. V2 testnet markets require live depth measurements before trading. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
 - The keeper runs from the app's tick endpoint or `pnpm keeper`; with nobody online, depth goes stale and markets close to new positions after 30 minutes. Closing an existing position needs an oracle price under 120 s old, and `refresh_prices` is open to any account.
