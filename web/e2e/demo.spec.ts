@@ -147,7 +147,11 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
 
   await test.step("6. vault: deposit 500 USDC as LP against live exposure", async () => {
     await openApp(page, "Vaults");
-    await expect(page).toHaveURL(/\/vault$/);
+    await expect(page).toHaveURL(/\/vaults$/);
+    await expect(page.getByTestId("vault-row-core")).toBeVisible();
+    await expect(page.getByTestId("vault-row-long-tail")).toBeVisible();
+    await page.getByTestId("vault-row-core").getByRole("link", { name: "Core" }).click();
+    await expect(page).toHaveURL(/\/vaults\/core$/);
     await expect(page.getByTestId("vault-nav")).toHaveText(/\$[\d,]+/);
     await expect(page.getByText("APR", { exact: false }).first()).toBeVisible();
     await expect(page.getByRole("region", { name: /exposure/i })).toContainText("NEAR");
@@ -157,6 +161,21 @@ test("demo journey: fund, trade under live caps, LP, liquidation, exit", async (
     await expectToast(page, /Deposited 500\.00 USDC into the vault/);
     await expect(page.getByTestId("tx-toast").filter({ hasText: /shares minted at/ })).toBeVisible();
     await expect(page.getByText("You have no vault shares yet.")).toBeHidden();
+    await page.getByRole("tab", { name: "Withdraw", exact: true }).click();
+    await expectSinglePrimary(page, /^Withdraw$/);
+    await page.getByRole("tab", { name: "Deposit", exact: true }).click();
+    await expectSinglePrimary(page, /Deposit to vault/);
+    const sharesRow = page.getByRole("region", { name: "Deposit or withdraw" }).getByText("Shares", { exact: true }).locator("..");
+    const coreShares = await sharesRow.locator("span").last().innerText();
+    await page.goto("/vaults/long-tail");
+    await expect(page.getByText("You have no vault shares yet.")).toBeVisible();
+    await expect(page.getByRole("region", { name: /exposure/i }).getByRole("link", { name: "NEAR", exact: true })).toHaveCount(0);
+    await page.locator("#vault-deposit").fill("100");
+    await page.locator("[data-primary]:visible").click();
+    await expectToast(page, /Deposited 100\.00 USDC into the vault/);
+    await expect(sharesRow).toContainText("100.00");
+    await page.goto("/vaults/core");
+    await expect(sharesRow.locator("span").last()).toHaveText(coreShares);
   });
 
   await test.step("7. liquidity: measured impact curves for the four assets", async () => {

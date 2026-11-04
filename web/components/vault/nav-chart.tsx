@@ -2,10 +2,8 @@
 
 import { useState, type PointerEvent } from "react";
 import { EmptyState, Skeleton } from "@/components/app/states";
-import { formatUtc } from "@/components/landing/live-time";
 import { formatUsd, usdcToNumber, USDC_UNIT } from "@/lib/near/format";
-import { cn } from "@/lib/utils";
-import type { NavPoint } from "./nav-history";
+import { formatHistoryTime, type HistoryPoint } from "./vault-history";
 
 const VIEW_W = 1000;
 const VIEW_H = 200;
@@ -20,23 +18,23 @@ function yDomain(values: number[]): [number, number] {
   return [min - pad, max + pad];
 }
 
-function Readout({ point, label }: { point: NavPoint; label: string }) {
+function Readout({ point, label, metric }: { point: HistoryPoint; label: string; metric: "nav" | "sharePrice" }) {
   return (
-    <span className="flex items-baseline gap-2 text-ui tabular-nums">
-      <span className="text-tertiary">{label}</span>
-      <span className="font-medium text-foreground">{formatUsd(point.nav)}</span>
+    <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-ui tabular-nums">
+      <span className="text-tertiary">{label}{point.live ? " · live" : " · snapshot"}</span>
+      <span className="font-medium text-foreground">{formatUsd(point[metric], { maxFractionDigits: metric === "nav" ? 2 : 6 })}</span>
       <span className="text-tertiary">
-        share {formatUsd(point.sharePrice, { maxFractionDigits: 4 })} · {formatUtc(point.t, true)}
+        {formatHistoryTime(point.t)}
       </span>
     </span>
   );
 }
 
-function Plot({ points }: { points: NavPoint[] }) {
+function Plot({ points, metric }: { points: HistoryPoint[]; metric: "nav" | "sharePrice" }) {
   const [hover, setHover] = useState<number | null>(null);
   const t0 = points[0].t;
   const t1 = points[points.length - 1].t;
-  const values = points.map((p) => usdcToNumber(p.nav));
+  const values = points.map((p) => usdcToNumber(p[metric]));
   const [y0, y1] = yDomain(values);
   const xFrac = (t: number) => (t1 === t0 ? 1 : (t - t0) / (t1 - t0));
   const yFrac = (v: number) => (y1 - v) / (y1 - y0);
@@ -60,13 +58,13 @@ function Plot({ points }: { points: NavPoint[] }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex min-h-5 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <Readout point={points[shown]} label={hover === null ? "Latest" : "At"} />
+        <Readout point={points[shown]} label={hover === null ? "Latest" : "At"} metric={metric} />
       </div>
       <div className="flex gap-3">
         <div className="flex h-56 w-20 shrink-0 flex-col justify-between text-right text-label text-tertiary tabular-nums">
-          <span>{formatUsd(toUnits(y1))}</span>
-          <span>{formatUsd(toUnits((y0 + y1) / 2))}</span>
-          <span>{formatUsd(toUnits(y0))}</span>
+          <span>{formatUsd(toUnits(y1), { maxFractionDigits: metric === "nav" ? 2 : 6 })}</span>
+          <span>{formatUsd(toUnits((y0 + y1) / 2), { maxFractionDigits: metric === "nav" ? 2 : 6 })}</span>
+          <span>{formatUsd(toUnits(y0), { maxFractionDigits: metric === "nav" ? 2 : 6 })}</span>
         </div>
         <div
           className="relative h-56 min-w-0 flex-1 touch-pan-y"
@@ -105,36 +103,28 @@ function Plot({ points }: { points: NavPoint[] }) {
         </div>
       </div>
       <div className="flex justify-between pl-23 text-label text-tertiary tabular-nums">
-        <span>{formatUtc(t0, true)}</span>
-        <span>{formatUtc(t1, true)}</span>
+        <span>{formatHistoryTime(t0)}</span>
+        <span className="text-right">{formatHistoryTime(t1)}</span>
       </div>
     </div>
   );
 }
 
-/** NAV as read by this browser tab; the contract keeps no NAV history. */
-export function NavChart({ points, loading, className }: { points: NavPoint[]; loading: boolean; className?: string }) {
+export function NavChart({ points, metric, loading }: { points: HistoryPoint[]; metric: "nav" | "sharePrice"; loading: boolean }) {
   const latest = points.at(-1);
   return (
-    <section aria-label="NAV since you opened this page" className={cn("flex min-w-0 flex-col gap-3", className)}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h3 className="text-ui font-medium text-foreground">NAV since you opened this page</h3>
-        <span className="text-label text-tertiary">read from the contract every 10 s while this tab is open</span>
-      </div>
-      {points.length >= 2 ? (
-        <Plot points={points} />
-      ) : loading || !latest ? (
-        <Skeleton className="h-72 w-full" />
+    <section aria-label={metric === "nav" ? "NAV history" : "Share price history"} className="flex min-w-0 flex-col gap-3 p-3">
+      {loading ? <Skeleton className="h-72 w-full" /> : points.length >= 2 ? (
+        <Plot points={points} metric={metric} />
       ) : (
         <div className="flex h-72 flex-col justify-center rounded-md border border-dashed border-border">
           <EmptyState>
-            <span className="text-foreground tabular-nums">
-              {formatUsd(latest.nav)} at {formatUtc(latest.t, true)}.
-            </span>{" "}
-            The contract keeps no NAV history, so this chart starts with your first read and adds a point every 10 s.
+            {latest ? <span className="text-foreground tabular-nums">{formatUsd(latest[metric], { maxFractionDigits: metric === "nav" ? 2 : 6 })} at {formatHistoryTime(latest.t)}. </span> : null}
+            Not enough observations to draw a history yet. The keeper records at most one snapshot per hour; missed hours are not backfilled.
           </EmptyState>
         </div>
       )}
+      <p className="text-label text-tertiary">Hourly onchain snapshots · up to 7 days · latest live read appended. NAV includes deposits and withdrawals; share price isolates performance per share.</p>
     </section>
   );
 }

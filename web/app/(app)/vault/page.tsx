@@ -1,8 +1,5 @@
-import type { Metadata } from "next";
-import { VaultView } from "@/components/vault/vault-view";
-
-export const metadata: Metadata = { title: "Vault" };
+import { redirect } from "next/navigation";
 
 export default function VaultPage() {
-  return <VaultView />;
+  redirect("/vaults/core");
 }

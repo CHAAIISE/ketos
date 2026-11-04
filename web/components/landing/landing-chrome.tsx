@@ -14,7 +14,7 @@ const navLinks = [
 
 const footerLinks = [
   { href: "/trade", label: "Trade" },
-  { href: "/vault", label: "Vault" },
+  { href: "/vaults", label: "Vaults" },
   { href: "/liquidity", label: "Liquidity" },
   { href: "/#how-it-works", label: "How it works" },
 ] as const;

@@ -167,6 +167,7 @@ function AccountMenu({ accountId }: { accountId: string }) {
   const account = useAccount();
   const positions = usePositions();
   const vault = useVaultAccount("core");
+  const longTail = useVaultAccount("long-tail");
   const funding = useFundingDialog();
   const [open, setOpen] = useState(false);
   const locked = positions.data?.reduce((sum, p) => sum + p.margin, 0n);
@@ -203,7 +204,8 @@ function AccountMenu({ accountId }: { accountId: string }) {
                 label="Margin"
                 value={account.data && locked !== undefined ? account.data.margin + locked : account.data?.margin}
               />
-              <BalanceRow label="Vault" value={vault.data?.value} />
+              <BalanceRow label="Core vault" value={vault.data?.value} />
+              <BalanceRow label="Long-tail vault" value={longTail.data?.value} />
             </dl>
             <div className="grid grid-cols-2 gap-2 px-4 pb-3">
               <Button size="sm" onClick={() => openFunding("deposit")}>

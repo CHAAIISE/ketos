@@ -12,7 +12,7 @@ import { useDepositVault, useWithdrawVault } from "@/hooks/use-ketos-mutations";
 import { useAccount, useVaultAccount } from "@/hooks/use-ketos-queries";
 import { toNearActionError } from "@/lib/near/errors";
 import { USDC_UNIT, formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
-import type { Vault, VaultAccount } from "@/lib/near/types";
+import type { Vault, VaultAccount, VaultId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { formatShares, sharesForDeposit, sharesForValue, toInputAmount, valueOfShares } from "./vault-math";
 
@@ -318,15 +318,17 @@ const tabClass =
 
 export function VaultTicket({
   vault,
+  vaultId,
   loading,
   className,
 }: {
   vault: Vault | undefined;
+  vaultId: VaultId;
   loading: boolean;
   className?: string;
 }) {
   const wallet = useWallet();
-  const position = useVaultAccount("core");
+  const position = useVaultAccount(vaultId);
   const [mode, setMode] = useState<Mode>("deposit");
   const signedIn = wallet.accountId !== null;
 
@@ -348,10 +350,14 @@ export function VaultTicket({
           {vault ? (
             <>
               <Tabs.Panel value="deposit">
-                <DepositForm vault={vault} signedIn={signedIn} />
+                {mode === "deposit" ? <DepositForm vault={vault} signedIn={signedIn} /> : null}
               </Tabs.Panel>
               <Tabs.Panel value="withdraw">
-                <WithdrawForm vault={vault} position={position.data} signedIn={signedIn} />
+                {mode !== "withdraw" ? null : position.isError ? (
+                  <p role="alert" className="text-ui text-destructive">Your shares could not be read. Retry below before withdrawing.</p>
+                ) : (
+                  <WithdrawForm vault={vault} position={position.data} signedIn={signedIn} />
+                )}
               </Tabs.Panel>
             </>
           ) : loading ? (
@@ -369,7 +375,7 @@ export function VaultTicket({
         </div>
       </Tabs.Root>
       <div className="flex flex-col gap-2 border-t border-border p-3">
-        <h2 className="text-label text-tertiary">Your position</h2>
+        <h2 className="text-ui font-medium text-foreground">Your deposits</h2>
         {vault ? (
           <PositionSummary vault={vault} signedIn={signedIn} />
         ) : loading ? (

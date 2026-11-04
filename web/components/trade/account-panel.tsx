@@ -25,6 +25,7 @@ function Balances() {
   const account = useAccount();
   const positions = usePositions();
   const vault = useVaultAccount("core");
+  const longTail = useVaultAccount("long-tail");
   const funding = useFundingDialog();
 
   if (account.isPending) return <Skeleton className="m-3 h-24" />;
@@ -71,17 +72,22 @@ function Balances() {
               </Button>
             </td>
           </tr>
-          <tr className="h-9 border-t border-border">
-            <th scope="row" className="px-3 text-left font-normal">Vault shares</th>
-            <td className="px-3 text-right">{vault.data ? formatShares(vault.data.shares) : "—"}</td>
-            <td className="px-3 text-right">{vault.data ? formatShares(vault.data.shares) : "—"}</td>
-            <td className="px-3 text-right">{vault.data ? formatUsd(vault.data.value) : "—"}</td>
-            <td className="px-3 text-right">
-              <Link href="/vault" className="text-foreground underline-offset-4 hover:underline">
-                Manage on Vaults
-              </Link>
-            </td>
-          </tr>
+          {[
+            { id: "core", label: "Core", query: vault },
+            { id: "long-tail", label: "Long-tail", query: longTail },
+          ].map(({ id, label, query }) => (
+            <tr key={id} className="h-9 border-t border-border">
+              <th scope="row" className="px-3 text-left font-normal">{label} vault shares</th>
+              <td className="px-3 text-right">{query.data ? formatShares(query.data.shares) : "—"}</td>
+              <td className="px-3 text-right text-tertiary" title="Withdrawals depend on the vault's unreserved liquidity">Subject to reserves</td>
+              <td className="px-3 text-right">{query.data ? formatUsd(query.data.value) : "—"}</td>
+              <td className="px-3 text-right">
+                <Link href={`/vaults/${id}`} className="text-foreground underline-offset-4 hover:underline">
+                  Manage on Vaults
+                </Link>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

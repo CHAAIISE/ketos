@@ -1,12 +1,13 @@
 "use client";
 
 import type { UseQueryResult } from "@tanstack/react-query";
+import Link from "next/link";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { STALE_AFTER_MS, formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { Badge } from "@/components/ui/badge";
 import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
-import { MARKET_IDS, type Market } from "@/lib/near/types";
+import type { Market, VaultId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { PanelHeading } from "./panel-heading";
 import { Term } from "./term";
@@ -55,9 +56,9 @@ function MeasuredAt({ markets }: { markets: Market[] }) {
   );
 }
 
-export function ExposureTable({ query, className }: { query: UseQueryResult<Market[]>; className?: string }) {
+export function ExposureTable({ query, vaultId, className }: { query: UseQueryResult<Market[]>; vaultId: VaultId; className?: string }) {
   const panel = cn("flex min-w-0 flex-col rounded-md border border-border bg-card", className);
-  const markets = query.data;
+  const markets = query.data?.filter((market) => market.vault_id === vaultId);
 
   return (
     <section aria-labelledby="exposure-title" className={panel}>
@@ -65,8 +66,8 @@ export function ExposureTable({ query, className }: { query: UseQueryResult<Mark
         Net exposure vs exit capacity
       </PanelHeading>
       <p className="px-3 pt-2 pb-1 text-label text-tertiary">
-        Open interest (total size of open positions) on each side. The vault holds the opposite of the net: when traders
-        are net long, the vault is short, and it can only hedge or unwind what NEAR Intents can absorb.
+        Open interest (total size of open positions) on each side. The vault holds the opposite of traders&apos; net exposure.
+        Exit capacity is a measured market limit, not a hedge held by the vault.
       </p>
       {query.isError && !markets ? (
         <div className="p-3">
@@ -101,7 +102,7 @@ export function ExposureTable({ query, className }: { query: UseQueryResult<Mark
                     <tr key={m.id} className="h-8 hover:bg-muted/40">
                       <th scope="row" className="px-3 text-left font-medium text-foreground">
                         <span className="inline-flex items-center gap-2">
-                          {m.id}
+                          <Link href={`/trade?market=${m.id}`} className="hover:underline">{m.id}</Link>
                           {m.is_open ? null : <Badge variant="warning">paused</Badge>}
                         </span>
                       </th>
@@ -117,8 +118,8 @@ export function ExposureTable({ query, className }: { query: UseQueryResult<Mark
                       </td>
                     </tr>
                   ))
-                : MARKET_IDS.map((id) => (
-                    <tr key={id} className="h-8">
+                : Array.from({ length: 4 }, (_, i) => (
+                    <tr key={i} className="h-8">
                       <td colSpan={COLUMNS.length + 1} className="px-3">
                         <Skeleton className="h-4 w-full" />
                       </td>

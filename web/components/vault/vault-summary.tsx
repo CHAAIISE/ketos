@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
@@ -8,7 +9,7 @@ import { useWallet } from "@/hooks/near-provider";
 import { useVaultAccount } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
 import { formatBps, formatUsd } from "@/lib/near/format";
-import type { Vault } from "@/lib/near/types";
+import type { Vault, VaultId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { Term } from "./term";
 import { formatShares } from "./vault-math";
@@ -20,7 +21,7 @@ export function ReadAt({ at, failing }: { at: number; failing: boolean }) {
   return (
     <span className={cn("flex items-center gap-2 text-label tabular-nums", failing ? "text-warning" : "text-tertiary")}>
       <span aria-hidden className={cn("size-1.5 rounded-pill", failing ? "bg-warning" : "bg-success")} />
-      {failing ? "Last read" : `Live from ${networkName()} · read`} {formatUtc(at, true)}
+      {failing ? "Last read" : "Live · read"} {formatUtc(at, true)}
       {age ? ` · ${age}` : null}
       {failing ? " · retrying" : null}
     </span>
@@ -38,9 +39,9 @@ export function HeaderStat({ label, children }: { label: ReactNode; children: Re
 }
 
 /** Value of the signed-in account's vault shares; a dash while signed out. */
-function YourDeposit() {
+function YourDeposit({ vaultId }: { vaultId: VaultId }) {
   const wallet = useWallet();
-  const position = useVaultAccount("core");
+  const position = useVaultAccount(vaultId);
   if (wallet.accountId === null) return <>—</>;
   if (position.isPending) return <Skeleton className="h-6 w-20" />;
   if (position.isError) return <span className="text-tertiary">—</span>;
@@ -49,13 +50,14 @@ function YourDeposit() {
 
 const panel = "flex min-w-0 flex-col gap-4 rounded-md border border-border bg-card p-4";
 
-export function VaultHeader({ query }: { query: UseQueryResult<Vault> }) {
+export function VaultHeader({ query, vaultId }: { query: UseQueryResult<Vault>; vaultId: VaultId }) {
   const vault = query.data;
   return (
     <section aria-label="Vault overview" className={panel}>
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between md:gap-6">
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-heading text-foreground">Ketos LP Vault</h1>
+          <Link href="/vaults" className="mb-1 text-label text-muted-foreground hover:text-foreground">← All vaults</Link>
+          <h1 className="text-heading text-foreground">{vaultId === "core" ? "Core" : "Long-tail"} Vault</h1>
           <p className="text-ui text-muted-foreground">
             Provide USDC and earn trading fees. You take the other side of traders.
           </p>
@@ -66,7 +68,7 @@ export function VaultHeader({ query }: { query: UseQueryResult<Vault> }) {
         <dl className="flex flex-wrap gap-x-10 gap-y-4">
           <HeaderStat
             label={
-              <Term hint="Total value locked, measured as the vault's net asset value: its USDC balance, minus what traders are winning, plus borrow fees they owe.">
+              <Term hint="Net asset value: accounting assets minus traders' unrealized PnL, plus borrow fees and net funding due. Cross receivables are included but cannot fund withdrawals.">
                 TVL
               </Term>
             }
@@ -75,15 +77,15 @@ export function VaultHeader({ query }: { query: UseQueryResult<Vault> }) {
           </HeaderStat>
           <HeaderStat
             label={
-              <Term hint="Fee APR: fees earned over the trailing 7 days (trading, borrow and liquidation fees), annualized over NAV. Past fees, not a promise.">
-                APR
+              <Term hint="Fees over the trailing 7 UTC days (trading, borrow, liquidation and listing), annualized over current NAV. Excludes funding and trader PnL. Not a promised return.">
+                Fee APR · 7D
               </Term>
             }
           >
             {formatBps(vault.fee_apr_bps)}
           </HeaderStat>
           <HeaderStat label="Your Deposit">
-            <YourDeposit />
+            <YourDeposit vaultId={vaultId} />
           </HeaderStat>
           <HeaderStat
             label={<Term hint="NAV divided by the number of vault shares. It rises with fees and trader losses.">Share Price</Term>}
@@ -181,6 +183,8 @@ export function PerformanceStats({ query, className }: { query: UseQueryResult<V
           value={formatUsd(vault.borrow_fees_due)}
         />
         <Stat label="Fees, last 7 days" value={formatUsd(vault.fees_7d)} />
+        <Stat label="Net funding due" value={formatUsd(vault.funding_net_due, { signed: true })} />
+        <Stat label="Cross receivables" value={formatUsd(vault.cross_receivable)} />
         <Stat label="Total shares" value={formatShares(vault.total_shares)} />
       </dl>
     </div>
