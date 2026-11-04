@@ -29,6 +29,8 @@ Above $100k, no solver quotes the trade at all. A market that lets traders open 
 
   The sandbox uses mock prices but real, read-only 1Click quotes, so this journey needs network access. Its price-drop scene reads the position's onchain liquidation threshold rather than assuming a fixed liquidity tier. Deployment smoke covers `/`, `/markets`, `/trade`, `/vaults`, `/risk` and `/leaderboard`, with automatic keeper requests blocked before they reach the server.
 
+The hosted app is not a seeded trading session: screenshots show the current contract state, including empty account history, an empty leaderboard and markets closed by liquidity or price-freshness checks. A filled-in order ticket is only a preview until a wallet signs and the contract accepts it. Use the local journey above to reproduce the completed trading and liquidation scenes; the hosted app never overrides live safety checks for a demo.
+
 ### Try it (NEAR testnet)
 
 1. Open https://ketos-three.vercel.app - see live exit capacity for BTC, ETH, NEAR and ZEC, with the time of the last measurement.
