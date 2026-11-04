@@ -1,23 +1,20 @@
 import { Account, KeyPairSigner, teraToGas, type KeyPairString } from "near-api-js";
+import { z } from "zod";
 import { sampleAsset } from "../intents/depth";
-import { getTokens, ORIGIN_ASSETS } from "../intents/oneclick";
+import { getTokens } from "../intents/oneclick";
 import { nearConfig } from "../near/config";
-import { MARKET_IDS } from "../near/types";
+import { orderExecutionSchema } from "../near/types";
+import { settleOutcome } from "../near/tx";
 import { KetosViews } from "../near/views";
 import type { DepthSource, KeeperChain } from "./tick";
 
-/**
- * Keeper transactions, signed with the function-call key restricted to `refresh_prices`,
- * `set_depth` and `liquidate` on the perps contract. The keeper account is read from the
- * contract config, so only the private key is needed.
- */
+/** The signer is restricted to the seven maintenance methods on the configured contract. */
 export async function keeperChain(privateKey: string): Promise<KeeperChain> {
   const { rpcUrl, ketosContract, usdcContract } = nearConfig();
   const views = new KetosViews(rpcUrl, ketosContract, usdcContract);
   const { keeper_id } = await views.config();
   const keeper = new Account(keeper_id, views.provider, KeyPairSigner.fromSecretKey(privateKey as KeyPairString));
 
-  // Waits for every receipt (the oracle callback included) so the next read sees the result.
   const call = async (methodName: string, args: Record<string, unknown>, tgas: number) => {
     const outcome = await keeper.callFunctionRaw({
       contractId: ketosContract,
@@ -26,37 +23,57 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
       gas: teraToGas(tgas),
       waitUntil: "EXECUTED_OPTIMISTIC",
     });
-    return outcome.transaction.hash;
+    // A successful outer transaction can hide a failed oracle receipt.
+    const result = settleOutcome(outcome);
+    return { tx: outcome.transaction.hash, value: result.value };
   };
 
   return {
     markets: () => views.markets(),
     openPositions: () => views.allOpenPositions(),
-    ketosBalanceYocto: () => views.nearBalance(ketosContract),
-    setDepth: (market, samples, measuredAtMs) =>
-      call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30),
-    refreshPrices: () => call("refresh_prices", {}, 300),
-    liquidate: (positionId) => call("liquidate", { position_id: positionId }, 50),
+    openOrders: () => views.allOpenOrders(),
+    crossAccount: (accountId) => views.crossAccount(accountId),
+    lastSnapshotMs: async () => (await views.vaultHistory("core")).at(-1)?.timestamp_ms ?? null,
+    ketosBalanceYocto: async () => {
+      const state = await views.provider.viewAccount({ accountId: ketosContract });
+      const spendable = BigInt(state.amount) - BigInt(state.storage_usage) * 10n ** 19n;
+      return spendable > 0n ? spendable : 0n;
+    },
+    setDepth: async (market, samples, measuredAtMs) =>
+      (await call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30)).tx,
+    refreshPrices: async () => (await call("refresh_prices", {}, 300)).tx,
+    executeOrders: async (ids) => {
+      const { tx, value } = await call("execute_orders", { ids }, 250);
+      return { tx, results: z.array(orderExecutionSchema).parse(value) };
+    },
+    liquidate: async (positionId) => (await call("liquidate", { position_id: positionId }, 50)).tx,
+    liquidateCross: async (accountId) => (await call("liquidate_cross", { account_id: accountId }, 150)).tx,
+    settleFunding: async (marketId) => (await call("settle_funding", { market_id: marketId }, 10)).tx,
+    snapshotVaults: async () => (await call("snapshot_vaults", {}, 50)).tx,
   };
 }
 
-/** Dry 1Click quotes (mainnet, read-only) into USDC on NEAR for every market. */
+/** Dry mainnet quotes. Registry asset IDs include permissionless listings and NEP-245 routes. */
 export function oneClickDepthSource(jwt: string | undefined): DepthSource {
+  const fetchWithDeadline: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(10_000) });
   return {
-    async sample() {
+    async sample(markets) {
       let tokens;
       try {
-        tokens = await getTokens({ jwt });
+        tokens = await getTokens({ jwt, fetchImpl: fetchWithDeadline });
       } catch (e) {
         const error = `1Click token list unavailable: ${e instanceof Error ? e.message : String(e)}`;
-        return MARKET_IDS.map((market) => ({ market, error }));
+        return markets.map(({ id: market }) => ({ market, error }));
       }
-      const results = await Promise.allSettled(MARKET_IDS.map((market) => sampleAsset(ORIGIN_ASSETS[market], { tokens, jwt })));
-      return results.map((r, i) =>
-        r.status === "fulfilled"
-          ? { market: MARKET_IDS[i], samples: r.value.samples }
-          : { market: MARKET_IDS[i], error: r.reason instanceof Error ? r.reason.message : String(r.reason) },
-      );
+      return Promise.all(markets.map(async (market) => {
+        const measuredAtMs = Date.now();
+        try {
+          const curve = await sampleAsset(market.intents_asset_id, { tokens, jwt, fetchImpl: fetchWithDeadline });
+          return { market: market.id, samples: curve.samples, measuredAtMs };
+        } catch (e) {
+          return { market: market.id, error: e instanceof Error ? e.message : String(e) };
+        }
+      }));
     },
   };
 }

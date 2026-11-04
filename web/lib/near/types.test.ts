@@ -15,6 +15,7 @@ import {
 const market = {
   id: "BTC",
   oracle_asset_id: "wrap.testnet",
+  intents_asset_id: "nep141:btc.omft.near",
   hard_cap: "5000000000000",
   exit_capacity: "2500000000000",
   depth_measured_at_ms: 1793721000000,
@@ -35,6 +36,7 @@ const position = {
   account_id: "alice.testnet",
   market_id: "ETH",
   side: "short",
+  margin_mode: "isolated",
   margin: "99900000",
   size: "1000000000",
   entry_price: "345012000000",

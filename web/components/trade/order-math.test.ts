@@ -9,6 +9,7 @@ function market(overrides: Partial<Market> = {}): Market {
   return {
     id: "NEAR",
     oracle_asset_id: "wrap.near",
+    intents_asset_id: "nep141:wrap.near",
     hard_cap: 500_000n * USD,
     exit_capacity: 100_000n * USD,
     depth_measured_at_ms: 0,

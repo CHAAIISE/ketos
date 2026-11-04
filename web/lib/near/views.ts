@@ -3,13 +3,16 @@ import { z } from "zod";
 import {
   accountSchema,
   configSchema,
+  crossAccountSchema,
   depthViewSchema,
   liquidationSchema,
   marketSchema,
+  orderSchema,
   positionSchema,
   priceSchema,
   vaultAccountSchema,
   vaultSchema,
+  vaultSnapshotSchema,
   type MarketId,
 } from "./types";
 
@@ -89,6 +92,26 @@ export class KetosViews {
       all.push(...page);
       if (page.length < OPEN_POSITIONS_PAGE) return all;
     }
+  }
+
+  async allOpenOrders() {
+    const all = [];
+    for (let from = 0; ; from += OPEN_POSITIONS_PAGE) {
+      const page = await this.view(z.array(orderSchema), this.ketosContract, "get_open_orders", {
+        from_index: from,
+        limit: OPEN_POSITIONS_PAGE,
+      });
+      all.push(...page);
+      if (page.length < OPEN_POSITIONS_PAGE) return all;
+    }
+  }
+
+  crossAccount(accountId: string) {
+    return this.view(crossAccountSchema, this.ketosContract, "get_cross_account", { account_id: accountId });
+  }
+
+  vaultHistory(vaultId: "core" | "long-tail") {
+    return this.view(z.array(vaultSnapshotSchema), this.ketosContract, "get_vault_history", { vault_id: vaultId });
   }
 
   depth(marketId: MarketId) {

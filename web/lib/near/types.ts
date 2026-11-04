@@ -21,6 +21,7 @@ export type KetosConfig = z.infer<typeof configSchema>;
 export const marketSchema = z.object({
   id: marketIdSchema,
   oracle_asset_id: z.string(),
+  intents_asset_id: z.string(),
   hard_cap: u128,
   exit_capacity: u128,
   depth_measured_at_ms: z.number(),
@@ -50,6 +51,7 @@ export const positionSchema = z.object({
   account_id: z.string(),
   market_id: marketIdSchema,
   side: sideSchema,
+  margin_mode: z.enum(["isolated", "cross"]),
   margin: u128,
   size: u128,
   entry_price: u128,
@@ -139,3 +141,61 @@ export type VaultAccount = z.infer<typeof vaultAccountSchema>;
 export function isLiquidatable(position: Pick<Position, "equity" | "maintenance_margin">): boolean {
   return position.equity <= position.maintenance_margin;
 }
+
+export const entryOrderSchema = z.object({
+  market_id: marketIdSchema,
+  side: sideSchema,
+  margin: u128,
+  leverage: z.number(),
+  trigger_price: u128,
+  margin_mode: z.enum(["isolated", "cross"]),
+  brackets: z.object({ take_profit: u128.nullable(), stop_loss: u128.nullable() }).nullable(),
+});
+
+export const orderSchema = z.object({
+  id: z.number(),
+  account_id: z.string(),
+  created_at_ms: z.number(),
+  request: z.discriminatedUnion("kind", [
+    entryOrderSchema.extend({ kind: z.literal("limit") }),
+    entryOrderSchema.extend({ kind: z.literal("stop_market") }),
+    z.object({ kind: z.literal("take_profit"), position_id: z.number(), trigger_price: u128 }),
+    z.object({ kind: z.literal("stop_loss"), position_id: z.number(), trigger_price: u128 }),
+  ]),
+});
+export type Order = z.infer<typeof orderSchema>;
+
+export const orderExecutionSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("skipped"), order_id: z.number() }),
+  z.object({ status: z.literal("filled"), order_id: z.number(), position_id: z.number(), price: u128 }),
+  z.object({ status: z.literal("rejected"), order_id: z.number(), reason: z.string() }),
+]);
+export type OrderExecution = z.infer<typeof orderExecutionSchema>;
+
+export const crossAccountSchema = z.object({
+  account_id: z.string(),
+  cash: i128,
+  equity: i128,
+  maintenance_margin: u128,
+  health_bps: i128.nullable(),
+  position_count: z.number(),
+  prices_fresh: z.boolean(),
+  liquidatable: z.boolean(),
+  debt_by_vault: z.tuple([u128, u128]),
+});
+export type CrossAccount = z.infer<typeof crossAccountSchema>;
+
+export const vaultSnapshotSchema = z.object({
+  timestamp_ms: z.number(),
+  nav: u128,
+  share_price: u128,
+  tvl: u128,
+  revenue: z.object({
+    fees: u128,
+    funding: i128,
+    trader_pnl: i128,
+    liquidations: u128,
+    listing: u128,
+  }),
+});
+export type VaultSnapshot = z.infer<typeof vaultSnapshotSchema>;

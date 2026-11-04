@@ -99,7 +99,7 @@ Separate cumulative debit and credit indexes preserve past payments when the imb
 - `get_vault` includes `funding_net_due` in NAV and reserves gross funding credits in addition to maximum price gains. Funding losses from insolvent positions are borne by the vault, like price losses. The fee APR still covers trading fees, borrow fees and liquidation penalties, not funding.
 - `funding_accrued` events report public checkpoints; `funding_settled` events and close/liquidation records report the assessed position debits and credits included in settlement.
 
-Funding is available on the V2 contract. The hosted four-market demo still uses its original contract and does not expose funding; its keeper and funding UI have not been cut over.
+Funding is available on the V2 contract and checkpointed by the local keeper. The hosted four-market demo still uses its original contract and does not expose funding; its deployed client and keeper have not been cut over.
 
 ### Triggered orders on fresh deployments
 
@@ -111,7 +111,7 @@ Funding is available on the V2 contract. The hosted four-market demo still uses 
 - `open_position` and entry orders accept optional `brackets: { "take_profit": "...", "stop_loss": "..." }`. Targets must be on the appropriate side of the entry price. Pending entries create exits only after filling; a price gap past an attached target rejects the entry. Each position allows one TP and one SL. Closing or liquidating a position cancels both; executing either exit cancels its sibling.
 - `get_orders({ "account_id": "..." })` returns active orders; `get_open_orders({ "from_index": 0, "limit": 100 })` supports executor discovery. Accounts hold at most 50 active orders, execution batches at most 50 ids. Order placement, cancellation, fill and rejection emit onchain events.
 
-These methods are available on the V2 contract. The hosted demo's order controls and existing keeper have not been switched to them yet.
+These methods are available on the V2 contract and executed by the local keeper. The hosted demo's deployed order controls and keeper remain on their previous version.
 
 ### Cross margin on fresh deployments
 
@@ -126,7 +126,7 @@ These methods are available on the V2 contract. The hosted demo's order controls
 
 Position views expose `margin_mode`. Cross `liquidation_price` is zero because a standalone trigger price is not defined; use account health instead. `close_position` returns the positive part of its settlement credit; the close event carries the signed `payout`, and `get_cross_account` is the authoritative pool state. Liquidation records' `returned` likewise reports only a positive credit, not immediately withdrawable free margin.
 
-Cross margin is available on the V2 contract. The hosted demo still uses the older isolated-only contract; cross-aware views, controls and keeper scanning are not yet enabled there. The V2 keeper key includes `liquidate_cross`; the executor must use aggregate account health before calling it.
+Cross margin is available on the V2 contract. The local keeper uses `get_cross_account` before `liquidate_cross`, never individual leg equity. The hosted demo still uses the older isolated-only contract; its deployed views, controls and keeper remain unchanged.
 
 
 ### Isolated vaults on fresh deployments
@@ -155,7 +155,20 @@ These views are available on the V2 contract. The hosted demo and its client scr
 
 All math is integer (USDC 6 decimals, prices 8 decimals) and rounds in the vault's favour. The contract code is in [the contract crate](contracts/ketos/src/) (`position.rs`, `funding.rs`, `depth.rs`, `liquidation.rs`, `vault.rs`, `oracle.rs`).
 
-The V2 keeper signs with a function-call key limited to `refresh_prices`, `set_depth`, `liquidate`, `liquidate_cross`, `execute_orders`, `settle_funding` and `snapshot_vaults` on `ketos.testnet` ([`scripts/deploy-testnet.ts`](scripts/deploy-testnet.ts)). Integration tests exercise all seven methods and reject other contract methods, receivers, attached deposits and native transfers. The existing [`web keeper`](web/lib/keeper/) still executes only the original three methods until its V2 update.
+The [`keeper`](web/lib/keeper/) signs with a function-call key limited to `refresh_prices`, `set_depth`, `liquidate`, `liquidate_cross`, `execute_orders`, `settle_funding` and `snapshot_vaults` on `ketos.testnet` ([`scripts/deploy-testnet.ts`](scripts/deploy-testnet.ts)). Integration tests exercise all seven methods and reject other contract methods, receivers, attached deposits and native transfers.
+
+### Keeper operation
+
+`pnpm keeper --once` prints one JSON summary; without `--once`, it runs at most once a minute. `POST /api/keeper/tick` shares the same executor and adds an in-process lock plus a 60-second gate against the latest onchain depth timestamp.
+
+- Markets and their exact Intents asset IDs come from the paginated registry, not a ticker allowlist. Each tick samples at most 8 markets in rotating UTC-minute slots (`floor(unix_ms / 60000) mod ceil(markets / 8)`). Keep ticks running across all slots to refresh the full registry; a missed slot waits for the next cycle. Seven quotes per market run sequentially, with at most 8 markets in flight and a 10-second deadline per HTTP request. Missing routes and API failures are reported, not converted into fabricated zero-impact curves; genuine “No liquidity” samples remain null. Measurement timestamps precede quotes, not publication.
+- Every listed market gets a funding checkpoint. `refresh_prices` then waits for the TEE and pinned OutLayer worker callbacks before scanning orders. This deployment uses those two adapters, not a signed-price fallback.
+- Fresh, triggered Limit, Stop Market, TP and SL orders execute in batches of 5 at the current oracle price. Results distinguish fills, skips and rejected entries whose reserved margin the contract refunds. Positions are re-read after execution, so a stop already closed cannot be liquidated from a cached view.
+- Isolated liquidation uses fresh price and equity ≤ maintenance. Cross accounts are deduplicated and checked through `get_cross_account`, including settled cash, every peer and aggregate price freshness. One underwater leg of a healthy pool is left alone; the contract chooses partial liquidation order and stops on recovery.
+- Both vaults receive a snapshot only when the last onchain snapshot is at least 1 hour old, or no snapshot exists. Restarting the process does not reset the interval.
+- Transactions are serial and failures are reported per step. Oracle receipt failures count even when the outer transaction succeeds. The cost guard refuses the entire tick below 2 NEAR of **spendable** contract balance after storage staking. No full-access deployment key is loaded.
+
+The HTTP route allows up to 300 seconds for quotes and maintenance. Its in-memory lock is not a distributed lease: separate serverless instances can race, especially before the first depth publication. Onchain methods recheck execution conditions; snapshots and orders remain idempotent or reject races, but duplicate oracle requests can still cost NEAR. The hosted website will use this executor only after its next deployment.
 
 ## Why it matters
 
@@ -208,7 +221,7 @@ Against testnet:
 cp .env.example .env.local      # KETOS_PRIVATE_KEY for ketos.testnet; optional ONECLICK_JWT
 bash scripts/deploy-testnet.sh  # idempotent: ketos.testnet, token/keeper subaccounts, vault seed
 pnpm depth:sample               # print today's exit-liquidity table and save it as JSON
-pnpm keeper --once              # one keeper tick: depth, prices, liquidations
+pnpm keeper --once              # JSON: depth batch, prices, funding, orders, liquidations, snapshots
 pnpm --dir web dev
 ```
 
@@ -264,5 +277,5 @@ On November 4, 2026, all nine new assets returned real 1Click `dry` quotes for a
 - No cross-chain deposits or settlement: everything settles in one NEAR contract. NEAR Intents is used only to measure liquidity.
 - Liquidity is measured on mainnet 1Click quotes while trading runs on testnet, so caps reflect real markets but trades do not touch them.
 - The local sandbox and the end-to-end tests use a mock oracle with the same interface as the OutLayer one; prices there are set by the test.
-- The hosted demo and existing keeper measure four markets (BTC, ETH, NEAR, ZEC); the V2 testnet contract lists 16. Sandbox prices are mocked for all 16, but only the four markets with recorded depth start open. V2 testnet markets require live depth measurements before trading. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
+- The hosted demo measures four markets (BTC, ETH, NEAR, ZEC); the local keeper discovers the V2 registry (16 markets at deployment) and measures rotating batches of 8. Sandbox prices are mocked for all 16, but only the four markets with recorded depth start open. V2 testnet markets require live depth measurements before trading. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
 - The keeper runs from the app's tick endpoint or `pnpm keeper`; with nobody online, depth goes stale and markets close to new positions after 30 minutes. Closing an existing position needs an oracle price under 120 s old, and `refresh_prices` is open to any account.
