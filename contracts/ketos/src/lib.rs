@@ -7,6 +7,7 @@
 pub mod account;
 pub mod depth;
 pub mod funding;
+pub mod history;
 pub mod liquidation;
 pub mod listing;
 pub mod market;
@@ -19,13 +20,14 @@ pub mod vault;
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::{json, Value};
-use near_sdk::store::{IterableMap, LookupMap, Vector};
+use near_sdk::store::{IterableMap, LookupMap, TreeMap, Vector};
 use near_sdk::{
     env, log, near, require, AccountId, BorshStorageKey, PanicOnDefault, PromiseOrValue,
 };
 
 use account::Account;
 use depth::DepthRecord;
+use history::{AccountStats, HistoryEvent};
 use liquidation::LiquidationRecord;
 use market::{default_markets, Market, MarketId, VaultId};
 use orders::{Order, OrderId};
@@ -47,6 +49,11 @@ enum StorageKey {
     OracleMarkets,
     Orders,
     VaultHistory { vault_id: VaultId },
+    AccountStats,
+    AccountHistory,
+    ActiveTraders,
+    PnlRanking,
+    VolumeRanking,
 }
 
 #[near(serializers = [json])]
@@ -80,6 +87,12 @@ pub struct Ketos {
     vault_history: [Vector<VaultSnapshot>; 2],
     vault_snapshot_count: u64,
     last_snapshot_at_ms: Option<u64>,
+    account_stats: LookupMap<AccountId, AccountStats>,
+    account_history: LookupMap<(AccountId, u16), HistoryEvent>,
+    active_traders: TreeMap<(u64, AccountId), ()>,
+    pnl_ranking: TreeMap<(i128, AccountId), ()>,
+    volume_ranking: TreeMap<(u128, AccountId), ()>,
+    trader_activity_count: u64,
 }
 
 #[near]
@@ -111,6 +124,12 @@ impl Ketos {
             ],
             vault_snapshot_count: 0,
             last_snapshot_at_ms: None,
+            account_stats: LookupMap::new(StorageKey::AccountStats),
+            account_history: LookupMap::new(StorageKey::AccountHistory),
+            active_traders: TreeMap::new(StorageKey::ActiveTraders),
+            pnl_ranking: TreeMap::new(StorageKey::PnlRanking),
+            volume_ranking: TreeMap::new(StorageKey::VolumeRanking),
+            trader_activity_count: 0,
         };
         for config in default_markets() {
             contract.register_market(config);

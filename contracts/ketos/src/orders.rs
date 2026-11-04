@@ -2,6 +2,7 @@ use near_sdk::json_types::U128;
 use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId};
 
+use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::{MarketId, MAX_PRICE_AGE_MS};
 use crate::math::trade_fee;
 use crate::position::{Position, PositionId, Side, MIN_POSITION_MARGIN};
@@ -393,6 +394,13 @@ impl Ketos {
             }
             let price = market.price.0;
             if !order.request.triggered(side, price) { return skipped; }
+            let fill_market = market_id.clone();
+            let fill_size = if let Some(entry) = order.request.entry() {
+                // Opening admission checks overflow before any fill is recorded.
+                entry.margin.0.saturating_mul(entry.leverage as u128)
+            } else {
+                self.positions.get(&order.request.position_id().unwrap()).unwrap().size
+            };
             let order = self.remove_order(id).unwrap();
             let position_id = match order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
@@ -409,6 +417,23 @@ impl Ketos {
                     position_id
                 }
             };
+            self.record_history(&order.account_id, HistoryEvent {
+                sequence: 0,
+                kind: HistoryKind::OrderFill,
+                position_id,
+                order_id: Some(id),
+                market_id: fill_market,
+                side,
+                price: U128(price),
+                size: U128(fill_size),
+                pnl: near_sdk::json_types::I128(0),
+                realized_pnl: near_sdk::json_types::I128(0),
+                fees: U128(0),
+                funding_paid: U128(0),
+                funding_received: U128(0),
+                funding_payment: near_sdk::json_types::I128(0),
+                timestamp_ms: now_ms,
+            });
             emit_event("order_filled", json!({ "order_id": id, "account_id": order.account_id, "position_id": position_id, "price": U128(price), "executor": env::predecessor_account_id() }));
             OrderExecution::Filled { order_id: id, position_id, price: U128(price) }
         }).collect()

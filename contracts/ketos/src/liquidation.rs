@@ -5,6 +5,7 @@ use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId};
 
+use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::MarketId;
 use crate::math::{mul_div_ceil, mul_div_floor, BPS};
 use crate::position::{fees_covered, realized_funding, PositionId, Side};
@@ -96,6 +97,10 @@ impl Ketos {
                 .or_default()
                 .margin += reward;
         }
+        let event = HistoryEvent::position(
+            HistoryKind::Liquidation, position_id, &position, price, now_ms,
+        );
+        self.record_exit(event, &position, &marked, returned, borrow_paid + penalty + reward);
 
         let record = LiquidationRecord {
             position_id,

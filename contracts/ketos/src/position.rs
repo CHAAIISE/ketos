@@ -3,6 +3,7 @@ use near_sdk::serde_json::json;
 use near_sdk::{env, near, require, AccountId};
 
 use crate::funding::side_index;
+use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::{Market, MarketId, USD};
 use crate::math::{borrow_fee, liquidation_price, maintenance_margin, pnl, to_i128, trade_fee};
 use crate::orders::{Brackets, OrderId};
@@ -329,6 +330,7 @@ impl Ketos {
                 "fee": U128(fee),
             }),
         );
+        self.record_entry(id, &position, margin, fee);
         self.positions.insert(id, position);
         self.attach_brackets(id, brackets);
         Ok(self.get_position(id).unwrap())
@@ -342,6 +344,9 @@ impl Ketos {
             .get_mut(&account_id)
             .unwrap_or_else(|| env::panic_str("ERR_NO_ACCOUNT"));
         account.margin += payout;
+        let event = HistoryEvent::position(HistoryKind::Close, position_id, &position, price, now_ms);
+        let fees = fees_covered(&position, &marked, marked.borrow_fee + marked.close_fee);
+        self.record_exit(event, &position, &marked, payout, fees);
         emit_event(
             "position_closed",
             json!({
