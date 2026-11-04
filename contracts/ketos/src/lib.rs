@@ -16,6 +16,7 @@ pub mod oracle;
 pub mod orders;
 pub mod position;
 pub mod vault;
+pub mod worker_prices;
 
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
@@ -61,6 +62,7 @@ enum StorageKey {
 pub struct Config {
     pub usdc_id: AccountId,
     pub oracle_id: AccountId,
+    pub outlayer_id: AccountId,
     pub keeper_id: AccountId,
 }
 
@@ -69,6 +71,7 @@ pub struct Config {
 pub struct Ketos {
     usdc_id: AccountId,
     oracle_id: AccountId,
+    outlayer_id: AccountId,
     keeper_id: AccountId,
     markets: IterableMap<MarketId, Market>,
     oracle_markets: LookupMap<String, MarketId>,
@@ -98,10 +101,16 @@ pub struct Ketos {
 #[near]
 impl Ketos {
     #[init]
-    pub fn new(usdc_id: AccountId, oracle_id: AccountId, keeper_id: AccountId) -> Self {
+    pub fn new(
+        usdc_id: AccountId,
+        oracle_id: AccountId,
+        keeper_id: AccountId,
+        outlayer_id: AccountId,
+    ) -> Self {
         let mut contract = Self {
             usdc_id,
             oracle_id,
+            outlayer_id,
             keeper_id,
             markets: IterableMap::new(StorageKey::Markets),
             oracle_markets: LookupMap::new(StorageKey::OracleMarkets),
@@ -141,6 +150,7 @@ impl Ketos {
         Config {
             usdc_id: self.usdc_id.clone(),
             oracle_id: self.oracle_id.clone(),
+            outlayer_id: self.outlayer_id.clone(),
             keeper_id: self.keeper_id.clone(),
         }
     }

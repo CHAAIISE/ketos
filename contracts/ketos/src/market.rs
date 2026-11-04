@@ -33,6 +33,8 @@ pub type MarketId = String;
 pub enum PriceSource {
     Tee,
     Signed,
+    #[serde(rename = "outlayer_worker")]
+    OutlayerWorker,
 }
 
 #[near(serializers = [json, borsh])]
@@ -61,7 +63,7 @@ pub struct MarketConfig {
 pub struct Market {
     /// Short ticker used as the market key.
     pub id: MarketId,
-    /// Asset id on the price oracle (OutLayer `price-oracle.testnet`).
+    /// Oracle asset id, or uppercase worker symbol for `outlayer_worker`.
     pub oracle_asset_id: String,
     pub intents_asset_id: String,
     pub price_source: PriceSource,
@@ -278,6 +280,32 @@ pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
         fee_bps: 10,
         max_leverage_cap: 20,
     })
+    .chain(worker_markets())
+}
+
+fn worker_markets() -> impl Iterator<Item = MarketConfig> {
+    [
+        ("DOGE", "nep141:doge.omft.near"),
+        ("XRP", "nep141:xrp.omft.near"),
+        ("LTC", "nep141:ltc.omft.near"),
+        ("ADA", "nep141:cardano.omft.near"),
+        ("SUI", "nep141:sui.omft.near"),
+        ("TRX", "nep141:tron.omft.near"),
+        ("BNB", "nep245:v2_1.omni.hot.tg:56_11111111111111111111"),
+        ("AVAX", "nep245:v2_1.omni.hot.tg:43114_11111111111111111111"),
+        ("LINK", "nep141:eth-0x514910771af9ca656af840dff83e8264ecf986ca.omft.near"),
+    ]
+    .into_iter()
+    .map(|(symbol, intents_asset_id)| MarketConfig {
+        symbol: symbol.into(),
+        oracle_asset_id: symbol.into(),
+        intents_asset_id: intents_asset_id.into(),
+        price_source: PriceSource::OutlayerWorker,
+        vault_id: VaultId::LongTail,
+        hard_cap: U128(DEFAULT_HARD_CAP),
+        fee_bps: 10,
+        max_leverage_cap: 5,
+    })
 }
 
 impl Ketos {
@@ -301,6 +329,12 @@ impl Ketos {
                 && (1..=20).contains(&config.max_leverage_cap),
             "ERR_INVALID_MARKET_CONFIG"
         );
+        if config.price_source == PriceSource::OutlayerWorker {
+            require!(
+                crate::worker_prices::WORKER_ASSETS.contains(&config.oracle_asset_id.as_str()),
+                "ERR_UNSUPPORTED_WORKER_ASSET"
+            );
+        }
         self.oracle_markets.insert(config.oracle_asset_id.clone(), config.symbol.clone());
         self.markets.insert(config.symbol.clone(), Market::new(config));
     }

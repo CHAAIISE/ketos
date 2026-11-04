@@ -221,6 +221,7 @@ await ensureAccount(ids.keeper, BALANCES.keeper);
 await ensureContract(ids.ketos, BALANCES.ketos, "ketos", {
   usdc_id: ids.usdc,
   oracle_id: ORACLE_ID,
+  outlayer_id: "outlayer.testnet",
   keeper_id: ids.keeper,
 });
 const keeperKey = await ensureKeeperKey();

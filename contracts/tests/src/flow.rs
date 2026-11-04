@@ -9,7 +9,7 @@ const USD: u128 = 1_000_000;
 const KEEPER_METHODS: [&str; 3] = ["refresh_prices", "set_depth", "liquidate"];
 
 /// Mock oracle values; the first four match the 2026-11-03 feed.
-const PRICES: [(&str, u128); 7] = [
+const PRICES: [(&str, u128); 16] = [
     ("nbtc.bridge.near", 7_756_150_000_000),
     ("aurora", 229_259_500_000),
     ("wrap.near", 400_000_000),
@@ -17,7 +17,17 @@ const PRICES: [(&str, u128); 7] = [
     ("22.contract.portalbridge.near", 15_000_000_000),
     ("aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near", 10_000_000),
     ("token.rhealab.near", 5_000_000),
+    ("DOGE", 15_000_000),
+    ("XRP", 50_000_000),
+    ("LTC", 8_000_000_000),
+    ("ADA", 40_000_000),
+    ("SUI", 200_000_000),
+    ("TRX", 10_000_000),
+    ("BNB", 60_000_000_000),
+    ("AVAX", 3_000_000_000),
+    ("LINK", 1_500_000_000),
 ];
+const WORKER_ASSETS: [&str; 9] = ["DOGE", "XRP", "LTC", "ADA", "SUI", "TRX", "BNB", "AVAX", "LINK"];
 
 fn wasm(name: &str) -> Vec<u8> {
     let path = format!("{}/../res/{name}.wasm", env!("CARGO_MANIFEST_DIR"));
@@ -135,20 +145,29 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     ok(ketos
         .call("new")
         .args_json(
-            json!({ "usdc_id": usdc.id(), "oracle_id": oracle.id(), "keeper_id": keeper.id() }),
+            json!({ "usdc_id": usdc.id(), "oracle_id": oracle.id(), "outlayer_id": oracle.id(), "keeper_id": keeper.id() }),
         )
         .transact()
         .await?);
 
     let markets = view(&ketos, "get_markets", json!({})).await?;
-    assert_eq!(markets.as_array().unwrap().len(), 7);
+    assert_eq!(markets.as_array().unwrap().len(), PRICES.len());
     let mut paged = Vec::new();
-    for from in [0, 3, 6] {
+    for from in (0..PRICES.len()).step_by(3) {
         let page = view(&ketos, "get_markets", json!({ "from_index": from, "limit": 3 })).await?;
         paged.extend(page.as_array().unwrap().iter().cloned());
     }
     assert_eq!(json!(paged), markets);
     assert!(markets.as_array().unwrap().iter().all(|m| m["is_open"] == false));
+    let config = view(&ketos, "get_config", json!({})).await?;
+    assert_eq!(config["outlayer_id"], oracle.id().as_str());
+    let private_callback = err(trader
+        .call(ketos.id(), "on_worker_prices")
+        .args_json(json!({ "asset_ids": WORKER_ASSETS }))
+        .gas(Gas::from_tgas(30))
+        .transact()
+        .await);
+    assert!(private_callback.contains("private"), "{private_callback}");
     ok(root
         .call(usdc.id(), "storage_deposit")
         .args_json(json!({ "account_id": ketos.id() }))
@@ -196,11 +215,51 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             .all(|p| p["is_fresh"] == true),
         "{prices}"
     );
+    assert_eq!(prices.as_array().unwrap().len(), PRICES.len());
     for (asset, price) in PRICES {
         let stored = prices.as_array().unwrap().iter()
             .find(|p| p["oracle_asset_id"] == asset).unwrap();
         assert_eq!(stored["price"], price.to_string());
     }
+
+    // Worker prices arrive only through the async request and private callback. None,
+    // a failed request, stale output, and omitted assets must preserve the last good feed.
+    let worker_prices: Vec<Value> = prices.as_array().unwrap().iter()
+        .filter(|price| WORKER_ASSETS.iter().any(|asset| price["oracle_asset_id"] == *asset))
+        .cloned()
+        .collect();
+    assert_eq!(worker_prices.len(), WORKER_ASSETS.len());
+    let missing_at_ms = now_ms(&worker).await?;
+    for (response, fail) in [
+        (Value::Null, false),
+        (Value::Null, true),
+        (json!({ "timestamp_ms": 1, "prices": { "DOGE": ["1", ["coinbase", "kraken"]] } }), false),
+        (json!({ "timestamp_ms": missing_at_ms, "prices": {} }), false),
+    ] {
+        ok(root
+            .call(oracle.id(), "set_execution_response")
+            .args_json(json!({ "use_canned_response": true, "result": response, "fail": fail }))
+            .transact()
+            .await?);
+        ok(bot
+            .call(ketos.id(), "refresh_prices")
+            .gas(Gas::from_tgas(100))
+            .transact()
+            .await?);
+        let after = view(&ketos, "get_prices", json!({})).await?;
+        for expected in &worker_prices {
+            let actual = after.as_array().unwrap().iter()
+                .find(|price| price["oracle_asset_id"] == expected["oracle_asset_id"])
+                .unwrap();
+            assert_eq!(actual["price"], expected["price"]);
+            assert_eq!(actual["timestamp_ms"], expected["timestamp_ms"]);
+        }
+    }
+    ok(root
+        .call(oracle.id(), "set_execution_response")
+        .args_json(json!({ "use_canned_response": false, "result": null, "fail": false }))
+        .transact()
+        .await?);
 
     // Depth: the recorded 1Click curve, stamped at the current block time.
     let fixture = depth_fixture();
@@ -220,6 +279,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     assert_eq!(near_market["is_open"], true);
     assert_eq!(near_market["max_leverage"], 5);
     assert_eq!(near_market["max_oi_per_side"], (100_000 * USD).to_string());
+    for asset in WORKER_ASSETS {
+        let market = view(&ketos, "get_market", json!({ "market_id": asset })).await?;
+        assert_eq!(market["price_source"], "outlayer_worker");
+        assert_eq!(market["is_open"], false, "worker market lacks measured depth: {asset}");
+    }
 
     // Funding: faucet for the trader, minted tUSDC for the LP.
     ok(trader.call(usdc.id(), "faucet").transact().await?);

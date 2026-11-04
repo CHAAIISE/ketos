@@ -16,6 +16,7 @@ mod history;
 mod listing;
 mod orders;
 mod vaults;
+mod worker_prices;
 
 const CONTRACT: &str = "ketos.test";
 const USDC: &str = "usdc.test";
@@ -35,7 +36,7 @@ fn ctx(predecessor: &str, deposit: u128) {
 
 fn setup() -> Ketos {
     ctx("owner.test", 0);
-    Ketos::new(id(USDC), id("oracle.test"), id("keeper.test"))
+    Ketos::new(id(USDC), id("oracle.test"), id("keeper.test"), id("outlayer.test"))
 }
 
 /// Deposits margin and checks the whole amount is kept (nothing refunded to the sender).
@@ -54,25 +55,29 @@ fn margin(ketos: &Ketos, trader: &str) -> u128 {
 }
 
 #[test]
-fn registry_starts_with_seven_markets_and_paginates_in_listing_order() {
+fn registry_paginates_all_markets_in_listing_order() {
     let ketos = setup();
     let markets = ketos.get_markets(None, None);
     assert_eq!(
         markets.iter().map(|m| m.market.id.as_str()).collect::<Vec<_>>(),
-        ["BTC", "ETH", "NEAR", "ZEC", "SOL", "AURORA", "RHEA"]
+        ["BTC", "ETH", "NEAR", "ZEC", "SOL", "AURORA", "RHEA",
+         "DOGE", "XRP", "LTC", "ADA", "SUI", "TRX", "BNB", "AVAX", "LINK"]
     );
     assert!(markets.iter().all(|m| !m.is_open && m.max_oi_per_side.0 == 0));
     let mut paged = Vec::new();
-    for from in [0, 3, 6] {
-        paged.extend(ketos.get_markets(Some(from), Some(3)));
+    for from in (0..markets.len()).step_by(3) {
+        paged.extend(ketos.get_markets(Some(from as u32), Some(3)));
     }
     assert_eq!(paged, markets);
-    assert!(ketos.get_markets(Some(7), Some(3)).is_empty());
+    assert!(ketos.get_markets(Some(markets.len() as u32), Some(3)).is_empty());
     assert!(ketos.get_markets(Some(u32::MAX), Some(3)).is_empty());
     assert!(ketos.get_markets(None, Some(0)).is_empty());
     assert_eq!(ketos.get_market("SOL".into()).unwrap().market.vault_id, VaultId::Core);
     assert_eq!(ketos.get_market("RHEA".into()).unwrap().market.vault_id, VaultId::LongTail);
-    assert!(ketos.get_market("DOGE".into()).is_none());
+    let doge = ketos.get_market("DOGE".into()).unwrap().market;
+    assert_eq!(doge.price_source, PriceSource::OutlayerWorker);
+    assert_eq!(doge.vault_id, VaultId::LongTail);
+    assert_eq!(doge.max_leverage_cap, 5);
 }
 
 fn extra_market(symbol: &str, source: PriceSource) -> MarketConfig {
@@ -160,9 +165,9 @@ fn market_pages_are_bounded_without_hiding_later_listings() {
     let first = ketos.get_markets(None, Some(u32::MAX));
     let last = ketos.get_markets(Some(100), Some(100));
     assert_eq!(first.len(), 100);
-    assert_eq!(last.len(), 7);
-    assert_eq!(first.last().unwrap().market.id, "NEW92");
-    assert_eq!(last.first().unwrap().market.id, "NEW93");
+    assert_eq!(last.len(), 16);
+    assert_eq!(first.last().unwrap().market.id, "NEW83");
+    assert_eq!(last.first().unwrap().market.id, "NEW84");
     assert_eq!(last.last().unwrap().market.id, "NEW99");
 }
 
@@ -623,7 +628,7 @@ fn depth_history_keeps_the_last_48_samples() {
     assert_eq!(depth.history[47].exit_capacity_usd, 50_000);
     assert_eq!(depth.history[47].samples.len(), 7);
     assert_eq!(depth.market.market.depth_measured_at_ms, T0_MS + 49 * 60_000);
-    assert!(ketos.get_depth("DOGE".into()).is_none());
+    assert!(ketos.get_depth("UNKNOWN".into()).is_none());
     assert!(ketos.get_depth("BTC".into()).unwrap().history.is_empty());
 }
 
@@ -1002,7 +1007,7 @@ fn oracle_push_stores_8_decimal_prices_and_enables_trading() {
     assert_eq!(stored_price(&ketos, "RHEA"), (53_000, T0_MS - 1_500));
 
     let prices = ketos.get_prices();
-    assert_eq!(prices.len(), 7);
+    assert_eq!(prices.len(), 16);
     assert!(prices.iter().find(|p| p.market_id == "NEAR").unwrap().is_fresh);
     assert!(!prices.iter().find(|p| p.market_id == "ZEC").unwrap().is_fresh);
 

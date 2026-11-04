@@ -66,15 +66,15 @@ flowchart LR
 
 ### Market registry
 
-Fresh contract deployments initialize BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA. Each entry stores its oracle asset id, Intents asset id, price source (`tee` or `signed`), vault assignment, hard cap, trading fee and leverage ceiling ([`market.rs`](contracts/ketos/src/market.rs)). `id` is the market symbol. Duplicate symbols or assets cannot replace an existing market.
+Fresh contract deployments initialize 16 markets: BTC, ETH, NEAR, ZEC, SOL, AURORA and RHEA use the existing TEE oracle; DOGE, XRP, LTC, ADA, SUI, TRX, BNB, AVAX and LINK use the pinned multisource worker. Each entry stores its oracle asset id, Intents asset id, price source (`tee`, `signed` or `outlayer_worker`), vault assignment, hard cap, trading fee and leverage ceiling ([`market.rs`](contracts/ketos/src/market.rs)). `id` is the market symbol. Duplicate symbols or assets cannot replace an existing market. The nine worker markets belong to Long-tail and have a 5× ceiling. BNB and AVAX reference NEP-245 Intents assets; the other new routes use NEP-141.
 
-`get_markets({ "from_index": 0, "limit": 100 })` returns markets in listing order (default 50, maximum 100 per page). The client reads every page. A new market has no exit capacity and cannot accept positions until measured; its leverage is the lower of its configured ceiling and the live liquidity tier. Oracle callbacks match asset ids rather than ticker order and update only TEE-priced entries.
+`get_markets({ "from_index": 0, "limit": 100 })` returns markets in listing order (default 50, maximum 100 per page). The client reads every page. A new market has no exit capacity and cannot accept positions until measured; its leverage is the lower of its configured ceiling and the live liquidity tier. Both price adapters match oracle asset ids rather than ticker order and can update only their own source.
 
 The deployed demo still uses the four-market contract listed below. The new registry changes the serialized state: deploy it to a **fresh contract account**, not over that existing account. Fresh deployments settle each market against its assigned Core or Long-tail vault.
 
 ### Permissionless listing on fresh deployments
 
-Anyone can register a market through the configured USDC contract's `ft_transfer_call` with exactly `"5000000"` units and `msg: "list_market:<json>"` ([`listing.rs`](contracts/ketos/src/listing.rs)). The JSON contains `symbol`, `oracle_asset_id`, `intents_asset_id` and `price_source` (`tee` or `signed`). Symbols are 1–16 uppercase ASCII letters/digits, starting with a letter; Intents assets use `nep141:<NEAR account id>`. For example:
+Anyone can register a market through the configured USDC contract's `ft_transfer_call` with exactly `"5000000"` units and `msg: "list_market:<json>"` ([`listing.rs`](contracts/ketos/src/listing.rs)). The JSON contains `symbol`, `oracle_asset_id`, `intents_asset_id` and `price_source` (`tee`, `signed` or `outlayer_worker`). Symbols are 1–16 uppercase ASCII letters/digits, starting with a letter; permissionless Intents assets use `nep141:<NEAR account id>`. Worker oracle asset ids must be supported uppercase worker symbols, preventing an unsupported listing from breaking the entire price batch. For example:
 
 ```json
 {"symbol":"NEW","oracle_asset_id":"new.token.near","intents_asset_id":"nep141:new.token.near","price_source":"tee"}
@@ -198,7 +198,7 @@ pnpm --dir web dev
 
 ### Multisource price worker
 
-[`workers/ketos-prices`](workers/ketos-prices) is a separate Rust WASI component deployed as [`ketos.testnet/ketos-prices`](https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices). Its pinned WASM hash and public endpoint are in [`deployments/worker-testnet.json`](deployments/worker-testnet.json). It is not yet connected to the trading contract or keeper; those still use the existing oracle path.
+[`workers/ketos-prices`](workers/ketos-prices) is a separate Rust WASI component deployed as [`ketos.testnet/ketos-prices`](https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices). Its pinned WASM hash and public endpoint are in [`deployments/worker-testnet.json`](deployments/worker-testnet.json). Fresh trading contracts request it onchain through [`worker_prices.rs`](contracts/ketos/src/worker_prices.rs); the deployed demo still uses the older four-market oracle path.
 
 ```bash
 rustup target add wasm32-wasip2
@@ -226,6 +226,17 @@ Measured from the deployed component on November 4, 2026: BTC, ETH, NEAR, ZEC, S
 
 The timestamp is taken before fetching, not after a slow request finishes. Coinbase's own trade timestamp is checked against 120 seconds; Kraken and Binance tickers provide no trade timestamp, so their last-trade freshness cannot be independently established. Responses are bounded to 16 KiB. The HTTP SDK exposes a 5-second connect timeout but no hard body-read deadline; cooperative budgets reject late responses, while the host's execution limit must terminate blocked I/O. HTTPS responses include an attestation URL that may initially return 404 until uploaded. The recorded hash identifies the deployed component; HTTPS output is not an onchain-verified price feed.
 
+#### Onchain price delivery
+
+Initialization requires `outlayer_id` (`outlayer.testnet` in production configuration; the mock oracle in sandbox), exposed by `get_config`. There is no runtime endpoint to change this trust boundary. `refresh_prices` requests TEE prices and worker prices independently, with worker batches of at most 12 assets. Worker `source.Project` pins both `ketos.testnet/ketos-prices` and its deployed WASM hash; changing the project's active version cannot silently change the feed. A replacement binary requires a reviewed contract deployment.
+
+Attach 200 Tgas. Each adapter request reserves 0.02 NEAR from the trading contract's free balance: 0.04 NEAR for the initial registry, or 0.06 NEAR with two worker batches. The whole balance requirement is checked before scheduling. OutLayer refunds unused resources to the trading contract; the HTTPS payment key is not used onchain. A final private receipt waits for all adapter callbacks and returns the number of markets whose stored prices are still fresh.
+
+The worker callback accepts only assets requested in its batch and registered with `outlayer_worker`. It requires a positive integer price at 8 decimals, at least two distinct named venues from Coinbase/Kraken/Binance, a nonzero timestamp no more than 120 seconds old and not in the future, and a timestamp strictly newer than that market's stored observation. Missing assets, malformed entries, `None` and failed requests do not overwrite or refresh the previous observation. Failed worker delivery does not block the separate TEE update. Price agreement is checked by the pinned worker; the callback cannot independently recompute it from the aggregated output.
+
+On November 4, 2026, all nine new assets returned real 1Click `dry` quotes for approximately $1,000 into USDC on NEAR. This establishes route availability at that size, not an open-interest allowance: new markets still start closed until the keeper publishes sufficient measured exit capacity. Local integration tests use `mock-oracle::request_execution` with owner-controlled failure/omission responses, not live exchange data. No testnet trading-contract cutover has been performed yet.
+
+
 
 ## Limitations
 
@@ -233,5 +244,5 @@ The timestamp is taken before fetching, not after a slow request finishes. Coinb
 - No cross-chain deposits or settlement: everything settles in one NEAR contract. NEAR Intents is used only to measure liquidity.
 - Liquidity is measured on mainnet 1Click quotes while trading runs on testnet, so caps reflect real markets but trades do not touch them.
 - The local sandbox and the end-to-end tests use a mock oracle with the same interface as the OutLayer one; prices there are set by the test.
-- The deployed demo and keeper measure four markets (BTC, ETH, NEAR, ZEC); fresh local deployments list seven, with SOL, AURORA and RHEA closed until measured. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
+- The deployed demo and keeper measure four markets (BTC, ETH, NEAR, ZEC); fresh local deployments list 16. Sandbox prices are mocked for all 16, but only the four markets with recorded depth start open. Capacity uses a fixed size grid ($100k in the recorded sample means "fine at $100k, no quote at $250k"), not interpolation.
 - The keeper runs from the app's tick endpoint or `pnpm keeper`; with nobody online, depth goes stale and markets close to new positions after 30 minutes. Closing an existing position needs an oracle price under 120 s old, and `refresh_prices` is open to any account.

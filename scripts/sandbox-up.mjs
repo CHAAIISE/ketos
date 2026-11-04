@@ -29,6 +29,15 @@ const PRICES = [
   ["22.contract.portalbridge.near", 15_000_000_000n],
   ["aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near", 10_000_000n],
   ["token.rhealab.near", 5_000_000n],
+  ["DOGE", 15_000_000n],
+  ["XRP", 50_000_000n],
+  ["LTC", 8_000_000_000n],
+  ["ADA", 40_000_000n],
+  ["SUI", 200_000_000n],
+  ["TRX", 10_000_000n],
+  ["BNB", 60_000_000_000n],
+  ["AVAX", 3_000_000_000n],
+  ["LINK", 1_500_000_000n],
 ];
 
 if (process.argv.includes("--node")) {
@@ -135,7 +144,9 @@ async function seed(rpcUrl) {
   await deploy(ids.oracle, 10, "mock_oracle", { owner_id: DEFAULT_ACCOUNT_ID });
   await create(ids.keeper, 10);
   // 20 NEAR: the keeper tick refuses to run below 2 NEAR on the Ketos contract.
-  await deploy(ids.ketos, 20, "ketos", { usdc_id: ids.usdc, oracle_id: ids.oracle, keeper_id: ids.keeper });
+  await deploy(ids.ketos, 20, "ketos", {
+    usdc_id: ids.usdc, oracle_id: ids.oracle, outlayer_id: ids.oracle, keeper_id: ids.keeper,
+  });
   await create(ids.lp, 10);
   await create(ids.trader, 50, traderKey.getPublicKey());
   await as(ids.keeper).addFunctionCallAccessKey({
@@ -183,7 +194,12 @@ async function seed(rpcUrl) {
   if (openMarkets.length !== MARKETS.length || MARKETS.some((m) => !openMarkets.includes(m))) {
     throw new Error(`expected only fixture markets to be open: ${JSON.stringify(markets)}`);
   }
-  if (markets.length !== 7) throw new Error(`expected 7 listed markets, got ${markets.length}`);
+  if (markets.length !== PRICES.length) throw new Error(`expected ${PRICES.length} listed markets, got ${markets.length}`);
+  if (prices.length !== PRICES.length) throw new Error(`expected ${PRICES.length} prices, got ${prices.length}`);
+  for (const [assetId, expectedPrice] of PRICES) {
+    const stored = prices.find((price) => price.oracle_asset_id === assetId);
+    if (!stored || BigInt(stored.price) !== expectedPrice) throw new Error(`missing or incorrect mock price for ${assetId}`);
+  }
   if (!prices.every((p) => p.is_fresh)) throw new Error(`prices not fresh: ${JSON.stringify(prices)}`);
   if (BigInt(vault.nav) !== VAULT_SEED) throw new Error(`vault NAV ${vault.nav}, expected ${VAULT_SEED}`);
 

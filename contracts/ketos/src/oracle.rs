@@ -1,6 +1,4 @@
-//! Price feed from OutLayer's `price-oracle.testnet` (or the local mock with the same
-//! interface). `refresh_prices` asks the oracle to push prices for all TEE markets
-//! through `oracle_call`; the oracle answers with `oracle_on_call` on this contract.
+//! Prices from the OutLayer oracle and pinned multisource worker.
 
 use near_sdk::json_types::{U128, U64};
 use near_sdk::serde_json::json;
@@ -8,6 +6,7 @@ use near_sdk::{env, near, require, AccountId, Gas, GasWeight, NearToken, Promise
 
 use crate::market::{MarketId, PriceSource, MAX_PRICE_AGE_MS};
 use crate::{Ketos, KetosExt};
+use crate::worker_prices::{WORKER_BATCH_SIZE, WORKER_DEPOSIT};
 
 /// Guarantee attached to `oracle_call`; OutLayer sends it back in the same transaction.
 pub const ORACLE_CALL_DEPOSIT: NearToken = NearToken::from_millinear(20);
@@ -71,12 +70,20 @@ pub fn to_price8(price: &OraclePrice) -> Option<u128> {
 
 #[near]
 impl Ketos {
-    /// Anyone can ask for fresh prices. The contract fronts the oracle's refundable deposit;
-    /// the caller pays the gas (attach at least 50 Tgas).
+    /// Anyone can request fresh prices; attach 200 Tgas for both adapters and their callbacks.
     pub fn refresh_prices(&mut self) -> Promise {
+        let worker_assets: Vec<String> = self
+            .markets
+            .values()
+            .filter(|m| m.price_source == PriceSource::OutlayerWorker)
+            .map(|m| m.oracle_asset_id.clone())
+            .collect();
+        let batches = worker_assets.len().div_ceil(WORKER_BATCH_SIZE);
+        let required = ORACLE_CALL_DEPOSIT
+            .saturating_add(WORKER_DEPOSIT.saturating_mul(batches as u128));
         let locked = env::storage_byte_cost().saturating_mul(u128::from(env::storage_usage()));
         require!(
-            env::account_balance().saturating_sub(locked) >= ORACLE_CALL_DEPOSIT,
+            env::account_balance().saturating_sub(locked) >= required,
             "ERR_ORACLE_FUNDS_LOW"
         );
         let asset_ids: Vec<String> = self
@@ -90,13 +97,33 @@ impl Ketos {
             "asset_ids": asset_ids,
             "msg": "",
         });
-        Promise::new(self.oracle_id.clone()).function_call_weight(
+        let mut request = Promise::new(self.oracle_id.clone()).function_call_weight(
             "oracle_call".to_string(),
             args.to_string().into_bytes(),
             ORACLE_CALL_DEPOSIT,
             ORACLE_CALL_GAS,
             GasWeight(1),
+        );
+        for assets in worker_assets.chunks(WORKER_BATCH_SIZE) {
+            request = request.and(self.request_worker_prices(assets));
+        }
+        // NEAR cannot return a joint promise. The final receipt waits for both adapters.
+        request.then(
+            Self::ext(env::current_account_id())
+                .with_static_gas(Gas::from_tgas(5))
+                .with_unused_gas_weight(0)
+                .on_prices_refreshed(),
         )
+    }
+
+    /// Fresh market count after every requested adapter callback has completed.
+    #[private]
+    pub fn on_prices_refreshed(&self) -> u32 {
+        let now_ms = env::block_timestamp_ms();
+        self.markets.values().filter(|market| {
+            market.price.0 > 0
+                && now_ms.saturating_sub(market.price_timestamp_ms) <= MAX_PRICE_AGE_MS
+        }).count() as u32
     }
 
     /// Price push from the oracle. Only the configured oracle is trusted; `sender_id` (who
