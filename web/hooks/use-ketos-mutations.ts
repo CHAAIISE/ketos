@@ -222,7 +222,7 @@ export function useSwitchToCross() {
   });
 }
 
-/** Pays the 5 USDC listing fee; the new market shows as measuring until its first depth sample. */
+/** Pays the 25 USDC listing fee; the new market shows as measuring until its first depth sample. */
 export function useListMarket() {
   return useTxMutation<ListMarketArgs, TxReceipt>({
     build: listMarketTx,

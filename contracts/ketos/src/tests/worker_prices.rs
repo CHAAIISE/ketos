@@ -20,7 +20,7 @@ fn quorum_prices_enable_worker_market_trading_only_after_depth() {
     assert_eq!(stored_price(&ketos, "DOGE"), (8_000_000, T0_MS));
     assert_eq!(stored_price(&ketos, "XRP"), (130_000_000, T0_MS));
     assert!(!ketos.get_market("DOGE".into()).unwrap().is_open);
-    set_depth_at(&mut ketos, "DOGE", measured_curve(), T0_MS);
+    seed_depth(&mut ketos, "DOGE", measured_curve(), T0_MS);
     deposit(&mut ketos, "alice.test", 200 * USD);
     super::vaults::deposit_to(&mut ketos, "long-tail", "lp.test", 10_000 * USD);
     let position = open(&mut ketos, "DOGE", Side::Long, 100 * USD, 5);

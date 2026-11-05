@@ -33,7 +33,7 @@ const MEASURING_SHOWN = 6;
 
 /**
  * Permissionless listing: pick an asset the price oracle and NEAR Intents both know, pay the
- * 5 USDC fee, and the market appears as "measuring" until the keeper's first depth sample.
+ * 25 USDC fee, and the market appears as "measuring" until the keeper's first depth sample.
  */
 export function ListMarketPanel({ markets, className }: { markets: readonly Market[]; className?: string }) {
   const accountId = useAccountId();

@@ -204,14 +204,20 @@ async function seed(rpcUrl) {
   await call(keeper, ids.ketos, "refresh_prices", {}, { gas: teraToGas("300") });
 
   const fixture = JSON.parse(readFileSync(DEPTH_FIXTURE, "utf8"));
-  const block = await provider.viewBlock({ finality: "final" });
-  const measuredAtMs = Math.floor(Number(block.header.timestamp_nanosec) / 1e6);
-  for (const market of MARKETS) {
-    await call(keeper, ids.ketos, "set_depth", {
-      market_id: market,
-      samples: fixture.assets[market].samples,
-      measured_at_ms: measuredAtMs,
-    });
+  for (let report = 0; report < 5; report++) {
+    const block = await provider.viewBlock({ finality: "final" });
+    const measuredAtMs = Math.floor(Number(block.header.timestamp_nanosec) / 1e6);
+    for (const market of MARKETS) {
+      let previousImpact = 0;
+      const samples = fixture.assets[market].samples.map((sample) => {
+        if (sample.impact_bps === null) return sample;
+        previousImpact = Math.max(previousImpact, sample.impact_bps);
+        return { ...sample, impact_bps: previousImpact };
+      });
+      await call(keeper, ids.ketos, "set_depth", {
+        market_id: market, samples, measured_at_ms: measuredAtMs,
+      });
+    }
   }
 
   for (const vaultId of ["core", "long-tail"]) {

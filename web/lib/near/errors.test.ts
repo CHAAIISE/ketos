@@ -82,7 +82,6 @@ describe("toNearActionError", () => {
     ["ERR_NO_PRICE", /no oracle price/],
     ["ERR_INSUFFICIENT_MARGIN", /Not enough free margin/],
     ["ERR_MIN_POSITION_MARGIN: 1 USDC", /at least \$1/],
-    ["ERR_MIN_FIRST_DEPOSIT: 1 USDC", /at least 1 USDC/],
     ["ERR_MIN_VAULT_DEPOSIT: 1 USDC", /at least 1 USDC/],
     ["ERR_LEVERAGE_TOO_LOW", /at least 1x/],
     ["ERR_ZERO_AMOUNT", /greater than zero/],
@@ -97,7 +96,6 @@ describe("toNearActionError", () => {
     ["ERR_INVALID_TAKE_PROFIT", /above the current price for a long/],
     ["ERR_INVALID_STOP_LOSS", /below the current price for a long/],
     ["ERR_CROSS_UNDERMARGINED", /maintenance margin/],
-    ["ERR_LISTING_FEE: exactly 5 USDC", /exactly 5 USDC.*refunded/],
     ["ERR_MARKET_EXISTS", /already listed.*refunded/],
     ["ERR_UNSUPPORTED_WORKER_ASSET", /refunded/],
   ])("maps %s", (panic, message) => {

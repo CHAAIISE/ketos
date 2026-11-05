@@ -22,6 +22,8 @@ pub const DEFAULT_MAX_LEVERAGE: u32 = 2;
 /// Below this exit capacity a market takes no new positions.
 pub const MIN_OPEN_CAPACITY: u128 = 10_000 * USD;
 
+pub const MAX_MARKETS: u32 = 32;
+
 /// Normal closes, liquidations and LP valuation require prices within this age.
 pub const MAX_PRICE_AGE_MS: u64 = 120_000;
 pub const MAX_OPEN_PRICE_AGE_MS: u64 = 30_000;
@@ -76,10 +78,13 @@ pub struct Market {
     pub max_leverage_cap: u32,
     /// Maximum open interest per side in USDC units, before the exit-liquidity cap.
     pub hard_cap: U128,
-    /// Largest size (USDC units) that exits to USDC on NEAR Intents within 100 bps of impact.
+    /// Admission capacity after the measured curve's asymmetric growth limits.
     pub exit_capacity: U128,
     /// When the depth behind `exit_capacity` was measured; zero before the first sample.
     pub depth_measured_at_ms: u64,
+    pub created_at_ms: u64,
+    /// Block time of the last leverage increase, zero before the first; decreases retain it.
+    pub leverage_increased_at_ms: u64,
     pub oi_long: U128,
     pub oi_short: U128,
     pub max_leverage: u32,
@@ -139,10 +144,14 @@ impl Market {
             price_source: config.price_source,
             vault_id: config.vault_id,
             fee_bps: config.fee_bps,
-            max_leverage_cap: config.max_leverage_cap,
+            max_leverage_cap: config.max_leverage_cap.min(
+                if config.vault_id == VaultId::LongTail { 5 } else { 20 },
+            ),
             hard_cap: config.hard_cap,
             exit_capacity: U128(0),
             depth_measured_at_ms: 0,
+            created_at_ms: now_ms,
+            leverage_increased_at_ms: 0,
             oi_long: U128(0),
             oi_short: U128(0),
             max_leverage: DEFAULT_MAX_LEVERAGE.min(config.max_leverage_cap),
@@ -333,7 +342,7 @@ pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
         vault_id,
         hard_cap: U128(DEFAULT_HARD_CAP),
         fee_bps: 10,
-        max_leverage_cap: 20,
+        max_leverage_cap: if vault_id == VaultId::LongTail { 5 } else { 20 },
     })
     .chain(worker_markets())
 }
@@ -392,13 +401,16 @@ impl Ketos {
             .and_then(|history| history.last())
             .is_some_and(|record| {
                 record.samples.last()
-                    .is_some_and(|sample| sample.size_usd == record.exit_capacity_usd)
+                    .is_some_and(|sample| {
+                        sample.size_usd == crate::depth::exit_capacity_usd(&record.samples)
+                    })
             });
         market.view(now_ms, cap, exposure <= limit, grid_max)
     }
 
     /// Shared insertion path; no privileged endpoint can change a live market's terms.
     pub(crate) fn register_market(&mut self, config: MarketConfig) {
+        require!(self.markets.len() < MAX_MARKETS, "ERR_MARKET_LIMIT: maximum 32 markets");
         require!(
             !self.markets.contains_key(&config.symbol),
             "ERR_MARKET_EXISTS"

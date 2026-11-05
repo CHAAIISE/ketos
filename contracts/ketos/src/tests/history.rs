@@ -30,7 +30,7 @@ fn history_kind_preserves_legacy_borsh_discriminants_and_json_names() {
 #[test]
 fn margin_transfers_record_exact_amounts_and_chain_times_without_trade_stats() {
     let mut ketos = setup();
-    for (amount, timestamp_ms) in [(200 * USD, T0_MS), (17, T0_MS + 1)] {
+    for (amount, timestamp_ms) in [(200 * USD, T0_MS), (USD, T0_MS + 1)] {
         ctx_at(USDC, timestamp_ms);
         let PromiseOrValue::Value(unused) =
             ketos.ft_on_transfer(id("alice.test"), U128(amount), "deposit_margin".into())
@@ -51,7 +51,7 @@ fn margin_transfers_record_exact_amounts_and_chain_times_without_trade_stats() {
     assert_eq!(events.len(), 3);
     for (sequence, (kind, amount, timestamp_ms)) in [
         (HistoryKind::Deposit, 200 * USD, T0_MS),
-        (HistoryKind::Deposit, 17, T0_MS + 1),
+        (HistoryKind::Deposit, USD, T0_MS + 1),
         (HistoryKind::Withdrawal, 50 * USD, T0_MS + 9),
     ]
     .into_iter()
@@ -64,7 +64,7 @@ fn margin_transfers_record_exact_amounts_and_chain_times_without_trade_stats() {
         assert_eq!(event.timestamp_ms, timestamp_ms);
         assert_eq!(event.realized_pnl.0, 0);
     }
-    assert_eq!(margin(&ketos, "alice.test"), 150 * USD + 17);
+    assert_eq!(margin(&ketos, "alice.test"), 151 * USD);
     let stats = ketos.get_account_stats(id("alice.test")).unwrap();
     assert_eq!(stats.event_count, 3);
     assert_eq!(
@@ -104,7 +104,7 @@ fn rejected_refundable_deposits_do_not_create_history_or_stats() {
     let stats_before = ketos.get_account_stats(id("alice.test"));
     ctx_at(USDC, T0_MS + 1);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ketos.ft_on_transfer(id("alice.test"), U128(1), "deposit_margin".into())
+        ketos.ft_on_transfer(id("alice.test"), U128(USD), "deposit_margin".into())
     }));
     assert!(result.is_err());
     assert_eq!(margin(&ketos, "alice.test"), u128::MAX);

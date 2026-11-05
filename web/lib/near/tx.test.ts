@@ -39,7 +39,7 @@ describe("settleOutcome", () => {
         Failure: {
           ActionError: {
             index: 0,
-            kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: ERR_MIN_FIRST_DEPOSIT: 1 USDC" } },
+            kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: ERR_MIN_MARGIN_DEPOSIT: 1 USDC" } },
           },
         },
       },

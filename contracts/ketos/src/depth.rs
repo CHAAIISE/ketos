@@ -20,6 +20,7 @@ pub const MAX_DEPTH_AGE_MS: u64 = 30 * 60_000;
 pub const DEPTH_HISTORY_LEN: usize = 48;
 
 pub const MAX_SAMPLES_PER_UPDATE: usize = 16;
+pub const LEVERAGE_RAISE_INTERVAL_MS: u64 = 3_600_000;
 
 /// Tolerated clock skew between the keeper's measurement time and the block time.
 const MAX_FUTURE_SKEW_MS: u64 = 60_000;
@@ -67,6 +68,15 @@ pub fn max_leverage_for(capacity_usd: u64) -> u32 {
         c if c >= 250_000 => 10,
         c if c >= 50_000 => 5,
         _ => 2,
+    }
+}
+
+fn next_leverage_tier(current: u32) -> u32 {
+    match current {
+        0..=1 => 2,
+        2..=4 => 5,
+        5..=9 => 10,
+        _ => 20,
     }
 }
 
@@ -149,6 +159,14 @@ impl Ketos {
             samples.windows(2).all(|w| w[0].size_usd < w[1].size_usd),
             "ERR_INVALID_SAMPLES: sizes must be strictly increasing"
         );
+        let mut previous_impact = 0;
+        for impact in samples.iter().filter_map(|sample| sample.impact_bps) {
+            require!(
+                impact >= previous_impact,
+                "ERR_INVALID_SAMPLES: impact must be nondecreasing"
+            );
+            previous_impact = impact;
+        }
         require!(
             measured_at_ms <= now_ms + MAX_FUTURE_SKEW_MS,
             "ERR_DEPTH_IN_FUTURE"
@@ -160,11 +178,30 @@ impl Ketos {
             measured_at_ms > market.depth_measured_at_ms,
             "ERR_DEPTH_NOT_NEWER"
         );
-        let capacity_usd = exit_capacity_usd(&samples);
+        let measured_capacity_usd = exit_capacity_usd(&samples);
+        // A zero-cap market restarts at the opening threshold, never at a deep reported cap.
+        let growth_limit = if market.exit_capacity.0 == 0 {
+            crate::market::MIN_OPEN_CAPACITY
+        } else {
+            market.exit_capacity.0.saturating_mul(2)
+        };
+        let capacity = (u128::from(measured_capacity_usd) * USD).min(growth_limit);
+        let capacity_usd = (capacity / USD) as u64;
         // Utilization changes with the cap: charge the elapsed period at the old one.
         market.accrue(now_ms);
-        let max_leverage = max_leverage_for(capacity_usd).min(market.max_leverage_cap);
-        market.exit_capacity = U128(capacity_usd as u128 * USD);
+        let desired_leverage = max_leverage_for(capacity_usd).min(market.max_leverage_cap);
+        let max_leverage = if desired_leverage > market.max_leverage {
+            if market.leverage_increased_at_ms == 0
+                || now_ms.saturating_sub(market.leverage_increased_at_ms) >= LEVERAGE_RAISE_INTERVAL_MS {
+                market.leverage_increased_at_ms = now_ms;
+                desired_leverage.min(next_leverage_tier(market.max_leverage))
+            } else {
+                market.max_leverage
+            }
+        } else {
+            desired_leverage
+        };
+        market.exit_capacity = U128(capacity);
         market.depth_measured_at_ms = measured_at_ms;
         market.max_leverage = max_leverage;
         let max_oi = market.max_oi_per_side();
@@ -187,6 +224,7 @@ impl Ketos {
                 "market_id": market_id,
                 "measured_at_ms": measured_at_ms,
                 "exit_capacity_usd": capacity_usd,
+                "measured_exit_capacity_usd": measured_capacity_usd,
                 "max_leverage": max_leverage,
                 "max_oi_per_side": U128(max_oi),
             }),

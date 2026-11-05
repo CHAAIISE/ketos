@@ -13,13 +13,17 @@ pub(super) fn deposit_to(ketos: &mut Ketos, vault: &str, lp: &str, amount: u128)
 }
 
 fn two_vaults() -> Ketos {
+    two_vaults_with_depth(measured_curve())
+}
+
+fn two_vaults_with_depth(near_samples: Vec<DepthSample>) -> Ketos {
     let mut ketos = setup();
     deposit_to(&mut ketos, "core", "lp.test", 10_000 * USD);
     deposit_to(&mut ketos, "long-tail", "lp.test", 2_000 * USD);
     deposit(&mut ketos, "alice.test", 1_000 * USD);
     for market in ["NEAR", "ZEC"] {
         set_price(&mut ketos, market, P4, T0_MS);
-        set_depth_at(&mut ketos, market, measured_curve(), T0_MS);
+        seed_depth(&mut ketos, market, if market == "NEAR" { near_samples.clone() } else { measured_curve() }, T0_MS);
     }
     ketos
 }
@@ -278,9 +282,7 @@ fn snapshots_are_permissionless_hourly_immutable_and_ordered_after_wraparound() 
 }
 
 fn twenty_x_vaults() -> Ketos {
-    let mut ketos = two_vaults();
-    set_depth_at(&mut ketos, "NEAR", curve_up_to(1_000_000), T0_MS + 1);
-    ketos
+    two_vaults_with_depth(curve_up_to(1_000_000))
 }
 
 #[test]

@@ -12,7 +12,7 @@ fn request() -> Value {
 }
 
 fn list(ketos: &mut Ketos, request: Value, amount: u128) {
-    ctx_at(USDC, T0_MS);
+    ctx_at(USDC, T0_MS - 4 * HOUR_MS);
     let _ = ketos.ft_on_transfer(id("lister.test"), U128(amount), format!("list_market:{request}"));
 }
 
@@ -29,7 +29,7 @@ fn paid_listing_earns_only_long_tail_income_without_minting_shares_or_margin() {
     assert_eq!(tail.balance.0, before.balance.0 + LISTING_FEE);
     assert_eq!(tail.nav.0, before.nav.0 + LISTING_FEE);
     assert_eq!(tail.total_shares, before.total_shares);
-    assert_eq!(tail.share_price.0, 1_005_000);
+    assert_eq!(tail.share_price.0, 1_025_000);
     assert_eq!(tail.revenue.listing.0, LISTING_FEE);
     assert_eq!(tail.revenue.fees.0, 0);
     assert_eq!(tail.fees_7d.0, LISTING_FEE);
@@ -47,7 +47,7 @@ fn listed_market_trades_after_authenticated_price_and_depth_with_five_x_ceiling(
     let data = price_data(T0_MS, &[("new.token.near", Some((P4, 8)))]);
     push_prices(&mut ketos, ORACLE, T0_MS, data);
     assert!(!ketos.get_market("NEW".into()).unwrap().is_open);
-    set_depth_at(&mut ketos, "NEW", vec![DepthSample { size_usd: 1_000_000, impact_bps: Some(100) }], T0_MS);
+    seed_depth(&mut ketos, "NEW", vec![DepthSample { size_usd: 1_000_000, impact_bps: Some(100) }], T0_MS);
     let market = ketos.get_market("NEW".into()).unwrap();
     assert!(market.is_open);
     assert_eq!(market.market.max_leverage, 5);
@@ -63,7 +63,7 @@ fn listed_market_trades_after_authenticated_price_and_depth_with_five_x_ceiling(
     assert_eq!(ketos.get_vault(VaultId::LongTail).revenue.fees.0, 5_500_000);
     ctx_at("alice.test", T0_MS);
     assert_eq!(ketos.close_position_now(p.id).0, 89 * USD);
-    assert_eq!(ketos.get_vault(VaultId::LongTail).balance.0, 1_016 * USD);
+    assert_eq!(ketos.get_vault(VaultId::LongTail).balance.0, 1_036 * USD);
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn listing_with_a_price_cannot_trade_before_depth() {
 fn depth_alone_cannot_make_an_unpriced_asset_tradable() {
     let mut ketos = setup();
     list(&mut ketos, request(), LISTING_FEE);
-    set_depth_at(&mut ketos, "NEW", measured_curve(), T0_MS);
+    seed_depth(&mut ketos, "NEW", measured_curve(), T0_MS);
     deposit(&mut ketos, "alice.test", 200 * USD);
     open(&mut ketos, "NEW", Side::Long, 100 * USD, 5);
 }
@@ -91,7 +91,7 @@ fn depth_alone_cannot_make_an_unpriced_asset_tradable() {
 fn listed_market_cannot_use_twenty_x_even_with_deep_liquidity() {
     let mut ketos = setup();
     list(&mut ketos, request(), LISTING_FEE);
-    set_depth_at(&mut ketos, "NEW", vec![DepthSample { size_usd: 1_000_000, impact_bps: Some(20) }], T0_MS);
+    seed_depth(&mut ketos, "NEW", vec![DepthSample { size_usd: 1_000_000, impact_bps: Some(20) }], T0_MS);
     set_price(&mut ketos, "NEW", P4, T0_MS);
     deposit(&mut ketos, "alice.test", 200 * USD);
     open(&mut ketos, "NEW", Side::Long, 100 * USD, 6);
@@ -112,12 +112,13 @@ fn duplicate_oracle_asset_cannot_be_listed_under_a_new_symbol() {
     let mut ketos = setup();
     let mut value = request();
     value["oracle_asset_id"] = json!("wrap.near");
+    value["intents_asset_id"] = json!("nep141:wrap.near");
     list(&mut ketos, value, LISTING_FEE);
 }
 
 #[test]
-#[should_panic(expected = "ERR_ASSET_EXISTS")]
-fn duplicate_intents_asset_cannot_be_listed_with_a_different_oracle() {
+#[should_panic(expected = "ERR_ASSET_MISMATCH")]
+fn duplicate_intents_asset_cannot_borrow_a_different_oracle() {
     let mut ketos = setup();
     let mut value = request();
     value["intents_asset_id"] = json!("nep141:wrap.near");
@@ -173,10 +174,129 @@ fn symbol_case_alias_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "ERR_INVALID_ASSET")]
+#[should_panic(expected = "ERR_ASSET_MISMATCH")]
 fn non_nep141_intents_asset_is_rejected() {
     let mut ketos = setup();
     let mut value = request();
     value["intents_asset_id"] = json!("wrap.near");
     list(&mut ketos, value, LISTING_FEE);
+}
+
+#[test]
+fn worker_listing_binds_ticker_oracle_and_exact_route_and_rejects_reserved_signed_source() {
+    let mut ketos = setup();
+    let valid = json!({
+        "symbol": "UNI", "oracle_asset_id": "UNI",
+        "intents_asset_id": "nep141:eth-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984.omft.near",
+        "price_source": "outlayer_worker",
+    });
+    let before = ketos.get_vault(VaultId::LongTail);
+    for (field, value) in [
+        ("symbol", json!("ALIAS")),
+        ("oracle_asset_id", json!("AAVE")),
+        ("intents_asset_id", json!("nep141:wrap.near")),
+        ("price_source", json!("signed")),
+    ] {
+        let mut invalid = valid.clone();
+        invalid[field] = value;
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            list(&mut ketos, invalid, LISTING_FEE);
+        })).is_err());
+        assert_eq!(ketos.get_vault(VaultId::LongTail), before);
+        assert!(ketos.get_market("UNI".into()).is_none());
+    }
+    list(&mut ketos, valid, LISTING_FEE);
+    assert_eq!(ketos.get_market("UNI".into()).unwrap().market.oracle_asset_id, "UNI");
+    assert_eq!(ketos.get_vault(VaultId::LongTail).balance.0, before.balance.0 + LISTING_FEE);
+}
+
+#[test]
+fn dead_listing_can_be_removed_and_identifiers_reused_without_refunding_fees() {
+    let mut ketos = setup();
+    list(&mut ketos, request(), LISTING_FEE);
+    let created = ketos.markets.get("NEW").unwrap().created_at_ms;
+    let deadline = created + crate::listing::DEAD_MARKET_AGE_MS;
+    ctx_at("stranger.test", deadline - 1);
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ketos.delist_dead_market("NEW".into());
+    })).is_err());
+    assert!(ketos.get_market("NEW".into()).is_some());
+    ctx_at("stranger.test", deadline);
+    ketos.delist_dead_market("NEW".into());
+    assert!(ketos.get_market("NEW".into()).is_none());
+    assert!(!ketos.oracle_markets.contains_key(&"new.token.near".to_string()));
+    assert!(ketos.depth.get("NEW").is_none());
+    assert_eq!(ketos.get_vault(VaultId::LongTail).revenue.listing.0, LISTING_FEE);
+    ctx_at(USDC, deadline + 1);
+    let _ = ketos.ft_on_transfer(id("another.test"), U128(LISTING_FEE), format!("list_market:{}", request()));
+    let relisted = ketos.get_market("NEW".into()).unwrap();
+    assert_eq!(relisted.market.created_at_ms, deadline + 1);
+    assert_eq!(relisted.market.depth_measured_at_ms, 0);
+    assert!(!relisted.is_open);
+    assert_eq!(ketos.get_vault(VaultId::LongTail).revenue.listing.0, 2 * LISTING_FEE);
+}
+
+#[test]
+fn any_new_depth_report_restarts_the_seven_day_delisting_window() {
+    let mut ketos = setup();
+    list(&mut ketos, request(), LISTING_FEE);
+    let created = ketos.markets.get("NEW").unwrap().created_at_ms;
+    let report = created + crate::listing::DEAD_MARKET_AGE_MS - 1;
+    set_depth_at(&mut ketos, "NEW", curve_up_to(0), report);
+    ctx_at("stranger.test", created + crate::listing::DEAD_MARKET_AGE_MS);
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ketos.delist_dead_market("NEW".into());
+    })).is_err());
+    ctx_at("stranger.test", report + crate::listing::DEAD_MARKET_AGE_MS);
+    ketos.delist_dead_market("NEW".into());
+    assert!(ketos.get_market("NEW".into()).is_none());
+}
+
+#[test]
+fn old_depth_never_allows_removing_a_market_with_open_interest() {
+    let mut ketos = trading_setup();
+    let position = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
+    ctx_at("stranger.test", T0_MS + crate::listing::DEAD_MARKET_AGE_MS);
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ketos.delist_dead_market("NEAR".into());
+    })).is_err());
+    assert_eq!(ketos.get_position(position.id).unwrap().size, position.size);
+    assert_eq!(ketos.get_market("NEAR".into()).unwrap().market.oi_long, position.size);
+}
+
+#[test]
+fn delisted_orders_refund_margin_and_reward_even_after_the_symbol_is_relisted() {
+    use crate::orders::{EntryOrder, OrderExecution, OrderRequest};
+    let mut ketos = setup();
+    list(&mut ketos, request(), LISTING_FEE);
+    deposit(&mut ketos, "alice.test", 200 * USD);
+    ctx_at("alice.test", T0_MS);
+    let request = OrderRequest::Limit(EntryOrder {
+        market_id: "NEW".into(), side: Side::Long, margin: U128(10 * USD), leverage: 2,
+        trigger_price: U128(P4), brackets: None, margin_mode: crate::cross::MarginMode::Isolated,
+    });
+    let first = ketos.place_order_now(request.clone());
+    let second = ketos.place_order_now(request);
+    let dead = T0_MS + crate::listing::DEAD_MARKET_AGE_MS;
+    ctx_at("stranger.test", dead);
+    ketos.delist_dead_market("NEW".into());
+    assert!(ketos.orders_price_market_ids(&[first.id]).is_empty());
+    assert_eq!(ketos.execute_orders_now(vec![first.id]), vec![OrderExecution::Rejected {
+        order_id: first.id, reason: "ERR_MARKET_DELISTED".into(),
+    }]);
+    let listing = json!({
+        "symbol": "NEW", "oracle_asset_id": "different.token.near",
+        "intents_asset_id": "nep141:different.token.near", "price_source": "tee",
+    });
+    ctx_at(USDC, dead + 1);
+    let _ = ketos.ft_on_transfer(id("lister.test"), U128(LISTING_FEE), format!("list_market:{listing}"));
+    assert!(ketos.orders_price_market_ids(&[second.id]).is_empty());
+    ctx_at("executor.test", dead + 2);
+    assert_eq!(ketos.execute_orders_now(vec![second.id]), vec![OrderExecution::Rejected {
+        order_id: second.id, reason: "ERR_MARKET_DELISTED".into(),
+    }]);
+    assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
+    assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 0);
+    assert!(ketos.get_orders(id("alice.test")).is_empty());
+    assert!(ketos.get_positions(id("alice.test")).is_empty());
 }

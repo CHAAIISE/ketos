@@ -55,6 +55,19 @@ fn depth_fixture() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
+fn depth_samples(market: &str) -> Vec<Value> {
+    let fixture = depth_fixture();
+    let mut previous = 0;
+    fixture["assets"][market]["samples"].as_array().unwrap().iter().map(|sample| {
+        let mut sample = sample.clone();
+        if let Some(impact) = sample["impact_bps"].as_u64() {
+            previous = previous.max(impact);
+            sample["impact_bps"] = json!(previous);
+        }
+        sample
+    }).collect()
+}
+
 /// Panics unless the transaction succeeded; returns its JSON value (if any).
 fn ok(result: ExecutionFinalResult) -> Value {
     assert!(
@@ -252,7 +265,7 @@ async fn depth(
         "set_depth",
         json!({
             "market_id": market,
-            "samples": depth_fixture()["assets"]["NEAR"]["samples"],
+            "samples": depth_samples("NEAR"),
             "measured_at_ms": now_ms(worker).await?,
         }),
     )
@@ -521,19 +534,20 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .transact()
         .await?);
 
-    // Depth: the recorded 1Click curve, stamped at the current block time.
-    let fixture = depth_fixture();
-    let measured_at_ms = now_ms(&worker).await?;
-    for market in ["BTC", "ETH", "NEAR", "ZEC"] {
-        ok(bot
-            .call(ketos.id(), "set_depth")
-            .args_json(json!({
-                "market_id": market,
-                "samples": fixture["assets"][market]["samples"],
-                "measured_at_ms": measured_at_ms,
-            }))
-            .transact()
-            .await?);
+    // Five reports ramp the initial measured capacity and permit the first 5x tier.
+    for _ in 0..5 {
+        let measured_at_ms = now_ms(&worker).await?;
+        for market in ["BTC", "ETH", "NEAR", "ZEC"] {
+            ok(bot
+                .call(ketos.id(), "set_depth")
+                .args_json(json!({
+                    "market_id": market,
+                    "samples": depth_samples(market),
+                    "measured_at_ms": measured_at_ms,
+                }))
+                .transact()
+                .await?);
+        }
     }
     let near_market = view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?;
     assert_eq!(near_market["is_open"], false, "unfunded vault must not admit exposure");
@@ -1085,30 +1099,30 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     assert!(view(&ketos, "get_market", json!({ "market_id": "TAIL" }))
         .await?
         .is_null());
-    transfer_call(&v2, &usdc, &ketos, 5 * USD, &listing).await?;
+    transfer_call(&v2, &usdc, &ketos, 25 * USD, &listing).await?;
     assert_eq!(
         ft_balance(&usdc, &v2).await?,
-        wallet_before_listing - 5 * USD
+        wallet_before_listing - 25 * USD
     );
     let listed = view(&ketos, "get_market", json!({ "market_id": "TAIL" })).await?;
     assert_eq!(listed["vault_id"], "long-tail");
     assert_eq!(listed["is_open"], false);
     assert_eq!(listed["depth_measured_at_ms"], 0);
     let tail_listed = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
-    assert_eq!(integer(&tail_listed["balance"]), (10_005 * USD) as i128);
+    assert_eq!(integer(&tail_listed["balance"]), (10_025 * USD) as i128);
     assert_eq!(
         integer(&tail_listed["revenue"]["listing"]),
-        (5 * USD) as i128
+        (25 * USD) as i128
     );
     assert_eq!(
         view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?,
         core_before_listing
     );
     // Duplicate registration refunds through ft_resolve_transfer rather than charging twice.
-    transfer_call(&v2, &usdc, &ketos, 5 * USD, &listing).await?;
+    transfer_call(&v2, &usdc, &ketos, 25 * USD, &listing).await?;
     assert_eq!(
         ft_balance(&usdc, &v2).await?,
-        wallet_before_listing - 5 * USD
+        wallet_before_listing - 25 * USD
     );
     assert_eq!(
         view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?,

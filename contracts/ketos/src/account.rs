@@ -10,8 +10,8 @@ use crate::position::PositionId;
 use crate::orders::OrderId;
 use crate::{Ketos, KetosExt};
 
-/// First margin deposit must be at least 1 USDC: the contract pays the account's storage.
-pub const MIN_FIRST_DEPOSIT: u128 = USD;
+/// Every margin deposit pays at least 1 USDC; dust cannot grow subsidized history.
+pub const MIN_MARGIN_DEPOSIT: u128 = USD;
 
 const GAS_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
@@ -41,24 +41,16 @@ pub struct AccountView {
 
 impl Ketos {
     pub(crate) fn deposit_margin(&mut self, account_id: &AccountId, amount: u128) {
-        let account = match self.accounts.get_mut(account_id) {
-            Some(account) => account,
-            None => {
-                require!(amount >= MIN_FIRST_DEPOSIT, "ERR_MIN_FIRST_DEPOSIT: 1 USDC");
-                self.accounts.insert(account_id.clone(), Account::default());
-                self.accounts.get_mut(account_id).unwrap()
-            }
-        };
+        require!(amount >= MIN_MARGIN_DEPOSIT, "ERR_MIN_MARGIN_DEPOSIT: 1 USDC");
+        let account = self.accounts.entry(account_id.clone()).or_default();
         account.margin = account
             .margin
             .checked_add(amount)
             .unwrap_or_else(|| env::panic_str("ERR_OVERFLOW"));
-        if amount > 0 {
-            self.record_history(
-                account_id,
-                HistoryEvent::transfer(HistoryKind::Deposit, amount, env::block_timestamp_ms()),
-            );
-        }
+        self.record_history(
+            account_id,
+            HistoryEvent::transfer(HistoryKind::Deposit, amount, env::block_timestamp_ms()),
+        );
         log!("margin deposit {} by {}", amount, account_id);
     }
 }

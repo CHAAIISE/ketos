@@ -429,7 +429,14 @@ impl Ketos {
                 let Some(position) = self.positions.get(&order.request.position_id().unwrap()) else { return skipped; };
                 (&position.market_id, position.side)
             };
-            let market = self.markets.get(market_id).unwrap();
+            let market = self.markets.get(market_id)
+                .filter(|market| order.created_at_ms >= market.created_at_ms);
+            let Some(market) = market else {
+                self.remove_order(id);
+                let reason = "ERR_MARKET_DELISTED".to_string();
+                emit_event("order_rejected", json!({ "order_id": id, "reason": reason }));
+                return OrderExecution::Rejected { order_id: id, reason };
+            };
             if market.price.0 == 0 {
                 return skipped;
             }

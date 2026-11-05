@@ -135,6 +135,14 @@ describe("sampleAsset", () => {
     expect(exitCapacityUsd(depth.samples)).toBe(1_000_000);
   });
 
+  it("publishes a conservative envelope while preserving raw quotes and missing sizes", async () => {
+    const fetchImpl = fakeOneClick(new Map([[1_000, 50], [10_000, 30], [100_000, 40], [250_000, 80]]));
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, jwt: "partner-key", fetchImpl });
+    expect(depth.samples.map((s) => s.impact_bps)).toEqual([30, 30, null, 30, 60, null, null]);
+    expect(depth.details.map((s) => s.impact_bps)).toEqual([30, 10, null, 20, 60, null, null]);
+    expect(exitCapacityUsd(depth.samples)).toBe(10_000);
+  });
+
   it("fails for an asset 1Click does not list", async () => {
     await expect(sampleAsset("nep141:unknown.near", { tokens, fetchImpl: fakeOneClick(new Map()) })).rejects.toThrow(/not listed/);
   });

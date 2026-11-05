@@ -127,8 +127,8 @@ function fromPanic(panic: string, details: string): NearActionError {
       return make("Trading and liquidity-impact fees would consume the margin. Lower leverage or wait for a deeper liquidity curve.");
     case "ERR_MIN_POSITION_MARGIN":
       return make("A position needs at least $1 of margin.");
-    case "ERR_MIN_FIRST_DEPOSIT":
-      return make("Your first margin deposit must be at least 1 USDC.");
+    case "ERR_MIN_MARGIN_DEPOSIT":
+      return make("Margin deposits must be at least 1 USDC.");
     case "ERR_MIN_VAULT_DEPOSIT":
       return make("Vault deposits must be at least 1 USDC.");
     case "ERR_ZERO_AMOUNT":
@@ -196,9 +196,11 @@ function fromPanic(panic: string, details: string): NearActionError {
     case "ERR_STALE_CROSS_PRICE":
       return make("A price in your cross account is out of date. Wait for the next price update (about a minute) and retry.");
     case "ERR_LISTING_FEE":
-      return make("Listing a market costs exactly 5 USDC. Your USDC was refunded.");
+      return make("Listing a market costs exactly 25 USDC. Your USDC was refunded.");
     case "ERR_INVALID_LISTING":
     case "ERR_INVALID_ASSET":
+    case "ERR_ASSET_MISMATCH":
+    case "ERR_UNSUPPORTED_PRICE_SOURCE":
       return make("The listing details are not valid: pick an asset from the list and retry. Your USDC was refunded.");
     case "ERR_INVALID_SYMBOL":
       return make("Use an uppercase ticker of up to 16 letters or digits, starting with a letter. Your USDC was refunded.");
@@ -208,6 +210,8 @@ function fromPanic(panic: string, details: string): NearActionError {
       return make("This asset is already listed under another ticker. Your USDC was refunded.");
     case "ERR_UNSUPPORTED_WORKER_ASSET":
       return make("Our price worker does not price this asset yet. Your USDC was refunded.");
+    case "ERR_MARKET_LIMIT":
+      return make("The registry is full (32 markets). An inactive market must be delisted first. Your USDC was refunded.");
     case "ERR_UNKNOWN_VAULT":
       return make("This vault does not exist.");
     default:

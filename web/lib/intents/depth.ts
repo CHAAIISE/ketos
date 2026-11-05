@@ -79,11 +79,18 @@ export async function sampleAsset(assetId: string, { tokens, jwt, fetchImpl, siz
     }
   }
 
+  let previousImpact = 0;
+  const samples = details.map(({ size_usd, impact_bps }) => {
+    if (impact_bps === null) return { size_usd, impact_bps };
+    previousImpact = Math.max(previousImpact, impact_bps);
+    return { size_usd, impact_bps: previousImpact };
+  });
+
   return {
     asset_id: assetId,
     price_usd: token.price,
     fee_bps: feeBpsFor(jwt),
-    samples: details.map(({ size_usd, impact_bps }) => ({ size_usd, impact_bps })),
+    samples,
     details,
   };
 }

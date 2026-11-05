@@ -13,7 +13,7 @@ fn capital_setup(core: u128, tail: u128) -> Ketos {
     ketos.vaults[VaultId::LongTail.index()].balance = tail;
     deposit(&mut ketos, "alice.test", 100_000 * USD);
     for market in ["NEAR", "ETH", "ZEC", "DOGE"] {
-        set_depth_at(&mut ketos, market, measured_curve(), T0_MS);
+        seed_depth(&mut ketos, market, measured_curve(), T0_MS);
     }
     ctx_at("alice.test", T0_MS);
     ketos

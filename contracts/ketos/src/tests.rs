@@ -14,6 +14,7 @@ use crate::Ketos;
 mod capital;
 mod cross;
 mod execution_policy;
+mod depth_policy;
 mod funding;
 mod history;
 mod listing;
@@ -104,7 +105,7 @@ fn registry_addition_uses_asset_prices_market_fees_and_risk_limits() {
     let mut ketos = setup();
     ketos.register_market(extra_market("NEW", PriceSource::Tee));
     assert!(!ketos.get_market("NEW".into()).unwrap().is_open);
-    set_depth_at(&mut ketos, "NEW", measured_curve(), T0_MS);
+    seed_depth(&mut ketos, "NEW", measured_curve(), T0_MS);
     // An unrelated asset must not price this market.
     let data = price_data(T0_MS, &[("OTHER.oracle", Some((P4, 8)))]);
     push_prices(&mut ketos, ORACLE, T0_MS, data);
@@ -116,7 +117,7 @@ fn registry_addition_uses_asset_prices_market_fees_and_risk_limits() {
     assert!(market.is_open);
     assert_eq!(market.max_oi_per_side.0, 20_000 * USD);
     assert_eq!(market.market.max_leverage, 3);
-    assert_eq!(ketos.get_depth("NEW".into()).unwrap().history[0].max_leverage, 3);
+    assert_eq!(ketos.get_depth("NEW".into()).unwrap().history.last().unwrap().max_leverage, 3);
     deposit(&mut ketos, "alice.test", 200 * USD);
     let p = open(&mut ketos, "NEW", Side::Long, 100 * USD, 3);
     assert_eq!(p.entry_price.0, P4);
@@ -131,7 +132,7 @@ fn registry_addition_uses_asset_prices_market_fees_and_risk_limits() {
 fn market_leverage_ceiling_cannot_be_overridden_by_deeper_liquidity() {
     let mut ketos = setup();
     ketos.register_market(extra_market("NEW", PriceSource::Tee));
-    set_depth_at(&mut ketos, "NEW", measured_curve(), T0_MS);
+    seed_depth(&mut ketos, "NEW", measured_curve(), T0_MS);
     set_price(&mut ketos, "NEW", P4, T0_MS);
     deposit(&mut ketos, "alice.test", 200 * USD);
     open(&mut ketos, "NEW", Side::Long, 100 * USD, 4);
@@ -163,26 +164,28 @@ fn registry_refuses_reusing_an_intents_asset() {
 }
 
 #[test]
-fn market_pages_are_bounded_without_hiding_later_listings() {
+fn registry_limit_preserves_existing_markets_and_pagination() {
     let mut ketos = setup();
-    for i in 0..100 {
+    for i in 0..16 {
         ketos.register_market(extra_market(&format!("NEW{i}"), PriceSource::Tee));
     }
-    let first = ketos.get_markets(None, Some(u32::MAX));
-    let last = ketos.get_markets(Some(100), Some(100));
-    assert_eq!(first.len(), 100);
-    assert_eq!(last.len(), 16);
-    assert_eq!(first.last().unwrap().market.id, "NEW83");
-    assert_eq!(last.first().unwrap().market.id, "NEW84");
-    assert_eq!(last.last().unwrap().market.id, "NEW99");
+    let before = ketos.get_markets(None, Some(u32::MAX));
+    let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ketos.register_market(extra_market("OVERFLOW", PriceSource::Tee));
+    }));
+    assert!(error.is_err());
+    assert_eq!(ketos.get_markets(None, Some(u32::MAX)), before);
+    assert_eq!(before.len(), 32);
+    assert_eq!(ketos.get_markets(Some(16), Some(100)).last().unwrap().market.id, "NEW15");
+    assert!(!ketos.oracle_markets.contains_key(&"OVERFLOW.oracle".to_string()));
 }
 
 #[test]
 fn deposit_credits_margin_and_keeps_all_tokens() {
     let mut ketos = setup();
     deposit(&mut ketos, "alice.test", 200 * USD);
-    deposit(&mut ketos, "alice.test", 50);
-    assert_eq!(margin(&ketos, "alice.test"), 200 * USD + 50);
+    deposit(&mut ketos, "alice.test", USD);
+    assert_eq!(margin(&ketos, "alice.test"), 201 * USD);
 }
 
 #[test]
@@ -202,7 +205,7 @@ fn unknown_message_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "ERR_MIN_FIRST_DEPOSIT")]
+#[should_panic(expected = "ERR_MIN_MARGIN_DEPOSIT")]
 fn first_deposit_below_minimum_is_rejected() {
     let mut ketos = setup();
     deposit(&mut ketos, "alice.test", USD - 1);
@@ -352,6 +355,13 @@ fn set_depth_at(ketos: &mut Ketos, market: &str, samples: Vec<DepthSample>, at_m
     ketos.set_depth(market.into(), samples, at_ms);
 }
 
+/// Mature measured limits through real updates; individual depth tests use set_depth_at.
+fn seed_depth(ketos: &mut Ketos, market: &str, samples: Vec<DepthSample>, at_ms: u64) {
+    for step in 0..=10 {
+        set_depth_at(ketos, market, samples.clone(), at_ms - 4 * HOUR_MS + step * (4 * HOUR_MS / 10));
+    }
+}
+
 fn seed_unpriced_markets(ketos: &mut Ketos) {
     for market in ketos.markets.values_mut() {
         if market.price.0 == 0 {
@@ -370,7 +380,7 @@ fn trading_setup() -> Ketos {
     ketos.vaults[VaultId::Core.index()].balance = 10_000 * USD;
     ketos.vaults[VaultId::LongTail.index()].balance = 10_000 * USD;
     for m in ["NEAR", "ZEC"] {
-        set_depth_at(&mut ketos, m, measured_curve(), T0_MS);
+        seed_depth(&mut ketos, m, measured_curve(), T0_MS);
         set_price(&mut ketos, m, P4, T0_MS);
     }
     ketos
@@ -576,33 +586,23 @@ fn curve_up_to(capacity_usd: u64) -> Vec<DepthSample> {
 }
 
 #[test]
-fn depth_sets_leverage_tier_and_cap() {
+fn depth_growth_is_bounded_while_decreases_and_closure_are_immediate() {
     let mut ketos = setup();
-    ketos.vaults[VaultId::Core.index()].balance = 10_000 * USD;
-    // (measured capacity, max leverage, max OI per side): OI is also bounded by the hard cap.
-    let tiers = [
-        (1_000_000, 20, 500_000),
-        (500_000, 10, 500_000),
-        (250_000, 10, 250_000),
-        (100_000, 5, 100_000),
-        (50_000, 5, 50_000),
-        (10_000, 2, 10_000),
-    ];
-    for (i, (capacity, leverage, max_oi)) in tiers.into_iter().enumerate() {
-        let at = T0_MS + i as u64 * 60_000;
+    ketos.vaults[VaultId::Core.index()].balance = 1_000_000 * USD;
+    seed_depth(&mut ketos, "BTC", curve_up_to(1_000_000), T0_MS);
+    assert_eq!(ketos.get_market("BTC".into()).unwrap().market.max_leverage, 20);
+    let tiers = [(500_000, 10), (250_000, 10), (100_000, 5), (50_000, 5), (10_000, 2)];
+    for (i, (capacity, leverage)) in tiers.into_iter().enumerate() {
+        let at = T0_MS + (i as u64 + 1) * 60_000;
         set_depth_at(&mut ketos, "BTC", curve_up_to(capacity), at);
-        set_price(&mut ketos, "BTC", P4, at);
         let m = ketos.get_market("BTC".into()).unwrap();
-        assert_eq!(m.market.max_leverage, leverage, "capacity {capacity}");
+        assert_eq!(m.market.max_leverage, leverage);
         assert_eq!(m.market.exit_capacity.0, capacity as u128 * USD);
-        assert_eq!(m.max_oi_per_side.0, max_oi * USD);
+        assert_eq!(m.max_oi_per_side.0, capacity as u128 * USD);
         assert!(m.is_open);
     }
-    // Under $10k the market stays listed but closed.
     set_depth_at(&mut ketos, "BTC", curve_up_to(1_000), T0_MS + HOUR_MS);
-    let m = ketos.get_market("BTC".into()).unwrap();
-    assert_eq!(m.market.max_leverage, 2);
-    assert!(!m.is_open);
+    assert!(!ketos.get_market("BTC".into()).unwrap().is_open);
 }
 
 #[test]
@@ -1027,7 +1027,7 @@ fn oracle_push_stores_8_decimal_prices_and_enables_trading() {
     let mut ketos = setup();
     deposit(&mut ketos, "alice.test", 200 * USD);
     ketos.vaults[VaultId::Core.index()].balance = 10_000 * USD;
-    set_depth_at(&mut ketos, "NEAR", measured_curve(), T0_MS);
+    seed_depth(&mut ketos, "NEAR", measured_curve(), T0_MS);
 
     // Shapes seen on testnet (8 decimals), another precision, a missing price, an unlisted asset.
     let data = price_data(

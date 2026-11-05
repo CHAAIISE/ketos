@@ -15,7 +15,7 @@ const ONE_YOCTO = 1n;
 export const MSG_DEPOSIT_MARGIN = "deposit_margin";
 export const MSG_LIST_MARKET = "list_market:";
 /** Exact amount `list_market` accepts, USDC units; it goes to the Long-tail vault. */
-export const LISTING_FEE = 5_000_000n;
+export const LISTING_FEE = 25_000_000n;
 
 export const depositVaultMsg = (vaultId: VaultId) => `deposit_vault:${vaultId}`;
 
@@ -226,7 +226,7 @@ export interface ListMarketArgs {
 }
 
 /**
- * Lists a market in the Long-tail vault by paying the 5 USDC fee from the tUSDC wallet. The
+ * Lists a market in the Long-tail vault by paying the 25 USDC fee from the USDC wallet. The
  * market stays closed ("measuring") until the keeper publishes its first depth sample. An
  * initial price request follows the observed successful listing, funded by its creator.
  */

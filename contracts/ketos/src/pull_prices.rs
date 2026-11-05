@@ -177,6 +177,10 @@ impl Ketos {
             };
             match &order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
+                    if !self.markets.get(&entry.market_id)
+                        .is_some_and(|market| order.created_at_ms >= market.created_at_ms) {
+                        continue;
+                    }
                     markets.extend(self.open_price_market_ids(
                         &entry.market_id,
                         &order.account_id,

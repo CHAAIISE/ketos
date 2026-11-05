@@ -1,8 +1,9 @@
 //! Ketos perpetual futures: isolated and cross margin against LP vaults, with open interest
 //! capped by conservative vault capital and exit liquidity measured on NEAR Intents.
 //!
-//! There is no admin method that can pause markets or move user funds: the only privileged
-//! account is the keeper, limited to publishing depth samples. Prices come from the oracle.
+//! Listing, execution and liquidation are permissionless; the trusted keeper reports depth.
+//! Prices use authenticated oracle callbacks or the pinned TEE signing key. The deployer's
+//! full-access key can upgrade the contract; this is not an immutable or trustless deployment.
 
 pub mod account;
 pub mod cross;
