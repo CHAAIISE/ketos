@@ -66,4 +66,15 @@ describe("listableAssets", () => {
     });
     expect(assets.map((a) => a.oracleAssetId)).toEqual(["a.near"]);
   });
+
+  it("offers UNI only with pinned worker support and the exact NEAR route, then removes it once listed", () => {
+    const intents = "nep141:eth-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984.omft.near";
+    const args = { markets: registry, oracleAssetIds: [], tokens: [token(intents, "UNI", "eth"), token("nep141:other.near", "UNI")] };
+    expect(listableAssets(args)).toEqual([]);
+    expect(listableAssets({ ...args, workerSymbols: ["UNI"] })).toEqual([
+      { symbol: "UNI", oracleAssetId: "UNI", intentsAssetId: intents, priceSource: "outlayer_worker", referencePriceUsd: 1 },
+    ]);
+    expect(listableAssets({ ...args, workerSymbols: ["UNI"], markets: [...registry, market("UNI", "UNI", intents)] })).toEqual([]);
+    expect(listableAssets({ ...args, workerSymbols: ["UNI"], tokens: [token("nep141:other.near", "UNI")] })).toEqual([]);
+  });
 });

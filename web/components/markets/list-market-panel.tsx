@@ -132,8 +132,8 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
 
             <div className="flex flex-col gap-2">
               <Row label="Market">{marketName(asset.symbol)}</Row>
-              <Row label={<Term hint="Price pushed onchain by the OutLayer price oracle, running in a TEE.">Price source</Term>}>
-                OutLayer oracle
+              <Row label={<Term hint="Price delivered onchain by an OutLayer TEE oracle or the pinned multisource worker.">Price source</Term>}>
+                {asset.priceSource === "outlayer_worker" ? "OutLayer worker" : "OutLayer oracle"}
               </Row>
               <Row label={<Term hint="Newly listed markets are backed by the Long-tail vault, never by Core.">Vault</Term>}>
                 Long-tail

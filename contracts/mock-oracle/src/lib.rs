@@ -14,7 +14,7 @@ use near_sdk::{
 pub const MIN_ORACLE_CALL_DEPOSIT: NearToken = NearToken::from_millinear(10);
 pub const MIN_EXECUTION_DEPOSIT: NearToken = NearToken::from_millinear(20);
 const WORKER_PROJECT: &str = "ketos.testnet/ketos-prices";
-const WORKER_VERSION: &str = "24893486ff4a1aba1445fbb1b083888fa47bab0837c99580869a82e322805f89";
+const WORKER_VERSION: &str = "5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92";
 const RECENCY_DURATION_SEC: u32 = 300;
 
 #[near(serializers = [json, borsh])]

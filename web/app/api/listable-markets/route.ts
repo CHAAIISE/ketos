@@ -14,16 +14,17 @@ export async function GET() {
   try {
     const { rpcUrl, ketosContract, usdcContract } = nearConfig();
     const views = new KetosViews(rpcUrl, ketosContract, usdcContract);
-    const [config, markets, tokens] = await Promise.all([
+    const [config, markets, tokens, workerSymbols] = await Promise.all([
       views.config(),
       views.markets(),
       getTokens({ jwt: process.env.ONECLICK_JWT?.trim() || undefined }),
+      views.workerAssets(),
     ]);
     const oracleAssetIds = await views.oracleAssetIds(config.oracle_id);
     const body: ListableResponse = {
       fetchedAtMs: Date.now(),
       oracleId: config.oracle_id,
-      assets: listableAssets({ markets, oracleAssetIds, tokens }),
+      assets: listableAssets({ markets, oracleAssetIds, tokens, workerSymbols }),
     };
     cached = { atMs: body.fetchedAtMs, body };
     return Response.json(body);

@@ -3,7 +3,7 @@
   "network": "testnet",
   "contract": "outlayer.testnet",
   "endpoint": "https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices",
-  "wasm_url": "https://test.fastfs.io/ketos.testnet/outlayer.testnet/24893486ff4a1aba1445fbb1b083888fa47bab0837c99580869a82e322805f89.wasm",
-  "wasm_sha256": "24893486ff4a1aba1445fbb1b083888fa47bab0837c99580869a82e322805f89",
+  "wasm_url": "https://test.fastfs.io/ketos.testnet/outlayer.testnet/5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92.wasm",
+  "wasm_sha256": "5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92",
   "build_target": "wasm32-wasip2"
 }

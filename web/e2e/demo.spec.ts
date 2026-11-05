@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { fundTraderMargin, getMarket, mintTraderUsdc, sandboxViews, setOraclePrice, traderAccountId } from "./sandbox";
+import { formatPrice } from "../lib/near/format";
 
 // The demo journey on the local sandbox, as a first-time visitor walks it: every screen offers
 // exactly one main action. Prices move through the mock oracle; triggered orders, listings and
@@ -61,7 +62,7 @@ async function fillMarketOrder(
 }
 
 test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits", async ({ page }) => {
-  // Four scenes wait for a keeper pass (SOL measured, limit fill, listing, stop loss + liquidation).
+  // Three scenes wait for a keeper pass: limit fill, listing, stop loss + liquidation.
   test.setTimeout(1_200_000);
   const trader = traderAccountId();
   const pageErrors: string[] = [];
@@ -117,7 +118,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(currentStep).toContainText(/Open a position/);
   });
 
-  await test.step("3. markets: every listed market with its live cap, search, open SOL", async () => {
+  await test.step("3. markets: every listed market with its live cap, search, open ETH", async () => {
     await openApp(page, "Markets");
     await expect(page).toHaveURL(/\/markets$/);
     const table = page.getByTestId("markets-table");
@@ -126,37 +127,38 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     }
     await expect(table.locator('[data-testid^="market-row-"]')).toHaveCount(16);
     await expectSinglePrimary(page, /^List /);
-    // SOL has no sandbox fixture: it opens once the keeper has measured it on NEAR Intents.
-    await expect(page.getByTestId("market-status-SOL")).toHaveText("Open", { timeout: KEEPER_WAIT });
-    await page.getByTestId("markets-search").fill("SOL");
+    await expect(page.getByTestId("market-status-ETH")).toHaveText("Open", { timeout: KEEPER_WAIT });
+    await page.getByTestId("markets-search").fill("ETH");
     await expect(table.locator('[data-testid^="market-row-"]')).toHaveCount(1);
-    const sol = page.getByTestId("market-row-SOL");
-    await expect(sol).toContainText(/\$[\d,.]+/);
-    await sol.click();
-    await expect(page).toHaveURL(/\/trade\?market=SOL$/);
-    await expect(page.getByTestId("market-selector")).toContainText("SOL-USD");
+    const eth = page.getByTestId("market-row-ETH");
+    await expect(eth).toContainText(/\$[\d,.]+/);
+    await eth.click();
+    await expect(page).toHaveURL(/\/trade\?market=ETH$/);
+    await expect(page.getByTestId("market-selector")).toContainText("ETH-USD");
   });
 
-  await test.step("4. trade SOL: market long 5x with take profit and stop loss", async () => {
-    await expect(page.getByTestId("mark-price")).toHaveText("$150.00");
-    await fillMarketOrder(page, ticket, { side: "long", leverage: 5, size: 500, takeProfit: 180, stopLoss: 130 });
+  await test.step("4. trade ETH: market long 5x with take profit and stop loss", async () => {
+    await expect(page.getByTestId("mark-price")).toHaveText("$2,292.59");
+    await fillMarketOrder(page, ticket, { side: "long", leverage: 5, size: 500, takeProfit: 2750, stopLoss: 2000 });
     await expectSinglePrimary(page, /Buy \/ Long/);
     await page.locator("[data-primary]:visible").click();
-    await expectToast(page, /Long SOL 5× opened · \$500\.00/);
+    await expectToast(page, /Long ETH 5× opened · \$500\.00/);
     await expect(positions).toHaveCount(1);
     const row = positions.first();
-    await expect(row).toContainText("SOL");
+    await expect(row).toContainText("ETH");
     await expect(row).toContainText("Long 5×");
-    await expect(row.locator('[data-testid^="brackets-"]')).toContainText("180");
-    await expect(row.locator('[data-testid^="brackets-"]')).toContainText("130");
-    await expect(row).toContainText(/\$1[0-9]{2}\.\d{2}/); // liquidation price, below the $150 entry
+    await expect(row.locator('[data-testid^="brackets-"]')).toContainText("2,750");
+    await expect(row.locator('[data-testid^="brackets-"]')).toContainText("2,000");
+    const [position] = await sandboxViews().positions(trader);
+    expect(position.liquidation_price).toBeLessThan(position.entry_price);
+    await expect(row).toContainText(formatPrice(position.liquidation_price));
     // The guide steps aside once the first position is open.
     await expect(steps).toBeHidden();
 
     await page.getByTestId("account-tab-orders").click();
     await expect(page.getByTestId("account-tab-orders")).toHaveText("Open Orders (2)");
-    await expect(openOrders.filter({ hasText: "Take Profit" })).toContainText("SOL");
-    await expect(openOrders.filter({ hasText: "Stop Loss" })).toContainText("SOL");
+    await expect(openOrders.filter({ hasText: "Take Profit" })).toContainText("ETH");
+    await expect(openOrders.filter({ hasText: "Stop Loss" })).toContainText("ETH");
   });
 
   await test.step("5. trade BTC: a limit short fills when the oracle price reaches it", async () => {
@@ -225,11 +227,11 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
   await test.step("7. markets: permissionless listing, measuring, then open after a keeper pass", async () => {
     await openApp(page, "Markets");
     await expect(page).toHaveURL(/\/markets$/);
-    // The search from the SOL scene is remembered; clear it to see the whole registry.
+    // Clear the search to see the whole registry.
     await page.getByTestId("markets-search").fill("");
     const panel = page.getByTestId("list-market-panel");
     // The sandbox oracle prices one asset that NEAR Intents quotes and the registry lacks.
-    const symbol = "CNEAR";
+    const symbol = "UNI";
     const candidate = panel.getByTestId(`listable-${symbol}`);
     await expect(candidate).toBeVisible({ timeout: 60_000 });
     await candidate.click();
@@ -263,7 +265,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     for (const source of ["Trading + borrow fees", "Net funding", "Counterparty PnL", "Liquidation penalties"]) {
       await expect(revenue).toContainText(source);
     }
-    await expect(page.getByRole("region", { name: /exposure/i })).toContainText("SOL");
+    await expect(page.getByRole("region", { name: /exposure/i })).toContainText("ETH");
 
     // Cover both vaults after the 500 USDC margin deposit and the 5 USDC listing fee.
     await mintTraderUsdc(105n * USDC);
@@ -281,7 +283,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     const coreShares = await sharesRow.locator("span").last().innerText();
     await page.goto("/vaults/long-tail");
     await expect(page.getByText("You have no vault shares yet.")).toBeVisible();
-    await expect(page.getByRole("region", { name: /exposure/i }).getByRole("link", { name: "SOL", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: /exposure/i }).getByRole("link", { name: "ETH", exact: true })).toHaveCount(0);
     const views = sandboxViews();
     const before = await views.vault("long-tail");
     const expectedShares = 100n * USDC * before.total_shares / before.nav;
@@ -296,7 +298,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(sharesRow.locator("span").last()).toHaveText(coreShares);
   });
 
-  await test.step("9. risk: capacity heatmap, measurement history, stress test on SOL", async () => {
+  await test.step("9. risk: capacity heatmap, measurement history, stress test on ETH", async () => {
     await openApp(page, "Risk");
     await expect(page).toHaveURL(/\/risk$/);
     await expect(page.getByText("Last measurement", { exact: true }).first()).toBeVisible();
@@ -307,20 +309,20 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
       await page.locator("summary").filter({ hasText: "Latest measured impact curve" }).click();
       await expect(page.getByRole("img", { name: /^Price impact by sell size; exit capacity/ })).toBeVisible();
     }
-    await page.getByTestId("risk-market-SOL").click();
-    await expect(page.locator("#stress-market")).toHaveValue("SOL");
+    await page.getByTestId("risk-market-ETH").click();
+    await expect(page.locator("#stress-market")).toHaveValue("ETH");
     await expect(page.getByRole("status").filter({ hasText: /Market tightened|No recent tightening observed/ })).toBeVisible();
     await page.locator("summary").filter({ hasText: "Latest measured impact curve" }).click();
     await expect(page.getByRole("img", { name: /^Price impact by sell size; exit capacity/ })).toBeVisible();
 
     await page.locator("#stress-shock").fill("50");
-    const row = page.locator('[data-testid^="stress-position-"]').filter({ hasText: "SOL" });
+    const row = page.locator('[data-testid^="stress-position-"]').filter({ hasText: "ETH" });
     await expect(row).toContainText("Would liquidate");
     await expect(page.getByTestId("stress-notional")).toHaveText("$500.00");
     await expect(page.getByTestId("stress-debt-core")).toHaveText(/^\$150\./);
     await expect(page.getByTestId("stress-debt-long-tail")).toHaveText("$0.00");
     // The scenario is read-only.
-    expect((await getMarket("SOL")).oi_long).toBe("500000000");
+    expect((await getMarket("ETH")).oi_long).toBe("500000000");
     await expect(page.getByText("pnpm depth:sample").first()).toBeVisible();
     await expectSinglePrimary(page, /Copy/);
   });
@@ -384,7 +386,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expectToast(page, /Short BTC closed · settled into cross margin/);
     await expect(positions).toHaveCount(1);
     await positions.first().getByRole("button", { name: "Close" }).click();
-    await expectToast(page, /Long SOL closed/);
+    await expectToast(page, /Long ETH closed/);
     await expect(positions).toHaveCount(0);
 
     await page.getByRole("button", { name: "Withdraw", exact: true }).click();

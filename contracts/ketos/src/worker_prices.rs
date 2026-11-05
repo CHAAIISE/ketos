@@ -7,10 +7,10 @@ use crate::{Ketos, KetosExt};
 
 pub const WORKER_PROJECT: &str = "ketos.testnet/ketos-prices";
 pub const WORKER_WASM_HASH: &str =
-    "24893486ff4a1aba1445fbb1b083888fa47bab0837c99580869a82e322805f89";
-pub const WORKER_ASSETS: [&str; 16] = [
+    "5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92";
+pub const WORKER_ASSETS: [&str; 21] = [
     "BTC", "ETH", "NEAR", "ZEC", "SOL", "AURORA", "RHEA", "DOGE", "XRP", "LTC", "ADA", "SUI",
-    "TRX", "BNB", "AVAX", "LINK",
+    "TRX", "BNB", "AVAX", "LINK", "UNI", "AAVE", "BCH", "APT", "ARB",
 ];
 pub const WORKER_BATCH_SIZE: usize = 12;
 pub const WORKER_DEPOSIT: NearToken = NearToken::from_millinear(20);
@@ -54,6 +54,10 @@ impl Ketos {
 
 #[near]
 impl Ketos {
+    pub fn get_worker_assets(&self) -> &'static [&'static str] {
+        &WORKER_ASSETS
+    }
+
     /// A failed/invalid response never makes the previous price appear fresher.
     #[private]
     pub fn on_worker_prices(

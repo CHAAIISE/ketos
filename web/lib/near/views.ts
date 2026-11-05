@@ -68,6 +68,10 @@ export class KetosViews {
     return data.prices.map((p) => p.asset_id);
   }
 
+  workerAssets() {
+    return this.view(z.array(z.string()), this.ketosContract, "get_worker_assets");
+  }
+
   marketPage(fromIndex: number, limit = MARKETS_PAGE) {
     return this.view(z.array(marketSchema), this.ketosContract, "get_markets", {
       from_index: fromIndex,

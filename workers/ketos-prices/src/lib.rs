@@ -21,7 +21,7 @@ pub struct Asset {
 
 // Kraken's request aliases and response keys are not interchangeable with
 // exchange-independent symbols (notably BTC/XBT and DOGE/XDG).
-pub const SUPPORTED_ASSETS: [Asset; 16] = [
+pub const SUPPORTED_ASSETS: [Asset; 21] = [
     Asset {
         symbol: "BTC",
         kraken_pair: "XBTUSD",
@@ -101,6 +101,31 @@ pub const SUPPORTED_ASSETS: [Asset; 16] = [
         symbol: "LINK",
         kraken_pair: "LINKUSD",
         kraken_legacy_key: "LINKUSD",
+    },
+    Asset {
+        symbol: "UNI",
+        kraken_pair: "UNIUSD",
+        kraken_legacy_key: "UNIUSD",
+    },
+    Asset {
+        symbol: "AAVE",
+        kraken_pair: "AAVEUSD",
+        kraken_legacy_key: "AAVEUSD",
+    },
+    Asset {
+        symbol: "BCH",
+        kraken_pair: "BCHUSD",
+        kraken_legacy_key: "BCHUSD",
+    },
+    Asset {
+        symbol: "APT",
+        kraken_pair: "APTUSD",
+        kraken_legacy_key: "APTUSD",
+    },
+    Asset {
+        symbol: "ARB",
+        kraken_pair: "ARBUSD",
+        kraken_legacy_key: "ARBUSD",
     },
 ];
 
