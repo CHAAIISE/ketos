@@ -16,6 +16,7 @@ pub mod market;
 pub mod math;
 pub mod oracle;
 pub mod orders;
+mod migration;
 pub mod position;
 pub mod pull_prices;
 mod priced_actions;
@@ -62,6 +63,9 @@ enum StorageKey {
     PnlRanking,
     VolumeRanking,
     PriceDeposits,
+    V3Markets,
+    V3Orders,
+    V3VaultShares { vault_id: VaultId },
 }
 
 #[near(serializers = [json])]

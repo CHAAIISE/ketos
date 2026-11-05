@@ -8,6 +8,9 @@ use serde_json::{json, Value};
 #[path = "wallet_flow.rs"]
 mod wallet_flow;
 
+#[path = "migration_flow.rs"]
+mod migration_flow;
+
 const USD: u128 = 1_000_000;
 const KEEPER_METHODS: [&str; 7] = [
     "refresh_prices",
