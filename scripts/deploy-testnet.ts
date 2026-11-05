@@ -29,7 +29,7 @@ const root = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.u
 type AccountView = { amount: string; code_hash: string; storage_usage: number };
 type RpcResult<T> = { result?: T; error?: { cause?: { name?: string } } };
 type ContractState = { account: AccountView | null; initialized: boolean };
-type Vault = { balance: string; total_shares: string; cross_receivable: string };
+type Vault = { balance: string; nav: string; total_shares: string; cross_receivable: string };
 type VaultAccount = { shares: string };
 type Market = { id: string; price_source: string; vault_id: string; max_leverage_cap: number };
 
@@ -327,6 +327,18 @@ async function main(): Promise<void> {
       console.log(`${vaultId}: 10000 USDC deployment seed shares already present`);
       return;
     }
+    const keeper = new Account(ids.keeper, provider, keeperKey as KeyPairString);
+    await keeper.callFunction({
+      contractId: ids.ketos, methodName: "refresh_prices", args: {},
+      gas: teraToGas("300"), waitUntil: "FINAL",
+    });
+    const markets = await view<(Market & { price: string; price_timestamp_ms: number })[]>(ids.ketos, "get_markets");
+    const block = await provider.viewBlock({ finality: "final" });
+    const nowMs = Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n);
+    if (markets.some((market) => market.vault_id === vaultId &&
+        (BigInt(market.price) === 0n || nowMs - market.price_timestamp_ms > 120_000))) {
+      throw new Error(`${vaultId}: every assigned market needs a fresh price before the LP seed; no seed transfer sent`);
+    }
     const balance = BigInt(await view<string>(ids.usdc, "ft_balance_of", { account_id: seedAccountId }));
     if (balance < VAULT_SEED) {
       await parent.callFunction({
@@ -344,7 +356,7 @@ async function main(): Promise<void> {
     }
     const after = await view<Vault>(ids.ketos, "get_vault", args);
     const owned = await view<VaultAccount>(ids.ketos, "get_vault_account", accountArgs);
-    if (BigInt(after.total_shares) - BigInt(vault.total_shares) !== VAULT_SEED ||
+    if (BigInt(after.total_shares) - BigInt(vault.total_shares) !== VAULT_SEED + BigInt(vault.nav) ||
         BigInt(owned.shares) - BigInt(held.shares) !== VAULT_SEED ||
         BigInt(after.balance) - BigInt(vault.balance) !== VAULT_SEED) {
       throw new Error(`${vaultId}: accepted seed but vault balance/share deltas do not match 10000 USDC; inspect on-chain state before retrying`);

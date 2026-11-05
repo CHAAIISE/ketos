@@ -443,7 +443,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             .await?);
     }
     let near_market = view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?;
-    assert_eq!(near_market["is_open"], true);
+    assert_eq!(near_market["is_open"], false, "unfunded vault must not admit exposure");
     assert_eq!(near_market["max_leverage"], 5);
     assert_eq!(near_market["max_oi_per_side"], (100_000 * USD).to_string());
     for asset in WORKER_ASSETS {
@@ -464,10 +464,15 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .transact()
         .await?);
     transfer_call(&trader, &usdc, &ketos, 500 * USD, "deposit_margin").await?;
+    call(&bot, &ketos, "refresh_prices", json!({})).await?;
     transfer_call(&lp, &usdc, &ketos, 10_000 * USD, "deposit_vault:core").await?;
     assert_eq!(margin(&ketos, &trader).await?, 500 * USD);
     let vault = view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?;
     assert_eq!(vault["nav"], (10_000 * USD).to_string());
+    assert_eq!(
+        view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?["is_open"],
+        true
+    );
 
     // Long NEAR 5x, then a ZEC short sized past the measured exit capacity.
     let long = ok(trader
@@ -692,6 +697,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .args_json(json!({ "account_id": lp.id(), "amount": (10_000 * USD).to_string() }))
         .transact()
         .await?);
+    call(&bot, &ketos, "refresh_prices", json!({})).await?;
     transfer_call(&lp, &usdc, &ketos, 10_000 * USD, "deposit_vault:long-tail").await?;
     let tail_seed = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
     assert_eq!(integer(&tail_seed["balance"]), (10_000 * USD) as i128);
@@ -1061,7 +1067,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     )
     .await?;
     let tail_active = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
-    assert_eq!(integer(&tail_active["reserved"]), (40 * USD) as i128);
+    assert_eq!(integer(&tail_active["reserved"]), (44 * USD) as i128);
     assert!(integer(&tail_active["balance"]) > integer(&tail_listed["balance"]));
     assert_eq!(
         view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?,

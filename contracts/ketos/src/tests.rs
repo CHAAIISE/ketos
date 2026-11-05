@@ -11,6 +11,7 @@ use crate::math;
 use crate::position::{PositionView, Side};
 use crate::Ketos;
 
+mod capital;
 mod cross;
 mod funding;
 mod history;
@@ -106,13 +107,13 @@ fn registry_addition_uses_asset_prices_market_fees_and_risk_limits() {
     assert_eq!(stored_price(&ketos, "NEW"), (0, 0));
     let data = price_data(T0_MS, &[("NEW.oracle", Some((P4, 8)))]);
     push_prices(&mut ketos, ORACLE, T0_MS, data);
+    ketos.vaults[VaultId::LongTail.index()].balance = 10_000 * USD;
     let market = ketos.get_market("NEW".into()).unwrap();
     assert!(market.is_open);
     assert_eq!(market.max_oi_per_side.0, 20_000 * USD);
     assert_eq!(market.market.max_leverage, 3);
     assert_eq!(ketos.get_depth("NEW".into()).unwrap().history[0].max_leverage, 3);
     deposit(&mut ketos, "alice.test", 200 * USD);
-    ketos.vaults[VaultId::LongTail.index()].balance = 10_000 * USD;
     let p = open(&mut ketos, "NEW", Side::Long, 100 * USD, 3);
     assert_eq!(p.entry_price.0, P4);
     assert_eq!(p.margin.0, 100 * USD - 150_000);
@@ -347,12 +348,23 @@ fn set_depth_at(ketos: &mut Ketos, market: &str, samples: Vec<DepthSample>, at_m
     ketos.set_depth(market.into(), samples, at_ms);
 }
 
+fn seed_unpriced_markets(ketos: &mut Ketos) {
+    for market in ketos.markets.values_mut() {
+        if market.price.0 == 0 {
+            market.price = U128(P4);
+            market.price_timestamp_ms = T0_MS;
+        }
+    }
+}
+
 /// NEAR and ZEC at $4 with the measured $100k exit capacity (5x, $100k OI per side), trader
 /// with 200 USDC margin, vault with 10,000 USDC.
 fn trading_setup() -> Ketos {
     let mut ketos = setup();
+    seed_unpriced_markets(&mut ketos);
     deposit(&mut ketos, "alice.test", 200 * USD);
     ketos.vaults[VaultId::Core.index()].balance = 10_000 * USD;
+    ketos.vaults[VaultId::LongTail.index()].balance = 10_000 * USD;
     for m in ["NEAR", "ZEC"] {
         set_depth_at(&mut ketos, m, measured_curve(), T0_MS);
         set_price(&mut ketos, m, P4, T0_MS);
@@ -518,6 +530,7 @@ fn close_with_stale_price_is_refused() {
 #[should_panic(expected = "ERR_NO_PRICE")]
 fn missing_price_is_refused() {
     let mut ketos = trading_setup();
+    set_price(&mut ketos, "BTC", 0, T0_MS);
     set_depth_at(&mut ketos, "BTC", measured_curve(), T0_MS);
     ctx_at("alice.test", T0_MS);
     ketos.open_position("BTC".into(), Side::Long, U128(100 * USD), 2, None, None);
@@ -561,6 +574,7 @@ fn curve_up_to(capacity_usd: u64) -> Vec<DepthSample> {
 #[test]
 fn depth_sets_leverage_tier_and_cap() {
     let mut ketos = setup();
+    ketos.vaults[VaultId::Core.index()].balance = 10_000 * USD;
     // (measured capacity, max leverage, max OI per side): OI is also bounded by the hard cap.
     let tiers = [
         (1_000_000, 20, 500_000),
@@ -589,6 +603,7 @@ fn depth_sets_leverage_tier_and_cap() {
 #[test]
 fn size_beyond_exit_capacity_is_refused_with_remaining_cap() {
     let mut ketos = trading_setup();
+    ketos.vaults[VaultId::LongTail.index()].balance = 100_000 * USD;
     deposit(&mut ketos, "whale.test", 30_000 * USD);
     ctx_at("whale.test", T0_MS);
     ketos.open_position("ZEC".into(), Side::Short, U128(12_000 * USD), 5, None, None);
@@ -869,9 +884,9 @@ fn vault_withdrawal_is_limited_to_unreserved_usdc() {
     let mut ketos = vault_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     let v = vault_at(&ketos, T0_MS);
-    // The open long can win at most its 500 USDC notional.
-    assert_eq!(v.reserved.0, 500 * USD);
-    assert_eq!(v.available.0, 9_500_500_000);
+    // Reserve the largest side plus a 10% buffer, not both gross sides.
+    assert_eq!(v.reserved.0, 550 * USD);
+    assert_eq!(v.available.0, 9_450_500_000);
 
     testing_env!(VMContextBuilder::new()
         .current_account_id(id(CONTRACT))
@@ -886,7 +901,7 @@ fn vault_withdrawal_is_limited_to_unreserved_usdc() {
     assert!(err
         .downcast_ref::<String>()
         .unwrap()
-        .contains("ERR_VAULT_RESERVED: available 9500500000"));
+        .contains("ERR_VAULT_RESERVED: available 9450500000"));
 
     // A partial withdrawal within the unreserved balance goes through at NAV.
     let _ = ketos.withdraw_vault(VaultId::Core, U128(9_000 * USD));
@@ -917,6 +932,7 @@ fn failed_vault_withdrawal_restores_shares() {
     let sent = ketos.on_vault_withdrawn(VaultId::Core, id("lp.test"),
     U128(4_000 * USD),
     U128(4_000 * USD),
+    ketos.vaults[VaultId::Core.index()].share_epoch,
     Err(PromiseError::Failed),);
     assert_eq!(sent, U128(0));
     assert_eq!(ketos.get_vault_account(VaultId::Core, id("lp.test")).shares.0, 10_000 * USD);

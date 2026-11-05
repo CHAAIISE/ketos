@@ -51,6 +51,11 @@ describe("toNearActionError", () => {
       "Exceeds live exit liquidity on NEAR Intents (cap $4,500.00). Reduce the size or use the max size.",
     );
   });
+  it("distinguishes vault capital from measured exit liquidity", () => {
+    const error = toNearActionError(panicked("ERR_EXCEEDS_VAULT_CAPITAL: cap 1250000000"));
+    expect(error.code).toBe("ERR_EXCEEDS_VAULT_CAPITAL");
+    expect(error.capUsdc).toBe(1_250_000_000n);
+  });
 
   it("parses the available vault amount, the leverage limit and the faucet cooldown", () => {
     const reserved = toNearActionError(panicked("ERR_VAULT_RESERVED: available 1250000"));
@@ -88,7 +93,6 @@ describe("toNearActionError", () => {
     ["ERR_UNKNOWN_MARKET", /does not exist/],
     ["ERR_INSUFFICIENT_SHARES", /vault shares/],
     ["ERR_ZERO_SHARES", /too small/],
-    ["ERR_VAULT_EMPTY", /deposits are paused/],
     ["ERR_INVALID_MSG", /refunded/],
     ["ERR_NO_ORDER", /already filled or cancelled/],
     ["ERR_INVALID_TAKE_PROFIT", /above the current price for a long/],

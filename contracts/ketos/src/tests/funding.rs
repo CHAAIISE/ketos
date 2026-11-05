@@ -64,7 +64,7 @@ fn assert_ten_hour_funding(long_leverage: u32, short_leverage: u32) {
     assert_eq!(ketos.get_position(receiver).unwrap().funding_payment.0, -250_000);
     let vault = ketos.get_vault(VaultId::Core);
     assert_eq!(vault.funding_net_due.0, 500_000);
-    assert_eq!(vault.reserved.0, 400 * USD + 250_000);
+    assert_eq!(vault.reserved.0, 330 * USD + 250_000);
     assert_eq!(vault.nav.0, vault.balance.0 + vault.borrow_fees_due.0 + 500_000);
     // A public checkpoint works despite stale depth/prices, without double charging.
     ketos.settle_funding("NEAR".into());
@@ -136,7 +136,7 @@ fn vault_keeps_receiver_funding_reserved_after_payer_exits() {
     let vault = ketos.get_vault(VaultId::Core);
     assert_eq!(receiver.funding_payment.0, -250_000);
     assert_eq!(vault.funding_net_due.0, -250_000);
-    assert_eq!(vault.reserved.0, 100 * USD + 250_000);
+    assert_eq!(vault.reserved.0, 110 * USD + 250_000);
     assert_eq!(vault.nav.0, vault.balance.0 + vault.borrow_fees_due.0 - 250_000);
     // The former minority now pays at the one-sided maximum, without losing its old credit.
     ctx_at("stranger.test", now + HOUR_MS);

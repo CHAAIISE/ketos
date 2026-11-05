@@ -423,9 +423,10 @@ fn cross_position_bound_keeps_account_liquidation_executable() {
 #[test]
 fn same_vault_receivable_is_netted_before_capping_a_cross_gain() {
     let mut ketos = cross_setup();
-    ketos.vaults[VaultId::Core.index()].balance = 0;
     let long = cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     let short = cross_open(&mut ketos, "NEAR", Side::Short, 100 * USD, 5);
+    // Model a later cash loss while retaining the two already collected opening fees.
+    ketos.vaults[VaultId::Core.index()].balance = USD;
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
     ketos.close_position(long.id);

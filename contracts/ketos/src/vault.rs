@@ -8,7 +8,7 @@ use near_sdk::{
 };
 
 use crate::market::{VaultId, USD};
-use crate::math::{mul_div_floor, to_i128, BPS};
+use crate::math::{mul_div_ceil, mul_div_floor, to_i128, BPS};
 use crate::{emit_event, Ketos, KetosExt};
 
 pub const MIN_VAULT_DEPOSIT: u128 = USD;
@@ -25,6 +25,13 @@ impl VaultId {
     pub(crate) fn index(self) -> usize {
         match self {
             Self::Core => 0,
+            Self::LongTail => 1,
+        }
+    }
+
+    pub(crate) fn oi_multiplier(self) -> u128 {
+        match self {
+            Self::Core => 2,
             Self::LongTail => 1,
         }
     }
@@ -49,6 +56,7 @@ pub(crate) struct Vault {
     /// Cross settlement claims are included in balance but cannot fund withdrawals or gains.
     pub cross_receivable: u128,
     pub total_shares: u128,
+    pub share_epoch: u64,
     pub revenue: Revenue,
     pub fee_log: FeeLog,
 }
@@ -89,12 +97,13 @@ pub struct VaultView {
     pub id: VaultId,
     /// Accounting assets, including cross receivables; cash is balance minus cross_receivable.
     pub balance: U128,
-    /// balance − traders' unrealized PnL + borrow fees + net funding due.
+    /// Cash-backed NAV with per-position collectible losses, borrow and funding capped to margin.
     pub nav: U128,
     pub total_shares: U128,
     pub share_price: U128,
     pub reserved: U128,
     pub available: U128,
+    pub available_to_withdraw: U128,
     pub cross_receivable: U128,
     pub traders_unrealized_pnl: I128,
     pub borrow_fees_due: U128,
@@ -155,12 +164,44 @@ impl Ketos {
             .record(env::block_timestamp_ms(), fees + penalty);
     }
 
+    pub(crate) fn vault_exposure(&self, vault_id: VaultId) -> u128 {
+        self.markets
+            .values()
+            .filter(|market| market.vault_id == vault_id)
+            .map(|market| market.oi_long.0.max(market.oi_short.0))
+            .sum()
+    }
+
+    fn require_fresh_vault_prices(&self, vault_id: VaultId) {
+        let now_ms = env::block_timestamp_ms();
+        for market in self.markets.values().filter(|market| market.vault_id == vault_id) {
+            market.fresh_price(now_ms);
+        }
+    }
+
+    fn vault_shares_held(&self, vault_id: VaultId, account_id: &AccountId) -> u128 {
+        self.vault_shares[vault_id.index()]
+            .get(account_id)
+            .filter(|(epoch, _)| *epoch == self.vaults[vault_id.index()].share_epoch)
+            .map_or(0, |(_, shares)| *shares)
+    }
+
     fn set_vault_shares(&mut self, vault_id: VaultId, account_id: &AccountId, shares: u128) {
         let held = &mut self.vault_shares[vault_id.index()];
         if shares == 0 {
             held.remove(account_id);
         } else {
-            held.insert(account_id.clone(), shares);
+            held.insert(account_id.clone(), (self.vaults[vault_id.index()].share_epoch, shares));
+        }
+    }
+
+    fn reset_vault_shares(&mut self, vault_id: VaultId, nav: u128) {
+        let vault = &mut self.vaults[vault_id.index()];
+        vault.share_epoch = vault.share_epoch.checked_add(1).expect("ERR_SHARE_EPOCH_OVERFLOW");
+        vault.total_shares = nav;
+        if nav > 0 {
+            // Assets with no LP owner belong to the protocol, not the next depositor.
+            self.set_vault_shares(vault_id, &env::current_account_id(), nav);
         }
     }
 
@@ -172,18 +213,19 @@ impl Ketos {
         amount: u128,
     ) {
         require!(amount >= MIN_VAULT_DEPOSIT, "ERR_MIN_VAULT_DEPOSIT: 1 USDC");
+        self.require_fresh_vault_prices(vault_id);
         let view = self.get_vault(vault_id);
-        let shares = if view.total_shares.0 == 0 {
+        if view.nav.0 == 0 || view.total_shares.0 == 0 {
+            self.reset_vault_shares(vault_id, view.nav.0);
+        }
+        let total_shares = self.vaults[vault_id.index()].total_shares;
+        let shares = if total_shares == 0 {
             amount
         } else {
-            require!(view.nav.0 > 0, "ERR_VAULT_EMPTY");
-            mul_div_floor(amount, view.total_shares.0, view.nav.0)
+            mul_div_floor(amount, total_shares, view.nav.0)
         };
         require!(shares > 0, "ERR_ZERO_SHARES");
-        let held = self.vault_shares[vault_id.index()]
-            .get(account_id)
-            .copied()
-            .unwrap_or(0);
+        let held = self.vault_shares_held(vault_id, account_id);
         self.set_vault_shares(vault_id, account_id, held + shares);
         let vault = &mut self.vaults[vault_id.index()];
         vault.total_shares += shares;
@@ -206,10 +248,8 @@ impl Ketos {
         let account_id = env::predecessor_account_id();
         let shares = shares.0;
         require!(shares > 0, "ERR_ZERO_SHARES");
-        let held = self.vault_shares[vault_id.index()]
-            .get(&account_id)
-            .copied()
-            .unwrap_or(0);
+        self.require_fresh_vault_prices(vault_id);
+        let held = self.vault_shares_held(vault_id, &account_id);
         require!(held >= shares, "ERR_INSUFFICIENT_SHARES");
         let view = self.get_vault(vault_id);
         let amount = mul_div_floor(shares, view.nav.0, view.total_shares.0);
@@ -224,6 +264,7 @@ impl Ketos {
         let vault = &mut self.vaults[vault_id.index()];
         vault.total_shares -= shares;
         vault.balance -= amount;
+        let share_epoch = vault.share_epoch;
         emit_event(
             "vault_withdraw",
             json!({
@@ -243,7 +284,7 @@ impl Ketos {
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(GAS_WITHDRAW_CALLBACK)
-                    .on_vault_withdrawn(vault_id, account_id, U128(shares), U128(amount)),
+                    .on_vault_withdrawn(vault_id, account_id, U128(shares), U128(amount), share_epoch),
             )
     }
 
@@ -254,15 +295,35 @@ impl Ketos {
         account_id: AccountId,
         shares: U128,
         amount: U128,
+        share_epoch: u64,
         #[callback_result] result: Result<(), PromiseError>,
     ) -> U128 {
         if result.is_ok() {
             return amount;
         }
-        let held = self.vault_shares[vault_id.index()]
-            .get(&account_id)
-            .copied()
-            .unwrap_or(0);
+        if self.vaults[vault_id.index()].share_epoch == share_epoch
+            && self.vaults[vault_id.index()].total_shares == 0
+        {
+            let nav = self.get_vault(vault_id).nav.0;
+            if nav > 0 {
+                // A failed full withdrawal cannot capture surplus earned while no LP
+                // shares existed. Its already-debited cash claim remains the LP's.
+                self.reset_vault_shares(vault_id, nav);
+            }
+        }
+        if self.vaults[vault_id.index()].share_epoch != share_epoch {
+            // The transfer was already debited before the wipeout. Return its real cash
+            // claim as free margin without reviving a claim on the recapitalized vault.
+            self.accounts.entry(account_id.clone()).or_default().margin += amount.0;
+            log!(
+                "vault {:?} withdrawal of {} to {} failed after share reset, credited margin",
+                vault_id,
+                amount.0,
+                account_id
+            );
+            return U128(0);
+        }
+        let held = self.vault_shares_held(vault_id, &account_id);
         self.set_vault_shares(vault_id, &account_id, held + shares.0);
         let vault = &mut self.vaults[vault_id.index()];
         vault.total_shares += shares.0;
@@ -279,25 +340,51 @@ impl Ketos {
     pub fn get_vault(&self, vault_id: VaultId) -> VaultView {
         let now_ms = env::block_timestamp_ms();
         let vault = &self.vaults[vault_id.index()];
-        let mut traders_pnl = 0;
-        let mut borrow = 0;
-        let mut funding = 0;
-        let mut exposure = 0;
-        for market in self.markets.values().filter(|m| m.vault_id == vault_id) {
-            traders_pnl += market.traders_pnl();
-            borrow += market.borrow_fees_due(now_ms);
-            funding += market.funding_net_due(now_ms);
-            exposure += market.oi_long.0
-                + market.oi_short.0
-                + market
-                    .funding_at(now_ms)
-                    .received_due([market.oi_long.0, market.oi_short.0]);
+        let mut traders_pnl = 0i128;
+        let mut borrow = 0u128;
+        let mut funding = 0i128;
+        let mut exposure = 0u128;
+        let mut reserve = vault.cross_receivable;
+        for market in self.markets.values().filter(|market| market.vault_id == vault_id) {
+            let largest_side = market.oi_long.0.max(market.oi_short.0);
+            exposure += largest_side;
+            reserve = reserve
+                .saturating_add(mul_div_ceil(largest_side, BPS + 1_000, BPS))
+                .saturating_add(
+                    market.funding_at(now_ms).received_due([market.oi_long.0, market.oi_short.0]),
+                );
         }
+        // Aggregates cannot distinguish a collectible loss from an underwater trader's
+        // bad debt. Mark in place, without allocating, and retain all winner liabilities.
+        for position in self.positions.values() {
+            let market = self.markets.get(&position.market_id).unwrap();
+            if market.vault_id != vault_id {
+                continue;
+            }
+            let marked = position.mark(market, market.price.0, now_ms);
+            let price_loss = marked.pnl.min(0).unsigned_abs().min(position.margin);
+            traders_pnl += if marked.pnl < 0 { -to_i128(price_loss) } else { marked.pnl };
+            let mut collectible = position.margin - price_loss;
+            let net_funding = to_i128(marked.funding_paid) - to_i128(marked.funding_received);
+            if net_funding > 0 {
+                let paid = net_funding.unsigned_abs().min(collectible);
+                funding += to_i128(paid);
+                collectible -= paid;
+            } else {
+                funding += net_funding;
+            }
+            borrow += marked.borrow_fee.min(collectible);
+        }
+        // Settled cross debt is not cash and is not guaranteed collectible, even while
+        // another cross position remains open. Never sell LP shares against that debt.
+        let cash = vault.balance.saturating_sub(vault.cross_receivable);
         let nav = u128::try_from(
-            (to_i128(vault.balance) + to_i128(borrow) + funding - traders_pnl).max(0),
+            (to_i128(cash) + to_i128(borrow) + funding - traders_pnl).max(0),
         )
         .unwrap();
-        let reserved = exposure.saturating_add(vault.cross_receivable).min(vault.balance);
+        let reserved = reserve.min(vault.balance);
+        let capital_floor = exposure.div_ceil(vault_id.oi_multiplier());
+        let available = (vault.balance - reserved).min(nav.saturating_sub(capital_floor));
         let fees_7d = vault.fee_log.trailing(now_ms);
         let share_price = if vault.total_shares == 0 {
             USD
@@ -317,7 +404,8 @@ impl Ketos {
             total_shares: U128(vault.total_shares),
             share_price: U128(share_price),
             reserved: U128(reserved),
-            available: U128(vault.balance - reserved),
+            available: U128(available),
+            available_to_withdraw: U128(available),
             cross_receivable: U128(vault.cross_receivable),
             traders_unrealized_pnl: I128(traders_pnl),
             borrow_fees_due: U128(borrow),
@@ -333,10 +421,7 @@ impl Ketos {
     }
 
     pub fn get_vault_account(&self, vault_id: VaultId, account_id: AccountId) -> VaultAccountView {
-        let shares = self.vault_shares[vault_id.index()]
-            .get(&account_id)
-            .copied()
-            .unwrap_or(0);
+        let shares = self.vault_shares_held(vault_id, &account_id);
         let view = self.get_vault(vault_id);
         let value = if view.total_shares.0 == 0 {
             0

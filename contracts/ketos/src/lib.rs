@@ -1,5 +1,5 @@
 //! Ketos perpetual futures: isolated and cross margin against LP vaults, with open interest
-//! and leverage capped by exit liquidity measured on NEAR Intents.
+//! capped by conservative vault capital and exit liquidity measured on NEAR Intents.
 //!
 //! There is no admin method that can pause markets or move user funds: the only privileged
 //! account is the keeper, limited to publishing depth samples. Prices come from the oracle.
@@ -87,7 +87,8 @@ pub struct Ketos {
     liquidations: Vector<LiquidationRecord>,
     liquidation_count: u64,
     vaults: [Vault; 2],
-    vault_shares: [LookupMap<AccountId, u128>; 2],
+    /// Epoch-tagged balances prevent wiped-out LP shares from reviving after recapitalization.
+    vault_shares: [LookupMap<AccountId, (u64, u128)>; 2],
     vault_history: [Vector<VaultSnapshot>; 2],
     vault_snapshot_count: u64,
     last_snapshot_at_ms: Option<u64>,

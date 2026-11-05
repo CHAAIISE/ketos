@@ -238,6 +238,7 @@ fn stale_or_missing_price_never_fills_or_releases_reserved_margin() {
 #[test]
 fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
     let mut ketos = trading_setup();
+    ketos.vaults[VaultId::Core.index()].balance = 60_000 * USD;
     deposit(&mut ketos, "alice.test", 30_000 * USD);
     let first = place(
         &mut ketos,
@@ -270,7 +271,7 @@ fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
             .0,
         0
     );
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 60_500_000);
+    assert_eq!(ketos.vaults[0].balance, 60_000 * USD + 60_500_000);
     assert_eq!(ketos.get_positions(id("alice.test")).len(), 2);
     assert!(ketos.get_orders(id("alice.test")).is_empty());
 }

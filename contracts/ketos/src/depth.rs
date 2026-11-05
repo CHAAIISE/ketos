@@ -132,9 +132,9 @@ impl Ketos {
     }
 
     pub fn get_depth(&self, market_id: MarketId) -> Option<DepthView> {
-        let market = self.markets.get(&market_id)?;
+        let market = self.get_market(market_id.clone())?;
         Some(DepthView {
-            market: market.view(env::block_timestamp_ms()),
+            market,
             history: self.depth.get(&market_id).cloned().unwrap_or_default(),
         })
     }

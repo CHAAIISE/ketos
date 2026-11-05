@@ -3,7 +3,7 @@ import { formatUsd } from "./format";
 /** A failed wallet or contract action, with a message meant for the user. */
 export class NearActionError extends Error {
   readonly code: string;
-  /** ERR_EXCEEDS_EXIT_LIQUIDITY: notional (USDC units) still open on that side; the UI can offer it as max size. */
+  /** Remaining notional (USDC units) allowed by the exit-liquidity or vault-capital limit. */
   readonly capUsdc?: bigint;
   /** ERR_VAULT_RESERVED: USDC units the vault can pay out right now. */
   readonly availableUsdc?: bigint;
@@ -95,6 +95,14 @@ function fromPanic(panic: string, details: string): NearActionError {
         { capUsdc },
       );
     }
+    case "ERR_EXCEEDS_VAULT_CAPITAL": {
+      const cap = /cap\s+(\d+)/.exec(arg)?.[1];
+      const capUsdc = cap === undefined ? undefined : BigInt(cap);
+      return make(
+        `The vault cannot back this position${capUsdc === undefined ? "" : ` (remaining size ${formatUsd(capUsdc)})`}. Reduce the size or wait for more vault capital.`,
+        { capUsdc },
+      );
+    }
     case "ERR_MARKET_CLOSED":
       return make(
         `This market is closed to new positions${arg ? ` (${arg})` : ""}. Open positions can still be closed; try again once liquidity recovers.`,
@@ -148,8 +156,6 @@ function fromPanic(panic: string, details: string): NearActionError {
       return make("You do not hold that many vault shares.");
     case "ERR_ZERO_SHARES":
       return make("The amount is too small to mint or burn a vault share. Use a larger amount.");
-    case "ERR_VAULT_EMPTY":
-      return make("The vault has no net value right now, so deposits are paused. Try again later.");
     case "ERR_FAUCET_COOLDOWN": {
       const seconds = /(\d+)\s*s/.exec(arg)?.[1];
       if (seconds === undefined) return make("You already claimed from the faucet this hour. Try again later.");

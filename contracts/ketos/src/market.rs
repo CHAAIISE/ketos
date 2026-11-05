@@ -114,7 +114,12 @@ pub struct MarketView {
     #[serde(flatten)]
     pub market: Market,
     pub max_oi_per_side: U128,
-    /// False when exit capacity is under $10k or the depth sample is older than 30 minutes.
+    /// Capital-backed total per-side ceiling, in micro-USDC like `exit_capacity`.
+    pub vault_backed_cap_usd: U128,
+    pub effective_max_oi_per_side: U128,
+    /// The measured capacity reached the largest size in the latest sample grid.
+    pub measured_cap_is_grid_max: bool,
+    /// Depth is usable and at least one side has room under both liquidity and capital limits.
     pub is_open: bool,
     /// Signed hourly rate, RATE_PRECISION scale: positive means longs pay shorts.
     pub funding_rate_per_hour: I128,
@@ -199,11 +204,23 @@ impl Market {
         }
     }
 
-    pub fn view(&self, now_ms: u64) -> MarketView {
+    fn view(
+        &self,
+        now_ms: u64,
+        vault_backed_cap: u128,
+        vault_within_limit: bool,
+        measured_cap_is_grid_max: bool,
+    ) -> MarketView {
+        let effective_cap = self.max_oi_per_side().min(vault_backed_cap);
         MarketView {
             market: self.clone(),
             max_oi_per_side: U128(self.max_oi_per_side()),
-            is_open: self.closed_reason(now_ms).is_none(),
+            vault_backed_cap_usd: U128(vault_backed_cap),
+            effective_max_oi_per_side: U128(effective_cap),
+            measured_cap_is_grid_max,
+            is_open: self.closed_reason(now_ms).is_none()
+                && vault_within_limit
+                && self.oi_long.0.min(self.oi_short.0) < effective_cap,
             funding_rate_per_hour: I128(funding_rate(self.oi_long.0, self.oi_short.0)),
         }
     }
@@ -309,6 +326,39 @@ fn worker_markets() -> impl Iterator<Item = MarketConfig> {
 }
 
 impl Ketos {
+    /// Conservative cash-backed NAV budget and current largest-side vault exposure.
+    pub(crate) fn vault_capital_limits(&self, vault_id: VaultId) -> (u128, u128) {
+        (
+            self.get_vault(vault_id).nav.0.saturating_mul(vault_id.oi_multiplier()),
+            self.vault_exposure(vault_id),
+        )
+    }
+
+    /// Total market ceiling, not additional room; other markets consume the shared budget.
+    pub(crate) fn vault_backed_cap(
+        market: &Market,
+        (limit, exposure): (u128, u128),
+    ) -> u128 {
+        market.oi_long.0.max(market.oi_short.0)
+            .saturating_add(limit.saturating_sub(exposure))
+    }
+
+    fn market_view(
+        &self,
+        market: &Market,
+        now_ms: u64,
+        (limit, exposure): (u128, u128),
+    ) -> MarketView {
+        let cap = Self::vault_backed_cap(market, (limit, exposure));
+        let grid_max = self.depth.get(&market.id)
+            .and_then(|history| history.last())
+            .is_some_and(|record| {
+                record.samples.last()
+                    .is_some_and(|sample| sample.size_usd == record.exit_capacity_usd)
+            });
+        market.view(now_ms, cap, exposure <= limit, grid_max)
+    }
+
     /// Shared insertion path; no privileged endpoint can change a live market's terms.
     pub(crate) fn register_market(&mut self, config: MarketConfig) {
         require!(
@@ -345,17 +395,22 @@ impl Ketos {
     /// At most 100 markets per page, in listing order.
     pub fn get_markets(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<MarketView> {
         let now_ms = env::block_timestamp_ms();
+        // NAV marks positions, so compute it once per vault rather than once per market.
+        let limits = [
+            self.vault_capital_limits(VaultId::Core),
+            self.vault_capital_limits(VaultId::LongTail),
+        ];
         self.markets
             .values()
             .skip(from_index.unwrap_or(0) as usize)
             .take(limit.unwrap_or(50).min(100) as usize)
-            .map(|m| m.view(now_ms))
+            .map(|m| self.market_view(m, now_ms, limits[m.vault_id.index()]))
             .collect()
     }
 
     pub fn get_market(&self, market_id: MarketId) -> Option<MarketView> {
         self.markets
             .get(&market_id)
-            .map(|m| m.view(env::block_timestamp_ms()))
+            .map(|m| self.market_view(m, env::block_timestamp_ms(), self.vault_capital_limits(m.vault_id)))
     }
 }

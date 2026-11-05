@@ -101,16 +101,6 @@ impl Funding {
         )
     }
 
-    /// Conservative aggregate: receivables floor, liabilities ceil. Per-position debits
-    /// round up and credits round down, so this does not overstate net funding assets.
-    pub(crate) fn net_due(&self, oi: [u128; 2]) -> i128 {
-        let paid: u128 = (0..2)
-            .map(|i| (mul_div_floor(oi[i], self.paid_index[i].0, 1) - self.paid_weight[i])
-                / RATE_PRECISION)
-            .sum();
-        to_i128(paid) - to_i128(self.received_due(oi))
-    }
-
     pub(crate) fn received_due(&self, oi: [u128; 2]) -> u128 {
         (0..2)
             .map(|i| (mul_div_floor(oi[i], self.received_index[i].0, 1)
@@ -127,9 +117,6 @@ impl Market {
         )
     }
 
-    pub(crate) fn funding_net_due(&self, now_ms: u64) -> i128 {
-        self.funding_at(now_ms).net_due([self.oi_long.0, self.oi_short.0])
-    }
 }
 
 impl Ketos {

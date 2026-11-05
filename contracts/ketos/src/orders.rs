@@ -190,6 +190,20 @@ impl Ketos {
         if size > room {
             return Err(format!("ERR_EXCEEDS_EXIT_LIQUIDITY: cap {room}"));
         }
+        let (capital_limit, exposure) = self.vault_capital_limits(market.vault_id);
+        let largest_side = market.oi_long.0.max(market.oi_short.0);
+        let capital_cap = Self::vault_backed_cap(market, (capital_limit, exposure));
+        let capital_room = if exposure > capital_limit {
+            0
+        } else {
+            capital_cap.saturating_sub(market.oi(side))
+        };
+        let post_side = market.oi(side).checked_add(size).ok_or("ERR_OVERFLOW")?;
+        let post_largest = post_side.max(market.oi_long.0).max(market.oi_short.0);
+        let post_exposure = exposure.saturating_sub(largest_side).saturating_add(post_largest);
+        if size > capital_room || post_exposure > capital_limit {
+            return Err(format!("ERR_EXCEEDS_VAULT_CAPITAL: cap {capital_room}"));
+        }
         let account = self.accounts.get(account_id).ok_or("ERR_NO_ACCOUNT")?;
         if account.margin < margin {
             return Err("ERR_INSUFFICIENT_MARGIN".into());

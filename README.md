@@ -63,15 +63,19 @@ flowchart LR
 
 ### Liquidity rules
 
+The rules below describe the checked-in contract. The hosted deployment still uses the previous storage layout; vault-backed admission and share epochs have not been deployed there. Upgrading existing state requires a migration or a fresh deployment, not a direct WASM replacement.
+
 The [sampler](web/lib/intents/depth.ts) requests seven sizes: $1k, $10k, $50k, $100k, $250k, $500k and $1M. It subtracts the configured platform fee from gross quoted impact: 20 bps with the current partner configuration, 25 bps without a key. These are implementation settings, not a guarantee that an external fee schedule never changes.
 
 The [contract](contracts/ketos/src/depth.rs) enforces:
 
 - **Exit capacity:** the last size in the contiguous acceptable prefix, with every sample up to it quoted at ≤100 bps net impact. The first missing quote or impact above 100 bps ends the prefix.
-- **Open interest per side:** `min(market hard cap, exit capacity)`. The current default hard cap is $500,000. Long and short caps are separate, not a bound on their combined notional.
+- **Open interest per side:** `min(market hard cap, exit capacity, vault-backed cap)`. The default hard cap is $500,000. With `L = k × NAV` and `E = Σ max(long OI, short OI)` across a vault's markets, a market's vault-backed ceiling is its current largest side plus `max(L − E, 0)`. Core uses `k = 2`; Long-tail uses `k = 1`. Every entry must leave total exposure at or below `L`, including cross and triggered entries. Upcoming entry fees do not count toward admission.
 - **Leverage:** 20× at capacity ≥$1M, 10× at ≥$250k, 5× at ≥$50k, otherwise 2×, further limited by the market's configured ceiling. Permissionless and worker-market ceilings are 5×.
 - **Entry closed:** capacity below $10k or depth older than 30 minutes. Entries also require an oracle price no older than 120 seconds.
 - **Enforcement at execution:** market entries and triggered entries recheck remaining capacity. Lower caps constrain new entries; they do not forcibly resize existing positions.
+
+Market views expose `vault_backed_cap_usd` and `effective_max_oi_per_side` in micro-USDC, like `exit_capacity`. The existing `max_oi_per_side` is the hard/depth ceiling. `measured_cap_is_grid_max` identifies a capacity equal to the largest probed size; that observation is a lower bound, not proof of deeper liquidity.
 
 The keeper rotates batches of 8 markets, plus up to 4 never-measured markets outside the slot. A tick refreshes only that depth batch, but checkpoints funding and requests prices for the full registry. It then executes triggered orders, re-reads positions, liquidates unhealthy isolated positions/cross accounts and takes hourly snapshots. The [HTTP endpoint](web/app/api/keeper/tick/route.ts) has a 60-second gate; the [executor](web/lib/keeper/tick.ts) refuses ticks below 2 NEAR of spendable contract funds.
 
@@ -91,7 +95,11 @@ The [registry](contracts/ketos/src/market.rs) initializes 16 markets: BTC, ETH, 
 
 The pinned worker also supports UNI, AAVE, BCH, APT and ARB. The listing picker matches their exact token routes against `get_worker_assets` from the deployed contract, so a new worker upload alone cannot advertise unsupported onchain assets. Origin-chain labels in the token catalog do not exclude these NEAR token representations.
 
-[Core and Long-tail](contracts/ketos/src/vault.rs) have independent shares, NAV, reserves and revenue counters. Trader results affect only the assigned vault. LPs earn trading/borrow fees, net funding, trader losses and liquidation/listing fees, and bear trader gains and bad debt. Withdrawals are limited by reserves. Hourly snapshot rings retain up to 168 actual observations; missed hours are not invented. Outstanding cross claims count in accounting NAV but are not spendable cash.
+[Core and Long-tail](contracts/ketos/src/vault.rs) have independent shares, NAV, reserves and revenue counters. Trader results affect only the assigned vault. NAV marks each position separately: losses and collectible funding/borrow charges cannot exceed that position's collateral, while winning claims remain liabilities. Settled cross receivables are excluded until collected. This conservative calculation scans open positions rather than valuing uncollectible debt as LP capital.
+
+Reserves cover each market's largest side plus 10%, outstanding funding credits and cross receivables, rather than adding both gross sides. `available_to_withdraw` (also returned as `available`) is capped by cash less reserves and by the NAV left after retaining `ceil(E / k)` capital. LP deposits and withdrawals require prices no older than 120 seconds for **every** market assigned to that vault, including inactive markets.
+
+A zero-NAV recapitalization invalidates the old share epoch; former shares cannot regain a claim on new deposits. Positive ownerless NAV receives protocol-owned shares before the next LP deposit. If an earlier withdrawal transfer fails after an epoch change, its cash is returned as the claimant's free margin, not resurrected shares. Hourly snapshot rings retain up to 168 actual observations; missed hours are not invented.
 
 [Account history](contracts/ketos/src/history.rs) retains 200 events per account; all-time trading aggregates survive eviction. Portfolio uses confirmed margin transfers and trading records. The all-time leaderboard indexes at most 500 recently trading accounts; ROI is realized PnL divided by cumulative entry collateral. Landing 24-hour volume is a lower bound when the retained cohort/history cannot cover the window.
 
@@ -191,11 +199,11 @@ The existing Vercel project uses `web/` as Root Directory. Deploy from the repos
 - Testnet only, unaudited. Faucet USDC is not real USDC. No real-money use.
 - No cross-chain deposits: the Deposit route preview only requests a quote. Trading and collateral settlement stay in one NEAR contract; no swap or hedge is sent to mainnet.
 - Mainnet quotes are nonbinding observations, not reserved liquidity. The keeper is trusted to report depth honestly; the contract does not verify solver quotes. Stale checks and caps do not eliminate manipulation, price gaps or LP losses.
-- Existing exposure can exceed a newly lowered cap. The cap applies per side, not to combined long/short exposure, and does not force deleveraging. Maximum trader price profit is bounded by position notional; available counterparty cash can further cap payouts.
+- Existing exposure can exceed a newly lowered depth cap or capital budget after a price move. Such positions are not forcibly resized; new entries are refused when the vault-wide budget is exceeded. Maximum trader price profit is bounded by position notional; available counterparty cash can further cap payouts. Capital limits and the reserve buffer are not a solvency guarantee through arbitrary price gaps.
 - The deployed price paths are the TEE oracle and pinned multisource worker, not signed prices. The worker checks venue agreement within 1%; Kraken/Binance tickers lack independent trade timestamps. Source outages can leave prices stale, preventing entries, closes and liquidations until refreshed.
 - Local prices are mock-controlled. The 12-step demo requires live quote availability for ETH and its new UNI listing; an external outage can prevent those markets opening rather than silently substituting data.
 - Triggered orders execute at the oracle price when an executor runs, not necessarily at the trigger. No guaranteed fills, latency or stop-loss protection through gaps.
-- Cross losses can consume other committed cross collateral. Outstanding creditor-vault claims affect NAV but cannot fund withdrawals. LP withdrawals remain reserve-limited; fresh marks and adequate health constrain collateral release.
+- Cross losses can consume other committed cross collateral. Outstanding creditor-vault claims cannot fund withdrawals or back new exposure until collected. LP withdrawals remain reserve- and capital-limited. An unpriced or stale market, even without positions, blocks LP deposits and withdrawals in its assigned vault until prices recover.
 - Maintenance depends on app visits or a running CLI and sufficient contract NEAR. The serverless gate is not a distributed lease: duplicate requests can race and spend oracle funds. The restricted key cannot transfer tokens arbitrarily, but its authorized methods change depth, settle orders and liquidate.
 - Histories are bounded, snapshots are not backfilled, spot chart prices can differ from oracle marks, and separate RPC reads are not an atomic snapshot. Stress results are estimates, not execution guarantees.
 - No administrator freeze/seizure method is implemented, but full-access testnet deployment keys remain. The code is not immutable.
