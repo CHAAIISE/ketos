@@ -62,6 +62,80 @@ fn assert_backed(ketos: &Ketos, total: u128) {
 }
 
 #[test]
+fn wallet_cross_close_keeps_partial_cash_and_releases_actual_final_balance() {
+    for gain_first in [false, true] {
+        for to_wallet in [None, Some(false)] {
+            let mut ketos = cross_setup();
+            deposit(&mut ketos, "alice.test", 50 * USD);
+            let long = cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
+            let short = cross_open(&mut ketos, "ZEC", Side::Short, 100 * USD, 5);
+            set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
+            set_price(&mut ketos, "ZEC", P4 / 2, T0_MS);
+            let (first, last) = if gain_first { (short.id, long.id) } else { (long.id, short.id) };
+            ctx_at("alice.test", T0_MS);
+            let PromiseOrValue::Value(released) = ketos.close_position(first, to_wallet, None) else {
+                panic!("cash behind surviving cross positions must not be withdrawn");
+            };
+            assert_eq!(released, U128(0));
+            assert_eq!(margin(&ketos, "alice.test"), 50 * USD);
+            assert_eq!(health(&ketos).cash.0, if gain_first { 347 * USD as i128 } else { -(153 * USD as i128) });
+            assert_eq!(health(&ketos).position_count, 1);
+            assert!(get_created_receipts().is_empty());
+            assert_backed(&ketos, 20_250 * USD);
+
+            ctx_at("alice.test", T0_MS);
+            match ketos.close_position(last, to_wallet, None) {
+                PromiseOrValue::Promise(promise) => {
+                    assert_eq!(to_wallet, None);
+                    promise.detach();
+                    assert_eq!(margin(&ketos, "alice.test"), 50 * USD);
+                    assert_margin_wallet_transfer(194 * USD);
+                    assert_backed(&ketos, (20_250 - 194) * USD);
+                    ctx_at(CONTRACT, T0_MS + 1);
+                    ketos.on_margin_withdrawn(
+                        id("alice.test"), U128(194 * USD), Err(PromiseError::Failed),
+                    );
+                }
+                PromiseOrValue::Value(released) => {
+                    assert_eq!(to_wallet, Some(false));
+                    assert_eq!(released, U128(194 * USD));
+                    assert!(get_created_receipts().is_empty());
+                }
+            }
+            assert_eq!(margin(&ketos, "alice.test"), 244 * USD);
+            assert_eq!(health(&ketos).cash.0, 0);
+            assert_eq!(health(&ketos).debt_by_vault, [U128(0); 2]);
+            assert_eq!(health(&ketos).position_count, 0);
+            assert_backed(&ketos, 20_250 * USD);
+            drop(ketos);
+            near_sdk::mock::with_mocked_blockchain(|blockchain| { blockchain.take_storage(); });
+        }
+    }
+}
+
+#[test]
+fn partial_cross_wallet_close_returns_only_unused_bracket_rewards() {
+    let mut ketos = cross_setup();
+    deposit(&mut ketos, "alice.test", USD);
+    ctx_at("alice.test", T0_MS);
+    let first = ketos.open_position_now(
+        "NEAR".into(), Side::Long, U128(100 * USD), 5,
+        Some(Brackets { take_profit: Some(U128(P4 * 2)), stop_loss: Some(U128(P4 / 2)) }),
+        Some(MarginMode::Cross),
+    );
+    let last = cross_open(&mut ketos, "ZEC", Side::Short, 100 * USD, 5);
+    ctx_at("alice.test", T0_MS);
+    assert!(matches!(ketos.close_position(first.id, None, None), PromiseOrValue::Promise(_)));
+    assert_margin_wallet_transfer(500_000);
+    assert_eq!(margin(&ketos, "alice.test"), 500_000);
+    assert_eq!(health(&ketos).cash.0, 97 * USD as i128);
+    assert_eq!(health(&ketos).position_count, 1);
+    assert!(ketos.get_position(last.id).is_some());
+    assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 0);
+    assert_backed(&ketos, 20_201 * USD - 500_000);
+}
+
+#[test]
 fn cross_health_offsets_multi_position_losses_without_free_or_isolated_margin() {
     let mut ketos = cross_setup();
     deposit(&mut ketos, "alice.test", 200 * USD);
@@ -272,7 +346,7 @@ fn shared_cash_top_up_covers_debt_without_using_reserved_orders() {
     );
     ketos.remove_cross_margin(U128(47 * USD));
     assert_eq!(margin(&ketos, "alice.test"), 47 * USD);
-    ketos.cancel_order(order.id);
+    let _ = ketos.cancel_order(order.id, Some(false));
     assert_eq!(margin(&ketos, "alice.test"), 147_100_000);
     assert_backed(&ketos, 20_500 * USD + 100_000);
 }

@@ -26,7 +26,7 @@ pub struct Brackets {
 }
 
 impl Brackets {
-    fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         usize::from(self.take_profit.is_some()) + usize::from(self.stop_loss.is_some())
     }
 
@@ -87,7 +87,7 @@ pub enum OrderRequest {
 }
 
 impl OrderRequest {
-    fn entry(&self) -> Option<&EntryOrder> {
+    pub(crate) fn entry(&self) -> Option<&EntryOrder> {
         match self {
             Self::Limit(entry) | Self::StopMarket(entry) => Some(entry),
             _ => None,
@@ -138,6 +138,9 @@ pub struct Order {
     pub created_at_ms: u64,
     /// Separate USDC collateral, refunded on cancellation or paid exactly once on fill.
     pub execution_reward: U128,
+    pub wallet_funded: bool,
+    /// Future bracket rewards reserved by wallet-funded entry orders.
+    pub bracket_reserve: U128,
 }
 
 #[near(serializers = [json])]
@@ -247,6 +250,8 @@ impl Ketos {
             request,
             created_at_ms: env::block_timestamp_ms(),
             execution_reward: U128(reward),
+            wallet_funded: false,
+            bracket_reserve: U128(0),
         };
         let account = self.accounts.get_mut(&account_id).unwrap();
         require!(account.margin >= reward, "ERR_INSUFFICIENT_MARGIN");
@@ -270,13 +275,14 @@ impl Ketos {
         order
     }
 
-    /// Removal releases reserved entry collateral and executor reward exactly once.
+    /// Removal releases entry collateral and all reserved rewards exactly once.
     fn remove_order(&mut self, id: OrderId) -> Option<Order> {
         let order = self.orders.remove(&id)?;
         let account = self.accounts.get_mut(&order.account_id).unwrap();
         account.orders.retain(|order_id| *order_id != id);
-        account.reserved_margin -= order.execution_reward.0;
-        account.margin += order.execution_reward.0;
+        let rewards = order.execution_reward.0 + order.bracket_reserve.0;
+        account.reserved_margin -= rewards;
+        account.margin += rewards;
         if let Some(entry) = order.request.entry() {
             account.reserved_margin -= entry.margin.0;
             account.margin += entry.margin.0;
@@ -303,6 +309,16 @@ impl Ketos {
                     "order_cancelled",
                     json!({ "order_id": id, "reason": "position_closed" }),
                 );
+            }
+        }
+    }
+
+    fn refund_rejected_wallet_order(&mut self, order: &Order) {
+        if order.wallet_funded {
+            let released = order.execution_reward.0 + order.bracket_reserve.0
+                + order.request.entry().map_or(0, |entry| entry.margin.0);
+            if released > 0 {
+                self.send_margin_to_wallet(order.account_id.clone(), U128(released)).detach();
             }
         }
     }
@@ -386,7 +402,7 @@ impl Ketos {
         Ok(self.insert_order(account_id, request))
     }
 
-    pub fn cancel_order(&mut self, order_id: OrderId) {
+    pub fn cancel_order(&mut self, order_id: OrderId, to_wallet: Option<bool>) -> PromiseOrValue<U128> {
         let order = self
             .orders
             .get(&order_id)
@@ -395,11 +411,19 @@ impl Ketos {
             order.account_id == env::predecessor_account_id(),
             "ERR_NOT_OWNER"
         );
+        let account_id = order.account_id.clone();
+        let before = self.accounts.get(&account_id).unwrap().margin;
         self.remove_order(order_id);
+        let released = U128(self.accounts.get(&account_id).unwrap().margin - before);
         emit_event(
             "order_cancelled",
             json!({ "order_id": order_id, "reason": "owner" }),
         );
+        if to_wallet.unwrap_or(true) && released.0 > 0 {
+            PromiseOrValue::Promise(self.send_margin_to_wallet(account_id, released))
+        } else {
+            PromiseOrValue::Value(released)
+        }
     }
 
     #[payable]
@@ -432,7 +456,8 @@ impl Ketos {
             let market = self.markets.get(market_id)
                 .filter(|market| order.created_at_ms >= market.created_at_ms);
             let Some(market) = market else {
-                self.remove_order(id);
+                let order = self.remove_order(id).unwrap();
+                self.refund_rejected_wallet_order(&order);
                 let reason = "ERR_MARKET_DELISTED".to_string();
                 emit_event("order_rejected", json!({ "order_id": id, "reason": reason }));
                 return OrderExecution::Rejected { order_id: id, reason };
@@ -467,12 +492,18 @@ impl Ketos {
             let order = self.remove_order(id).unwrap();
             let reward = order.execution_reward.0;
             self.accounts.get_mut(&order.account_id).unwrap().margin -= reward;
+            let released = order.request.entry().map_or(0, |entry| entry.margin.0)
+                + order.bracket_reserve.0 + reward;
+            let wallet_funded = order.wallet_funded;
             let position_id = match order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
                     match self.try_open_position_for(order.account_id.clone(), entry.market_id, entry.side, entry.margin, entry.leverage, entry.brackets, entry.margin_mode) {
                         Ok(position) => position.id,
                         Err(reason) => {
                             self.accounts.get_mut(&order.account_id).unwrap().margin += reward;
+                            if wallet_funded && released > 0 {
+                                self.send_margin_to_wallet(order.account_id.clone(), U128(released)).detach();
+                            }
                             emit_event("order_rejected", json!({ "order_id": id, "reason": reason, "refunded_margin": entry.margin }));
                             return OrderExecution::Rejected { order_id: id, reason };
                         }

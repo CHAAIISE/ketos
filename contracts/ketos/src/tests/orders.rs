@@ -28,6 +28,153 @@ fn brackets() -> Brackets {
     }
 }
 
+fn wallet_order(ketos: &mut Ketos, request: EntryOrder) -> Order {
+    let reserve = crate::orders::execution_reward(request.margin.0 * u128::from(request.leverage))
+        * request.brackets.as_ref().map_or(0, Brackets::count) as u128;
+    let mut order = place(ketos, OrderRequest::Limit(request));
+    let account = ketos.accounts.get_mut(&id("alice.test")).unwrap();
+    assert!(account.margin >= reserve);
+    account.margin -= reserve;
+    account.reserved_margin += reserve;
+    order.wallet_funded = true;
+    order.bracket_reserve = U128(reserve);
+    ketos.orders.insert(order.id, order.clone());
+    order
+}
+
+#[test]
+fn default_cancel_sends_only_released_collateral_and_restores_it_on_failure() {
+    let mut ketos = trading_setup();
+    let mut request = entry(Side::Long, P4, 100 * USD, 5);
+    request.brackets = Some(brackets());
+    let order = wallet_order(&mut ketos, request);
+    let before = margin(&ketos, "alice.test");
+    let released = 100_750_000;
+    ctx_at("alice.test", T0_MS);
+    assert!(matches!(ketos.cancel_order(order.id, None), PromiseOrValue::Promise(_)));
+    assert_eq!(margin(&ketos, "alice.test"), before);
+    assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 0);
+    assert!(ketos.get_orders(id("alice.test")).is_empty());
+    assert_margin_wallet_transfer(released);
+
+    ctx_at(CONTRACT, T0_MS + 1);
+    assert_eq!(ketos.on_margin_withdrawn(
+        id("alice.test"), U128(released), Err(PromiseError::Failed),
+    ), U128(0));
+    assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
+}
+
+#[test]
+fn explicit_cancel_retention_returns_the_entire_released_amount() {
+    let mut ketos = trading_setup();
+    let order = place(&mut ketos, OrderRequest::Limit(entry(Side::Long, P4, 100 * USD, 5)));
+    ctx_at("alice.test", T0_MS);
+    let PromiseOrValue::Value(released) = ketos.cancel_order(order.id, Some(false)) else {
+        panic!("retained cancellation must not transfer");
+    };
+    assert_eq!(released, U128(100_250_000));
+    assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
+    assert!(get_created_receipts().is_empty());
+}
+
+#[test]
+fn manual_close_releases_bracket_rewards_without_touching_prior_free_margin() {
+    for to_wallet in [None, Some(false)] {
+        let mut ketos = trading_setup();
+        ctx_at("alice.test", T0_MS);
+        let position = ketos.open_position_now(
+            "NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None,
+        );
+        let before = margin(&ketos, "alice.test");
+        let expected = 97_500_000;
+        ctx_at("alice.test", T0_MS);
+        match ketos.close_position(position.id, to_wallet, None) {
+            PromiseOrValue::Promise(promise) => {
+                assert_eq!(to_wallet, None);
+                promise.detach();
+                assert_eq!(margin(&ketos, "alice.test"), before);
+                assert_margin_wallet_transfer(expected);
+                ctx_at(CONTRACT, T0_MS + 1);
+                assert_eq!(ketos.on_margin_withdrawn(
+                    id("alice.test"), U128(expected), Err(PromiseError::Failed),
+                ), U128(0));
+                assert_eq!(margin(&ketos, "alice.test"), before + expected);
+            }
+            PromiseOrValue::Value(released) => {
+                assert_eq!(to_wallet, Some(false));
+                assert_eq!(released, U128(expected));
+                assert_eq!(margin(&ketos, "alice.test"), before + expected);
+                assert!(get_created_receipts().is_empty());
+            }
+        }
+        assert!(ketos.get_position(position.id).is_none());
+        assert!(ketos.get_orders(id("alice.test")).is_empty());
+        assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 0);
+        drop(ketos);
+        near_sdk::mock::with_mocked_blockchain(|blockchain| { blockchain.take_storage(); });
+    }
+}
+
+#[test]
+fn zero_close_payout_does_not_create_a_token_transfer() {
+    let mut ketos = trading_setup();
+    let position = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
+    set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
+    ctx_at("alice.test", T0_MS);
+    let PromiseOrValue::Value(released) = ketos.close_position(position.id, None, None) else {
+        panic!("zero settlement must not transfer");
+    };
+    assert_eq!(released, U128(0));
+    assert_eq!(margin(&ketos, "alice.test"), 100 * USD);
+    assert!(get_created_receipts().is_empty());
+}
+
+#[test]
+fn all_funds_wallet_entry_preserves_future_bracket_rewards_until_fill() {
+    let mut ketos = trading_setup();
+    ctx("alice.test", 1);
+    ketos.withdraw_margin(U128(99_250_000)).detach();
+    let mut request = entry(Side::Long, P4, 100 * USD, 5);
+    request.brackets = Some(brackets());
+    let order = wallet_order(&mut ketos, request);
+    assert_eq!(margin(&ketos, "alice.test"), 0);
+    assert_eq!(order.bracket_reserve, U128(500_000));
+    let result = execute(&mut ketos, vec![order.id], P4, T0_MS);
+    assert!(matches!(result[0], OrderExecution::Filled { .. }));
+    assert_eq!(margin(&ketos, "alice.test"), 0);
+    assert_eq!(margin(&ketos, "executor.test"), 250_000);
+    assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 500_000);
+    let position = ketos.get_positions(id("alice.test"))[0].clone();
+    assert!(position.take_profit.is_some() && position.stop_loss.is_some());
+    assert!(get_created_receipts().is_empty());
+}
+
+#[test]
+fn rejected_wallet_entries_return_all_reservations_not_preexisting_margin() {
+    for delisted in [false, true] {
+        let mut ketos = trading_setup();
+        let mut request = entry(Side::Long, P4, 100 * USD, 5);
+        request.brackets = Some(brackets());
+        let order = wallet_order(&mut ketos, request);
+        let before = margin(&ketos, "alice.test");
+        if delisted {
+            ketos.markets.get_mut("NEAR").unwrap().created_at_ms = T0_MS + 1;
+        } else {
+            ketos.markets.get_mut("NEAR").unwrap().max_leverage = 1;
+        }
+        let result = execute(&mut ketos, vec![order.id], P4, T0_MS);
+        assert!(matches!(result[0], OrderExecution::Rejected { .. }));
+        assert_eq!(margin(&ketos, "alice.test"), before);
+        assert_eq!(margin(&ketos, "executor.test"), 0);
+        assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 0);
+        assert!(ketos.get_orders(id("alice.test")).is_empty());
+        assert!(ketos.get_positions(id("alice.test")).is_empty());
+        assert_margin_wallet_transfer(100_750_000);
+        drop(ketos);
+        near_sdk::mock::with_mocked_blockchain(|blockchain| { blockchain.take_storage(); });
+    }
+}
+
 #[test]
 fn entry_reserves_margin_cancellation_releases_it_without_fees_or_oi() {
     let mut ketos = trading_setup();
@@ -44,7 +191,7 @@ fn entry_reserves_margin_cancellation_releases_it_without_fees_or_oi() {
     assert_eq!(ketos.get_orders(id("alice.test")), vec![order.clone()]);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
     assert_eq!(ketos.vaults[0].balance, vault);
-    ketos.cancel_order(order.id);
+    let _ = ketos.cancel_order(order.id, Some(false));
     let account = ketos.get_account(id("alice.test")).unwrap();
     assert_eq!(
         (account.margin.0, account.reserved_margin.0),
@@ -91,7 +238,7 @@ fn another_account_cannot_cancel_reserved_collateral() {
         OrderRequest::Limit(entry(Side::Long, P4, 100 * USD, 5)),
     );
     ctx_at("stranger.test", T0_MS);
-    ketos.cancel_order(order.id);
+    let _ = ketos.cancel_order(order.id, Some(false));
 }
 
 #[test]
@@ -424,7 +571,7 @@ fn cancelled_exit_can_be_replaced_without_changing_position_margin() {
             trigger_price: U128(380_000_000),
         },
     );
-    ketos.cancel_order(sl.id);
+    let _ = ketos.cancel_order(sl.id, Some(false));
     assert_eq!(ketos.get_position(position.id).unwrap().stop_loss, None);
     let tp = place(
         &mut ketos,

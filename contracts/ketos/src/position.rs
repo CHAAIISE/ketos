@@ -389,6 +389,29 @@ impl Ketos {
         );
         U128(payout)
     }
+
+    pub(crate) fn close_position_for(
+        &mut self,
+        account_id: AccountId,
+        position_id: PositionId,
+        price: u128,
+        now_ms: u64,
+        to_wallet: bool,
+    ) -> PromiseOrValue<U128> {
+        let position = self.positions.get(&position_id)
+            .unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
+        require!(position.account_id == account_id, "ERR_NOT_OWNER");
+        let before = self.accounts.get(&account_id).unwrap().margin;
+        self.close_position_at(position_id, price, now_ms);
+        // Cross settlements retain cash behind surviving legs. Only the last leg
+        // releases it to free margin; bracket reward refunds are also included.
+        let released = U128(self.accounts.get(&account_id).unwrap().margin - before);
+        if to_wallet && released.0 > 0 {
+            PromiseOrValue::Promise(self.send_margin_to_wallet(account_id, released))
+        } else {
+            PromiseOrValue::Value(released)
+        }
+    }
 }
 
 impl Ketos {
@@ -400,13 +423,19 @@ impl Ketos {
             .unwrap_or_else(|reason| env::panic_str(&reason))
     }
 
+    #[cfg(test)]
     pub(crate) fn close_position_now(&mut self, position_id: PositionId) -> U128 {
         let position = self.positions.get(&position_id).unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
         require!(position.account_id == env::predecessor_account_id(), "ERR_NOT_OWNER");
         let now_ms = env::block_timestamp_ms();
         let price = self.markets.get(&position.market_id).unwrap()
             .closing_price(now_ms).unwrap_or_else(|reason| env::panic_str(reason));
-        self.close_position_at(position_id, price, now_ms)
+        let PromiseOrValue::Value(released) = self.close_position_for(
+            env::predecessor_account_id(), position_id, price, now_ms, false,
+        ) else {
+            unreachable!("retained settlement cannot create a transfer");
+        };
+        released
     }
 }
 
@@ -431,16 +460,21 @@ impl Ketos {
     }
 
     #[payable]
-    pub fn close_position(&mut self, position_id: PositionId, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<U128> {
+    pub fn close_position(&mut self, position_id: PositionId, to_wallet: Option<bool>, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<U128> {
         let position = self.positions.get(&position_id).unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
         let account_id = env::predecessor_account_id();
         require!(position.account_id == account_id, "ERR_NOT_OWNER");
         let ids = vec![position.market_id.clone()];
-        let action = crate::pull_prices::PullAction::Close { account_id, position_id };
+        let to_wallet = to_wallet.unwrap_or(true);
+        let action = crate::pull_prices::PullAction::Close { account_id: account_id.clone(), position_id, to_wallet };
         if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
-        PromiseOrValue::Value(self.close_position_now(position_id))
+        let now_ms = env::block_timestamp_ms();
+        let position = self.positions.get(&position_id).unwrap();
+        let price = self.markets.get(&position.market_id).unwrap()
+            .closing_price(now_ms).unwrap_or_else(|reason| env::panic_str(reason));
+        self.close_position_for(account_id, position_id, price, now_ms, to_wallet)
     }
 
     pub fn get_position(&self, position_id: PositionId) -> Option<PositionView> {

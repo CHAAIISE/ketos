@@ -63,7 +63,7 @@ flowchart LR
 
 ### Liquidity rules
 
-The rules below describe the checked-in contract. The hosted deployment still uses the previous storage layout; vault-backed admission, share epochs, depth/listing safeguards and the price/execution policies below have not been deployed there. Upgrading existing state requires a migration or a fresh deployment, not a direct WASM replacement.
+The rules below describe the checked-in contract. The hosted deployment still uses the previous storage layout; vault-backed admission, share epochs, depth/listing safeguards, wallet-funded entries and the price/execution policies below have not been deployed there. Upgrading existing state requires a migration or a fresh deployment, not a direct WASM replacement.
 
 The [sampler](web/lib/intents/depth.ts) requests seven sizes: $1k, $10k, $50k, $100k, $250k, $500k and $1M. It subtracts the configured platform fee from gross quoted impact: 20 bps with the current partner configuration, 25 bps without a key. These are implementation settings, not a guarantee that an external fee schedule never changes.
 
@@ -102,7 +102,27 @@ After a failed pull, owners can still close isolated or cross positions at the l
 
 The [oracle adapter](contracts/ketos/src/oracle.rs) timestamps TEE prices conservatively as reply time minus `recency_duration_sec`, capped at the current block time. A 300-second oracle window cannot qualify for an entry, liquidation or LP pull: a new reply does not make an insufficiently bounded observation safe. `refresh_prices` is payable and globally limited to one request per 30 seconds. Non-keeper callers fund adapter deposits: currently 0.02 NEAR per TEE request and per worker batch of 12. Only the keeper may draw on unreserved contract funds. Deposit views quote a cache-independent upper bound so wallet approval cannot underfund an expired cache; execution refunds the unused excess.
 
-NEP-141 forwards no NEAR to its receiver. LP deposits therefore first prepay `fund_price_requests`, then send USDC in a separate confirmed transaction. Credits belong to the sender, cannot subsidize keeper requests and can be reclaimed with `withdraw_price_deposit` if the transfer is abandoned. Oracle adapter fees already spent are not a guarantee of execution or refundable collateral.
+NEP-141 forwards no NEAR to its receiver. The test USDC contract therefore extends `ft_transfer_call`: attach 1 yoctoNEAR plus oracle funding, and it first credits the sender through `fund_transfer_price_requests`, then invokes the standard USDC receiver/resolver chain. The token resolver runs even if the intermediate funding callback fails. Exactly 1 yocto retains the standard NEP-141 behavior. Without this token extension, callers must prepay sender-owned `fund_price_requests` credits separately; the current LP builder still does so. Ketos accepts only its configured USDC contract. Credits cannot subsidize keeper requests and can be reclaimed with `withdraw_price_deposit` if a transfer is abandoned or rejected before consuming them. Adapter fees already spent are not refundable.
+
+#### Wallet-funded trading API
+
+The [USDC receiver](contracts/ketos/src/wallet_trading.rs) accepts `open:<json>` for immediate entries and `order:<json>` for `limit` or `stop_market` entries. Both support `market_id`, `side`, `leverage`, optional `margin_mode`, `brackets` and `signed_prices`; orders also require `kind` and `trigger_price`. USDC amounts use 6 decimals, trigger prices 8. For example, send 60 USDC with:
+
+```json
+{
+  "market_id": "NEAR",
+  "side": "long",
+  "margin": "50000000",
+  "leverage": 2,
+  "brackets": { "take_profit": "500000000", "stop_loss": "300000000" }
+}
+```
+
+Prefix that JSON with `open:`. This commits 50 USDC plus two execution rewards and returns the unused transfer directly to the wallet. If `margin` is omitted, the contract derives the largest collateral covered by the transfer after reserving all rewards. A resting wallet order also reserves the rewards for its future TP/SL, so filling it does not depend on a later margin deposit. Existing free margin never subsidizes an underfunded wallet entry. Signed prices can execute with only the token's 1 yocto deposit; otherwise attach oracle funding or prepay a price credit.
+
+Pending oracle funds are not credited as spendable USDC margin. Price failures and admission refusals return the full unused USDC through the token resolver; rejected wallet-funded resting entries return their margin and all unused rewards by token transfer. `close_position(position_id, to_wallet?, signed_prices?)` and `cancel_order(order_id, to_wallet?)` default to wallet settlement. Explicit `to_wallet: false` retains proceeds in free margin. Only funds released by that action are sent, including unused bracket rewards; cross settlement cash remains committed until the last cross leg closes. Failed outgoing token transfers restore the released amount to withdrawable margin. Successful wallet entries and exits are recorded as actual collateral transfers in account history.
+
+The current browser ticket continues to use deposited free margin and explicitly retains close/cancel proceeds there. The wallet-funded API is covered by [sandbox integration](contracts/tests/src/wallet_flow.rs); it is not yet active on the hosted contract or wired into that ticket.
 
 ### Markets, vaults and account records
 

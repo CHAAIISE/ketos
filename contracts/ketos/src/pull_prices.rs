@@ -38,9 +38,15 @@ pub enum PullAction {
         brackets: Option<Brackets>,
         margin_mode: MarginMode,
     },
+    WalletOpen {
+        account_id: AccountId,
+        amount: U128,
+        request: crate::wallet_trading::WalletOpenRequest,
+    },
     Close {
         account_id: AccountId,
         position_id: u64,
+        to_wallet: bool,
     },
     PlaceOrder {
         account_id: AccountId,
@@ -73,7 +79,7 @@ pub enum PullAction {
 impl PullAction {
     fn cancelled_value(&self) -> Value {
         match self {
-            Self::DepositVault { amount, .. } => json!(amount),
+            Self::DepositVault { amount, .. } | Self::WalletOpen { amount, .. } => json!(amount),
             _ => Value::Null,
         }
     }
@@ -112,7 +118,7 @@ impl Ketos {
         self.schedule_action_prices(action, requests)
     }
 
-    /// NEP-141 forwards no NEAR, so its sender prepays in a separate wallet action.
+    /// Token callbacks consume only the sender's prepaid oracle credit.
     pub(crate) fn pull_for_vault_deposit(
         &mut self,
         account_id: AccountId,
@@ -121,6 +127,17 @@ impl Ketos {
         signed_prices: Option<crate::signed_prices::SignedPrices>,
     ) -> Option<Promise> {
         let market_ids = self.vault_price_market_ids(vault_id);
+        self.pull_for_token_action(account_id.clone(),
+            PullAction::DepositVault { account_id, vault_id, amount }, market_ids, signed_prices)
+    }
+
+    pub(crate) fn pull_for_token_action(
+        &mut self,
+        account_id: AccountId,
+        action: PullAction,
+        market_ids: Vec<MarketId>,
+        signed_prices: Option<crate::signed_prices::SignedPrices>,
+    ) -> Option<Promise> {
         self.apply_signed_prices(signed_prices.as_ref(), &market_ids);
         let requests = self.stale_action_markets(market_ids);
         let required = self.action_request_cost(requests.iter().map(|(id, _)| id));
@@ -131,14 +148,7 @@ impl Ketos {
         let refund = credit - required;
         self.require_price_request_balance(required, refund);
         Self::refund_price_near(account_id.clone(), refund);
-        self.schedule_action_prices(
-            PullAction::DepositVault {
-                account_id,
-                vault_id,
-                amount,
-            },
-            requests,
-        )
+        self.schedule_action_prices(action, requests)
     }
 
     pub(crate) fn vault_price_market_ids(&self, vault_id: VaultId) -> Vec<MarketId> {
@@ -373,7 +383,7 @@ impl Ketos {
                 })
             });
         let cancelled = action.cancelled_value();
-        let refunds_tokens = matches!(&action, PullAction::DepositVault { .. });
+        let refunds_tokens = matches!(&action, PullAction::DepositVault { .. } | PullAction::WalletOpen { .. });
         if !prices_received && !action.permits_failed_pull_exit() {
             log!("price action cancelled: ERR_ACTION_PRICE_UNAVAILABLE");
             return PromiseOrValue::Value(cancelled);
@@ -390,12 +400,27 @@ impl Ketos {
         }
     }
 
-    /// Funds only the caller's next vault transfer price requests; no pull is scheduled.
+    /// Funds only the caller's next token transfer price requests; no pull is scheduled.
     #[payable]
     pub fn fund_price_requests(&mut self) -> U128 {
         let amount = env::attached_deposit().as_yoctonear();
         require!(amount > 0, "ERR_ZERO_AMOUNT");
         let account_id = env::predecessor_account_id();
+        self.credit_price_deposit(account_id, amount)
+    }
+
+    /// The token extension forwards only the sender's surplus NEAR before its USDC callback.
+    #[payable]
+    pub fn fund_transfer_price_requests(&mut self, account_id: AccountId) -> U128 {
+        require!(env::predecessor_account_id() == self.usdc_id, "ERR_WRONG_TOKEN");
+        let amount = env::attached_deposit().as_yoctonear();
+        require!(amount > 0, "ERR_ZERO_AMOUNT");
+        self.credit_price_deposit(account_id, amount)
+    }
+}
+
+impl Ketos {
+    fn credit_price_deposit(&mut self, account_id: AccountId, amount: u128) -> U128 {
         let credit = self
             .price_deposits
             .get(&account_id)
@@ -412,7 +437,10 @@ impl Ketos {
         self.require_price_request_balance(0, 0);
         U128(credit)
     }
+}
 
+#[near]
+impl Ketos {
     #[payable]
     pub fn withdraw_price_deposit(&mut self) -> U128 {
         assert_one_yocto();

@@ -35,14 +35,21 @@ impl Ketos {
                 if allow_fallback { return Err("ERR_ACTION_PRICE_UNAVAILABLE".into()); }
                 json!(self.try_open_position_for(account_id, market_id, side, margin, leverage, brackets, margin_mode)?)
             }
-            PullAction::Close { account_id, position_id } => {
+            PullAction::WalletOpen { account_id, amount, request } => {
+                if allow_fallback { return Err("ERR_ACTION_PRICE_UNAVAILABLE".into()); }
+                json!(self.execute_wallet_open(account_id, amount, request)?)
+            }
+            PullAction::Close { account_id, position_id, to_wallet } => {
                 let position = self.positions.get(&position_id).ok_or("ERR_NO_POSITION")?;
                 if position.account_id != account_id { return Err("ERR_NOT_OWNER".into()); }
                 let market = self.markets.get(&position.market_id).ok_or("ERR_UNKNOWN_MARKET")?;
                 if market.price.0 == 0 { return Err("ERR_NO_PRICE".into()); }
                 let price = if allow_fallback { market.failed_pull_close_price(position.side, now) }
                     else { market.closing_price(now).map_err(str::to_string)? };
-                json!(self.close_position_at(position_id, price, now))
+                return Ok(match self.close_position_for(account_id, position_id, price, now, to_wallet) {
+                    PromiseOrValue::Value(value) => PromiseOrValue::Value(json!(value)),
+                    PromiseOrValue::Promise(promise) => PromiseOrValue::Promise(promise),
+                });
             }
             PullAction::PlaceOrder { account_id, request } => {
                 if allow_fallback { return Err("ERR_ACTION_PRICE_UNAVAILABLE".into()); }

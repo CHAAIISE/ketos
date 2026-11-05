@@ -24,6 +24,7 @@ mod pull_prices;
 mod signed_prices;
 mod vaults;
 mod worker_prices;
+mod wallet_trading;
 
 const CONTRACT: &str = "ketos.test";
 const USDC: &str = "usdc.test";
@@ -59,6 +60,32 @@ fn deposit(ketos: &mut Ketos, trader: &str, amount: u128) {
 
 fn margin(ketos: &Ketos, trader: &str) -> u128 {
     ketos.get_account(id(trader)).map_or(0, |a| a.margin.0)
+}
+
+fn assert_margin_wallet_transfer(amount: u128) {
+    let receipts = get_created_receipts();
+    let transfers: Vec<_> = receipts.iter()
+        .filter(|receipt| receipt.receiver_id == id(USDC))
+        .collect();
+    assert_eq!(transfers.len(), 1);
+    let MockAction::FunctionCallWeight { method_name, args, attached_deposit, .. } =
+        &transfers[0].actions[0]
+    else {
+        panic!("expected ft_transfer");
+    };
+    assert_eq!(method_name.as_slice(), b"ft_transfer");
+    assert_eq!(*attached_deposit, NearToken::from_yoctonear(1));
+    let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+    assert_eq!(args["receiver_id"], "alice.test");
+    assert_eq!(args["amount"], amount.to_string());
+    let callback = receipts.iter().find(|receipt| receipt.receiver_id == id(CONTRACT)).unwrap();
+    let MockAction::FunctionCallWeight { method_name, args, .. } = &callback.actions[0] else {
+        panic!("expected margin callback");
+    };
+    assert_eq!(method_name.as_slice(), b"on_margin_withdrawn");
+    let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
+    assert_eq!(args["account_id"], "alice.test");
+    assert_eq!(args["amount"], amount.to_string());
 }
 
 #[test]

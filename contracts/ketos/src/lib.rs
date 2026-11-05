@@ -22,6 +22,7 @@ mod priced_actions;
 pub mod signed_prices;
 pub mod vault;
 pub mod worker_prices;
+mod wallet_trading;
 
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
@@ -200,6 +201,16 @@ impl FungibleTokenReceiver for Ketos {
         require!(amount.0 > 0, "ERR_ZERO_AMOUNT");
         match msg.as_str() {
             MSG_DEPOSIT_MARGIN => self.deposit_margin(&sender_id, amount.0),
+            _ if msg.starts_with("open:") => {
+                let request = near_sdk::serde_json::from_str(&msg["open:".len()..])
+                    .unwrap_or_else(|_| env::panic_str("ERR_INVALID_WALLET_ENTRY"));
+                return self.receive_wallet_open(sender_id, amount, request);
+            }
+            _ if msg.starts_with("order:") => {
+                let request = near_sdk::serde_json::from_str(&msg["order:".len()..])
+                    .unwrap_or_else(|_| env::panic_str("ERR_INVALID_WALLET_ORDER"));
+                return PromiseOrValue::Value(self.receive_wallet_order(sender_id, amount, request));
+            }
             _ if msg.starts_with(MSG_DEPOSIT_VAULT) => {
                 let (vault_id, signed_prices) = match &msg[MSG_DEPOSIT_VAULT.len()..] {
                     "core" => (VaultId::Core, None),

@@ -5,6 +5,9 @@ use near_workspaces::types::{AccessKey, Gas, KeyType, NearToken, SecretKey};
 use near_workspaces::{Account, Contract, Worker};
 use serde_json::{json, Value};
 
+#[path = "wallet_flow.rs"]
+mod wallet_flow;
+
 const USD: u128 = 1_000_000;
 const KEEPER_METHODS: [&str; 7] = [
     "refresh_prices",
@@ -642,7 +645,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     );
 
     // The winning short is closed, then all free margin goes back to the wallet.
-    let payout: u128 = call(&trader, &ketos, "close_position", json!({ "position_id": short["id"] }))
+    let payout: u128 = call(&trader, &ketos, "close_position", json!({ "position_id": short["id"], "to_wallet": false }))
     .await?
     .as_str()
     .unwrap()
@@ -905,7 +908,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             &v2,
             &ketos,
             "close_position",
-            json!({ "position_id": position["id"] }),
+            json!({ "position_id": position["id"], "to_wallet": false }),
         )
         .await?;
     }
@@ -1208,7 +1211,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &v2,
         &ketos,
         "close_position",
-        json!({ "position_id": tail_position["id"] }),
+        json!({ "position_id": tail_position["id"], "to_wallet": false }),
     )
     .await?;
     assert!(integer(&tail_payout) > (20 * USD) as i128);
@@ -1376,7 +1379,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &cross,
         &ketos,
         "close_position",
-        json!({ "position_id": survivor["id"] }),
+        json!({ "position_id": survivor["id"], "to_wallet": false }),
     )
     .await?;
     let recovered = view(
@@ -1388,9 +1391,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     assert_eq!(recovered["position_count"], 0);
     assert_eq!(
         margin(&ketos, &cross).await? as i128,
-        free_before_final_exit as i128
-            + integer(&before_final_exit["cash"])
-            + integer(&final_credit)
+        free_before_final_exit as i128 + integer(&final_credit)
     );
     assert_eq!(
         view(
@@ -1531,7 +1532,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &pull_trader,
         &ketos,
         "close_position",
-        json!({ "position_id": pulled_position["id"] }),
+        json!({ "position_id": pulled_position["id"], "to_wallet": false }),
     )
     .await?;
     assert!(integer(&fallback_payout) > 0);

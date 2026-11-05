@@ -115,7 +115,8 @@ export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, 
 
 export async function closePositionTx(c: PriceContracts, positionId: number): Promise<NearTransaction> {
   return call(c.ketosContract, "close_position", {
-    position_id: positionId, ...signedPricesArg(await signedPricesFor(c, { kind: "position", positionId })),
+    position_id: positionId, to_wallet: false,
+    ...signedPricesArg(await signedPricesFor(c, { kind: "position", positionId })),
   }, await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
 }
 
@@ -172,7 +173,7 @@ export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Pro
 
 /** Cancels a pending order; reserved margin returns to free margin. */
 export function cancelOrderTx(c: Contracts, orderId: number): NearTransaction {
-  return call(c.ketosContract, "cancel_order", { order_id: orderId });
+  return call(c.ketosContract, "cancel_order", { order_id: orderId, to_wallet: false });
 }
 
 /** Moves `amount` USDC units of free margin into the shared cross-margin pool. */

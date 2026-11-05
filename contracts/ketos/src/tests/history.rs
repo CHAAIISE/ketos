@@ -385,7 +385,7 @@ fn rejected_cancelled_and_untriggered_orders_do_not_create_trade_history() {
     trigger_price: U128(380_000_000),
     brackets: None, margin_mode: crate::cross::MarginMode::Isolated };
     let cancel = ketos.place_order_now(OrderRequest::Limit(entry.clone()));
-    ketos.cancel_order(cancel.id);
+    let _ = ketos.cancel_order(cancel.id, Some(false));
     let reject = ketos.place_order_now(OrderRequest::Limit(entry));
     ctx_at("executor.test", T0_MS);
     assert_eq!(

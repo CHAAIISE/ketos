@@ -55,7 +55,7 @@ fn stale_owner_closes_settle_isolated_and_cross_with_conservation() {
         let p = ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, None, Some(mode));
         ctx_at("alice.test", T0_MS + 600_001);
         let near_sdk::PromiseOrValue::Value(value) = ketos.execute_priced_action(
-            crate::pull_prices::PullAction::Close { account_id: id("alice.test"), position_id: p.id }, true,
+            crate::pull_prices::PullAction::Close { account_id: id("alice.test"), position_id: p.id, to_wallet: false }, true,
         ).unwrap() else { panic!("close must settle"); };
         let payout: U128 = near_sdk::serde_json::from_value(value).unwrap();
         let payout = payout.0;
@@ -102,7 +102,7 @@ fn minimum_reward_refunds_on_cancel_and_rejection_without_executor_income() {
     ctx_at("alice.test", T0_MS);
     let first = ketos.place_order_now(limit(USD, 1));
     assert_eq!(first.execution_reward.0, USD / 10);
-    ketos.cancel_order(first.id);
+    let _ = ketos.cancel_order(first.id, Some(false));
     assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
     let second = ketos.place_order_now(limit(100 * USD, 5));
     ketos.markets.get_mut("NEAR").unwrap().exit_capacity = U128(0);

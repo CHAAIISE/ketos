@@ -53,15 +53,9 @@ impl Ketos {
         );
         log!("margin deposit {} by {}", amount, account_id);
     }
-}
 
-#[near]
-impl Ketos {
-    /// Sends free margin back to the caller's wallet. Requires 1 yoctoNEAR (full-access key).
-    #[payable]
-    pub fn withdraw_margin(&mut self, amount: U128) -> Promise {
-        assert_one_yocto();
-        let account_id = env::predecessor_account_id();
+    /// Debits only free collateral; the callback restores it if the token rejects the transfer.
+    pub(crate) fn send_margin_to_wallet(&mut self, account_id: AccountId, amount: U128) -> Promise {
         require!(amount.0 > 0, "ERR_ZERO_AMOUNT");
         let account = self
             .accounts
@@ -84,6 +78,16 @@ impl Ketos {
                     .with_static_gas(GAS_WITHDRAW_CALLBACK)
                     .on_margin_withdrawn(account_id, amount),
             )
+    }
+}
+
+#[near]
+impl Ketos {
+    /// Sends free margin back to the caller's wallet. Requires 1 yoctoNEAR (full-access key).
+    #[payable]
+    pub fn withdraw_margin(&mut self, amount: U128) -> Promise {
+        assert_one_yocto();
+        self.send_margin_to_wallet(env::predecessor_account_id(), amount)
     }
 
     /// Records completed withdrawals, or re-credits margin if the token transfer failed.
