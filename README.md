@@ -78,7 +78,11 @@ The [contract](contracts/ketos/src/depth.rs) enforces:
 
 Market views expose `vault_backed_cap_usd` and `effective_max_oi_per_side` in micro-USDC, like `exit_capacity`. The existing `max_oi_per_side` is the hard/depth ceiling. `is_open` reports depth/capital eligibility to request a trade, not a guarantee that its subsequent price pull succeeds; `close_only` identifies a cached mark too old for entry. `measured_cap_is_grid_max` identifies a raw measured capacity equal to the largest probed size, even while admission is still ramping; that observation is a lower bound, not proof of deeper liquidity.
 
-The keeper rotates batches of 8 markets, plus up to 4 never-measured markets outside the slot. A tick refreshes that depth batch and checkpoints funding. Price surveillance covers only markets with open interest or pending orders, at most once every 5 minutes; idle markets cost no periodic oracle request. The keeper then executes triggered orders, re-reads positions, liquidates unhealthy isolated positions/cross accounts and takes hourly snapshots. The [HTTP endpoint](web/app/api/keeper/tick/route.ts) has a 60-second gate; the [executor](web/lib/keeper/tick.ts) refuses ticks below 2 NEAR of spendable contract funds.
+Every keeper pass measures the complete registry, with at most six assets sampled concurrently and one retry for an unavailable quote at each size. A default curve passing through $1M also probes $2.5M and $5M. Exhausted request errors leave that market's previous depth untouched; genuine missing liquidity is published as a missing sample. Raw quotes remain separate from the nondecreasing impact envelope.
+
+Price surveillance covers only markets with open interest or pending orders, at most once every 5 minutes; idle markets cost no periodic oracle request. The keeper executes triggered orders, re-reads positions, liquidates unhealthy isolated positions/cross accounts, then settles funding only for markets with open interest and more than one hour since their funding checkpoint. Hourly snapshots finish the pass. Failed refreshes or registry re-reads retain the earlier market view and do not abort order/liquidation processing; failed position reads are reported and do not reuse a pre-execution liquidation list.
+
+The [HTTP endpoint](web/app/api/keeper/tick/route.ts) accepts `Authorization: Bearer $CRON_SECRET` for scheduled callers. An explicitly invalid credential is rejected. Browser fallback has no secret and checks the latest on-chain depth timestamp against a 60-second interval; all callers also share a process-local running/minute gate. A throttled request returns HTTP 200 with `{state:"throttled"}` and `Retry-After`, not an HTTP error. The [executor](web/lib/keeper/tick.ts) refuses ticks below 2 NEAR of spendable contract funds. Its restricted keeper key attaches no deposit to payable `refresh_prices`: the contract explicitly allows that account to fund adapters from reserves.
 
 When any active market is due for price surveillance, the request includes all active markets. This keeps staggered price timestamps within the same five-minute billing window rather than postponing younger feeds to a later pass.
 
@@ -211,6 +215,23 @@ NEXT_PUBLIC_USDC_CONTRACT=usdc.ketos.testnet
 
 Run `pnpm --dir web dev` and open `http://localhost:3000`. Wallet actions need testnet NEAR for gas. Local maintenance additionally needs `KEEPER_PRIVATE_KEY` in the root `.env.local`, authorized on the configured contract; never copy someone else's key. `ONECLICK_JWT` is optional. `pnpm keeper --once` runs one tick; `pnpm keeper` repeats at most once a minute. `pnpm depth:sample` only measures and saves a dated JSON under `scripts/out/`; it does not publish depth or trade.
 
+### Keep maintenance running
+
+The [scheduled workflow](.github/workflows/keeper.yml) posts to the keeper every 5 minutes and supports manual dispatch. Configure GitHub repository secrets `KETOS_TICK_URL` (the full HTTPS URL ending in `/api/keeper/tick`) and `CRON_SECRET`, and deploy the same `CRON_SECRET` as a server-only Vercel variable. Generate it locally without displaying its value:
+
+```bash
+bash scripts/keeper-launchd.sh ensure-secret
+```
+
+On macOS, the [launch agent helper](scripts/keeper-launchd.sh) runs `pnpm keeper --once` every 60 seconds while logged in:
+
+```bash
+bash scripts/keeper-launchd.sh install
+bash scripts/keeper-launchd.sh uninstall
+```
+
+The helper captures Node/pnpm paths, keeps output under ignored `out/keeper/`, and waits for each one-shot process to finish before launchd can start another. `install --dry-run` writes the plist without registering it; `KEEPER_LAUNCHD_DIR` overrides its destination. Installing a local agent does not configure GitHub or deploy Vercel credentials. Choose one scheduled runner for routine use; the local command is useful during demos. GitHub schedules can be delayed and are not a one-minute liquidation guarantee.
+
 ### Verification
 
 ```bash
@@ -223,7 +244,7 @@ cargo test --manifest-path workers/ketos-prices/Cargo.toml --locked
 BASE_URL=https://ketos-three.vercel.app pnpm --dir web exec playwright test --grep @smoke
 ```
 
-The six hosted smoke cases are read-only: they block browser keeper calls. Normal app browsing can trigger maintenance. To check it separately, `POST /api/keeper/tick` returns transaction hashes, measurements and failures; HTTP 429 means its 60-second gate is active.
+The six hosted smoke cases are read-only: they block browser keeper calls. Normal app browsing can trigger maintenance. To check it separately, `POST /api/keeper/tick` returns transaction hashes, measurements and step failures; HTTP 200 with `state: "throttled"` means its gate is active.
 
 ### Deployment and worker
 
@@ -247,6 +268,6 @@ The existing Vercel project uses `web/` as Root Directory. Deploy from the repos
 - Local prices are mock-controlled. The 12-step demo requires live quote availability for ETH and its new UNI listing; an external outage can prevent those markets opening rather than silently substituting data.
 - Triggered orders execute at the oracle price when an executor runs, not necessarily at the trigger. No guaranteed fills, latency or stop-loss protection through gaps.
 - Cross losses can consume other committed cross collateral. Outstanding creditor-vault claims cannot fund withdrawals or back new exposure until collected. LP withdrawals remain reserve- and capital-limited. An unpriced or stale market, even without positions, blocks LP deposits and withdrawals in its assigned vault until prices recover.
-- Maintenance depends on app visits or a running CLI and sufficient contract NEAR. The serverless gate is not a distributed lease: duplicate requests can race. The checked-in onchain price-request interval bounds oracle spending, not every keeper transaction. The restricted key cannot transfer tokens arbitrarily, but its authorized methods change depth, settle orders and liquidate.
+- Maintenance needs a configured/enabled scheduled workflow, an installed local launch agent, app visits or a running CLI, plus sufficient contract NEAR. Merely checking out the repository starts none of these. The serverless gate is not a distributed lease: separate instances can race when no recent depth update is available, including during quote outages. Workflow concurrency and a launchd job each prevent their own overlapping runs, not races between independent runners. The onchain price-request interval bounds oracle spending, not every keeper transaction. The restricted key cannot transfer tokens arbitrarily, but its authorized methods change depth, settle orders and liquidate.
 - Histories are bounded, snapshots are not backfilled, spot chart prices can differ from oracle marks, and separate RPC reads are not an atomic snapshot. Stress results are estimates, not execution guarantees.
 - No administrator freeze/seizure method is implemented, but full-access testnet deployment keys remain. The code is not immutable.

@@ -111,7 +111,12 @@ describe("sampleAsset", () => {
     const fetchImpl = fakeOneClick(new Map([[1_000, 10], [10_000, 15], [50_000, 40], [100_000, 130]]));
     const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, jwt: "partner-key", fetchImpl });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(SAMPLE_SIZES_USD.length);
+    expect(fetchImpl).toHaveBeenCalledTimes(SAMPLE_SIZES_USD.length + 3);
+    expect(fetchImpl.mock.calls.map(([, init]) => {
+      const near = tokens.find((t) => t.assetId === ORIGIN_ASSETS.NEAR)!;
+      const { amount } = JSON.parse(String(init?.body)) as { amount: string };
+      return Math.round((Number(amount) / 10 ** near.decimals) * near.price);
+    })).toEqual([1_000, 10_000, 50_000, 100_000, 250_000, 250_000, 500_000, 500_000, 1_000_000, 1_000_000]);
     expect(depth.fee_bps).toBe(20);
     expect(depth.samples).toEqual([
       { size_usd: 1_000, impact_bps: 0 },
@@ -128,11 +133,13 @@ describe("sampleAsset", () => {
   });
 
   it("subtracts the higher public fee without a key", async () => {
-    const fetchImpl = fakeOneClick(new Map(SAMPLE_SIZES_USD.map((s) => [s, 120])));
+    const sizes = [...SAMPLE_SIZES_USD, 2_500_000, 5_000_000];
+    const fetchImpl = fakeOneClick(new Map(sizes.map((s) => [s, 120])));
     const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl });
     expect(depth.fee_bps).toBe(25);
     expect(depth.samples.every((s) => s.impact_bps === 95)).toBe(true);
-    expect(exitCapacityUsd(depth.samples)).toBe(1_000_000);
+    expect(depth.samples.map((s) => s.size_usd)).toEqual(sizes);
+    expect(exitCapacityUsd(depth.samples)).toBe(5_000_000);
   });
 
   it("publishes a conservative envelope while preserving raw quotes and missing sizes", async () => {
@@ -141,6 +148,127 @@ describe("sampleAsset", () => {
     expect(depth.samples.map((s) => s.impact_bps)).toEqual([30, 30, null, 30, 60, null, null]);
     expect(depth.details.map((s) => s.impact_bps)).toEqual([30, 10, null, 20, 60, null, null]);
     expect(exitCapacityUsd(depth.samples)).toBe(10_000);
+  });
+
+  it("retries no-liquidity once and keeps the recovered quote's raw amounts", async () => {
+    const fetchImpl = fakeOneClick(new Map([[1_000, 60], [10_000, 80]]))
+      .mockResolvedValueOnce(new Response(JSON.stringify(noLiquidity), { status: 400 }));
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl, sizesUsd: [1_000, 10_000] });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(depth.samples).toEqual([{ size_usd: 1_000, impact_bps: 35 }, { size_usd: 10_000, impact_bps: 55 }]);
+    expect(depth.details[0]).toEqual({
+      size_usd: 1_000,
+      impact_bps: 35,
+      amount_in: usdToBaseUnits(1_000, tokens[0].price, tokens[0].decimals),
+      gross_bps: 60,
+      amount_in_usd: 1_000,
+      amount_out_usd: 994,
+    });
+  });
+
+  it.each(["http", "network", "malformed"])("recovers from one %s quote failure without adding a sample", async (failure) => {
+    const fetchImpl = fakeOneClick(new Map([[1_000, 60]]));
+    if (failure === "network") fetchImpl.mockRejectedValueOnce(new Error("connection reset"));
+    else fetchImpl.mockResolvedValueOnce(failure === "http"
+      ? new Response(JSON.stringify({ message: "Unavailable" }), { status: 503 })
+      : new Response(JSON.stringify({ quote: {} }), { status: 201 }));
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl, sizesUsd: [1_000] });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(depth.samples).toEqual([{ size_usd: 1_000, impact_bps: 35 }]);
+    expect(depth.details).toHaveLength(1);
+  });
+
+  it("gives every size its own retry instead of sharing one retry across the curve", async () => {
+    const fetchImpl = fakeOneClick(new Map([[1_000, 60], [10_000, 80]]));
+    const quote = fetchImpl.getMockImplementation()!;
+    const attempts = new Map<string, number>();
+    fetchImpl.mockImplementation(async (url, init) => {
+      const { amount } = JSON.parse(String(init?.body)) as { amount: string };
+      const attempt = (attempts.get(amount) ?? 0) + 1;
+      attempts.set(amount, attempt);
+      if (attempt === 1) return new Response(JSON.stringify(noLiquidity), { status: 400 });
+      return quote(url, init);
+    });
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl, sizesUsd: [1_000, 10_000] });
+    expect([...attempts.values()]).toEqual([2, 2]);
+    expect(depth.samples.map((s) => s.impact_bps)).toEqual([35, 55]);
+  });
+
+  it.each(["http", "network", "malformed", "no-liquidity-then-error"])(
+    "rejects exhausted %s failures instead of returning a false null curve",
+    async (failure) => {
+      const fetchImpl = vi.fn<FetchImpl>(async () => {
+        if (failure === "network") throw new Error("connection reset");
+        if (failure === "malformed") return new Response(JSON.stringify({ quote: {} }), { status: 201 });
+        return new Response(JSON.stringify({ message: "Unavailable" }), { status: 503 });
+      });
+      if (failure === "no-liquidity-then-error") {
+        fetchImpl.mockResolvedValueOnce(new Response(JSON.stringify(noLiquidity), { status: 400 }));
+      }
+      const error = failure === "network" ? /request.*failed/ : failure === "malformed" ? /unexpected body/ : /HTTP 503: Unavailable/;
+      await expect(sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl, sizesUsd: [1_000, 10_000] })).rejects.toThrow(error);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([100, 101])("extends only a complete default grid whose 1M impact is at most 100 bps (%i)", async (impact) => {
+    const sizes = [...SAMPLE_SIZES_USD, 2_500_000, 5_000_000];
+    const fetchImpl = fakeOneClick(new Map(sizes.map((size) => [size, size === 1_000_000 ? impact + 25 : 25])));
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl });
+    expect(depth.samples.map((s) => s.size_usd)).toEqual(impact === 100 ? sizes : SAMPLE_SIZES_USD);
+    expect(fetchImpl).toHaveBeenCalledTimes(impact === 100 ? sizes.length : SAMPLE_SIZES_USD.length);
+    expect(exitCapacityUsd(depth.samples)).toBe(impact === 100 ? 5_000_000 : 500_000);
+    if (impact === 100) {
+      expect(depth.samples.slice(-2).map((s) => s.impact_bps)).toEqual([100, 100]);
+      expect(depth.details.slice(-2).map((s) => s.impact_bps)).toEqual([0, 0]);
+    }
+  });
+
+  it.each(["missing", "expensive"])("does not extend across a smaller %s size even when 1M quotes cheaply", async (failure) => {
+    const quotes = new Map<number, number>(SAMPLE_SIZES_USD.map((s) => [s, 25]));
+    if (failure === "missing") quotes.delete(50_000);
+    else quotes.set(50_000, 126);
+    const fetchImpl = fakeOneClick(quotes);
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl });
+    expect(depth.samples.map((s) => s.size_usd)).toEqual(SAMPLE_SIZES_USD);
+    expect(exitCapacityUsd(depth.samples)).toBe(10_000);
+  });
+
+  it("probes both extension sizes even if 2.5M has no liquidity", async () => {
+    const fetchImpl = fakeOneClick(new Map([...SAMPLE_SIZES_USD, 5_000_000].map((s) => [s, 25])));
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl });
+    expect(depth.samples.slice(-2)).toEqual([
+      { size_usd: 2_500_000, impact_bps: null },
+      { size_usd: 5_000_000, impact_bps: 0 },
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(SAMPLE_SIZES_USD.length + 3);
+    expect(exitCapacityUsd(depth.samples)).toBe(1_000_000);
+  });
+
+  it("fails the whole curve if extension errors exhaust their retry", async () => {
+    const fetchImpl = fakeOneClick(new Map(SAMPLE_SIZES_USD.map((s) => [s, 25])));
+    const quote = fetchImpl.getMockImplementation()!;
+    fetchImpl.mockImplementation(async (url, init) => {
+      const { amount } = JSON.parse(String(init?.body)) as { amount: string };
+      if (amount === usdToBaseUnits(2_500_000, tokens[0].price, tokens[0].decimals)) {
+        return new Response(JSON.stringify({ message: "Unavailable" }), { status: 503 });
+      }
+      return quote(url, init);
+    });
+    await expect(sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl })).rejects.toThrow(/HTTP 503/);
+    expect(fetchImpl).toHaveBeenCalledTimes(SAMPLE_SIZES_USD.length + 2);
+  });
+
+  it.each([
+    { sizesUsd: [...SAMPLE_SIZES_USD] },
+    { sizesUsd: [5_000, 1_000_000, 2_000_000] },
+    { sizesUsd: [] },
+  ])("preserves explicitly supplied size grids without automatic extension: $sizesUsd", async ({ sizesUsd }) => {
+    const fetchImpl = fakeOneClick(new Map(sizesUsd.map((s) => [s, 25])));
+    const depth = await sampleAsset(ORIGIN_ASSETS.NEAR, { tokens, fetchImpl, sizesUsd });
+    expect(depth.samples.map((s) => s.size_usd)).toEqual(sizesUsd);
+    expect(depth.details.map((s) => s.size_usd)).toEqual(sizesUsd);
+    expect(fetchImpl).toHaveBeenCalledTimes(sizesUsd.length);
   });
 
   it("fails for an asset 1Click does not list", async () => {

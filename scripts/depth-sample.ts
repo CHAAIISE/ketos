@@ -10,7 +10,6 @@ import {
   maxLeverage,
   maxOiPerSide,
   sampleAsset,
-  SAMPLE_SIZES_USD,
   type AssetDepth,
 } from "../web/lib/intents/depth.ts";
 
@@ -29,12 +28,13 @@ console.log(`${SOURCE} → USDC (NEAR), ${jwt ? "partner key" : "no key"}, ${mea
 const symbols = Object.keys(ORIGIN_ASSETS) as MarketSymbol[];
 const depths = await Promise.all(symbols.map((symbol) => sampleAsset(ORIGIN_ASSETS[symbol], { tokens, jwt })));
 const results = symbols.map((symbol, i) => ({ symbol, depth: depths[i] }));
+const sizesUsd = [...new Set(depths.flatMap((depth) => depth.samples.map((sample) => sample.size_usd)))].sort((a, b) => a - b);
 
 const usd = (n: number) => (n >= 1e6 ? `$${n / 1e6}M` : n >= 1e3 ? `$${n / 1e3}k` : `$${n}`);
 const col = 14;
 console.log(
   "asset".padEnd(6) +
-    SAMPLE_SIZES_USD.map((s) => usd(s).padStart(col)).join("") +
+    sizesUsd.map((s) => usd(s).padStart(col)).join("") +
     "capacity".padStart(col) +
     "max lev".padStart(9) +
     "max OI".padStart(col) +
@@ -42,7 +42,11 @@ console.log(
 );
 for (const { symbol, depth } of results) {
   const capacity = exitCapacityUsd(depth.samples);
-  const cells = depth.samples.map((s) => (s.impact_bps === null ? "No liquidity" : `${s.impact_bps} bps`).padStart(col)).join("");
+  const samples = new Map(depth.samples.map((sample) => [sample.size_usd, sample]));
+  const cells = sizesUsd.map((size) => {
+    const sample = samples.get(size);
+    return (sample === undefined ? "Not sampled" : sample.impact_bps === null ? "No liquidity" : `${sample.impact_bps} bps`).padStart(col);
+  }).join("");
   console.log(
     symbol.padEnd(6) +
       cells +
@@ -55,7 +59,11 @@ for (const { symbol, depth } of results) {
 
 console.log(`\nGross impact (fee of ${depths[0].fee_bps} bps included):`);
 for (const { symbol, depth } of results) {
-  const cells = depth.details.map((d) => (d.gross_bps === null ? "-" : `${d.gross_bps} bps`).padStart(col)).join("");
+  const details = new Map(depth.details.map((detail) => [detail.size_usd, detail]));
+  const cells = sizesUsd.map((size) => {
+    const detail = details.get(size);
+    return (detail === undefined ? "Not sampled" : detail.gross_bps === null ? "-" : `${detail.gross_bps} bps`).padStart(col);
+  }).join("");
   console.log(symbol.padEnd(6) + cells);
 }
 

@@ -5,10 +5,10 @@ import { getTokens } from "../intents/oneclick";
 import { nearConfig } from "../near/config";
 import { signedPricesArg, signedPricesFor } from "../near/signed-prices";
 import { workerSignedPrices } from "../near/signed-prices-server";
-import { orderExecutionSchema } from "../near/types";
+import { orderExecutionSchema, type MarketId } from "../near/types";
 import { settleOutcome } from "../near/tx";
 import { KetosViews } from "../near/views";
-import type { DepthSource, KeeperChain } from "./tick";
+import type { DepthSource, KeeperChain, MarketDepth } from "./tick";
 
 /** The signer is restricted to the seven maintenance methods on the configured contract. */
 export async function keeperChain(privateKey: string): Promise<KeeperChain> {
@@ -51,6 +51,7 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
     },
     setDepth: async (market, samples, measuredAtMs) =>
       (await call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30)).tx,
+    // The payable refresh uses contract reserves for the keeper; its function-call key cannot attach a deposit.
     refreshPrices: async (marketIds) => (await call("refresh_prices", { market_ids: marketIds }, 300)).tx,
     executeOrders: async (ids) => {
       const prices = await signedPricesFor(config, { kind: "orders", ids }, workerSignedPrices);
@@ -82,15 +83,22 @@ export function oneClickDepthSource(jwt: string | undefined): DepthSource {
         const error = `1Click token list unavailable: ${e instanceof Error ? e.message : String(e)}`;
         return markets.map(({ id: market }) => ({ market, error }));
       }
-      return Promise.all(markets.map(async (market) => {
-        const measuredAtMs = Date.now();
-        try {
-          const curve = await sampleAsset(market.intents_asset_id, { tokens, jwt, fetchImpl: fetchWithDeadline });
-          return { market: market.id, samples: curve.samples, measuredAtMs };
-        } catch (e) {
-          return { market: market.id, error: e instanceof Error ? e.message : String(e) };
+      const results: (MarketDepth | { market: MarketId; error: string })[] = [];
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(6, markets.length) }, async () => {
+        while (next < markets.length) {
+          const index = next++;
+          const market = markets[index];
+          const measuredAtMs = Date.now();
+          try {
+            const curve = await sampleAsset(market.intents_asset_id, { tokens, jwt, fetchImpl: fetchWithDeadline });
+            results[index] = { market: market.id, samples: curve.samples, measuredAtMs };
+          } catch (e) {
+            results[index] = { market: market.id, error: e instanceof Error ? e.message : String(e) };
+          }
         }
       }));
+      return results;
     },
   };
 }

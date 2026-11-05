@@ -5,6 +5,7 @@ import {
   grossImpactBps,
   impactBps,
   OneClickError,
+  type DryQuoteParams,
   type FetchImpl,
   type OneClickToken,
 } from "./oneclick";
@@ -39,6 +40,7 @@ export interface SampleAssetOptions {
   tokens: readonly OneClickToken[];
   jwt?: string;
   fetchImpl?: FetchImpl;
+  /** Explicit grids are sampled exactly; only the default grid can extend beyond $1M. */
   sizesUsd?: readonly number[];
 }
 
@@ -56,15 +58,25 @@ export function usdToBaseUnits(sizeUsd: number, priceUsd: number, decimals: numb
   return (numerator / scaledPrice).toString();
 }
 
+async function quoteWithRetry(params: DryQuoteParams) {
+  try {
+    const result = await dryQuote(params);
+    if (result.status === "ok") return result;
+  } catch {
+    // Retry once, but let an exhausted request error escape instead of publishing false illiquidity.
+  }
+  return dryQuote(params);
+}
+
 /** Quotes each size sequentially (one asset never has more than one request in flight). */
-export async function sampleAsset(assetId: string, { tokens, jwt, fetchImpl, sizesUsd = SAMPLE_SIZES_USD }: SampleAssetOptions): Promise<AssetDepth> {
+export async function sampleAsset(assetId: string, { tokens, jwt, fetchImpl, sizesUsd }: SampleAssetOptions): Promise<AssetDepth> {
   const token = tokens.find((t) => t.assetId === assetId);
   if (!token) throw new OneClickError(`${assetId} is not listed by 1Click`, null);
 
   const details: DepthSampleDetail[] = [];
-  for (const size of sizesUsd) {
+  const sampleSize = async (size: number) => {
     const amountIn = usdToBaseUnits(size, token.price, token.decimals);
-    const result = await dryQuote({ originAsset: assetId, amountIn, jwt, fetchImpl });
+    const result = await quoteWithRetry({ originAsset: assetId, amountIn, jwt, fetchImpl });
     if (result.status === "no_liquidity") {
       details.push({ size_usd: size, impact_bps: null, amount_in: amountIn, gross_bps: null, amount_in_usd: null, amount_out_usd: null });
     } else {
@@ -77,6 +89,10 @@ export async function sampleAsset(assetId: string, { tokens, jwt, fetchImpl, siz
         amount_out_usd: result.amountOutUsd,
       });
     }
+  };
+  for (const size of sizesUsd ?? SAMPLE_SIZES_USD) await sampleSize(size);
+  if (sizesUsd === undefined && exitCapacityUsd(details) === 1_000_000) {
+    for (const size of [2_500_000, 5_000_000]) await sampleSize(size);
   }
 
   let previousImpact = 0;

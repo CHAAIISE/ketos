@@ -1,0 +1,58 @@
+name: Keeper
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ketos-keeper
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Run an authenticated keeper tick
+        env:
+          KETOS_TICK_URL: ${{ secrets.KETOS_TICK_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fail = (message) => {
+            console.error(message);
+            process.exitCode = 1;
+          };
+          async function main() {
+            const secret = process.env.CRON_SECRET?.trim();
+            let url;
+            try {
+              url = new URL(process.env.KETOS_TICK_URL);
+            } catch {
+              return fail("Configure the KETOS_TICK_URL GitHub secret.");
+            }
+            if (url.protocol !== "https:" || url.username || url.password) {
+              return fail("KETOS_TICK_URL must be an HTTPS endpoint without URL credentials.");
+            }
+            if (!secret) return fail("Configure the CRON_SECRET GitHub secret.");
+            try {
+              const response = await fetch(url, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${secret}` },
+                redirect: "error",
+                signal: AbortSignal.timeout(270_000),
+              });
+              if (!response.ok) return fail(`Keeper HTTP failure (${response.status}).`);
+              const summary = await response.json();
+              if (summary?.ok !== true) return fail("Keeper tick reported failure.");
+              console.log("Keeper tick completed successfully.");
+            } catch {
+              fail("Keeper request failed, timed out, or returned invalid JSON.");
+            }
+          }
+          main();
+          NODE

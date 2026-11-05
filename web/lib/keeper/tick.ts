@@ -1,13 +1,11 @@
-import { isMeasuring, type CrossAccount, type DepthSample, type Market, type MarketId, type Order, type OrderExecution, type Position } from "../near/types";
+import { type CrossAccount, type DepthSample, type Market, type MarketId, type Order, type OrderExecution, type Position } from "../near/types";
 import { findLiquidatable, findTriggeredOrders, isFreshPrice } from "./scan";
-import { MIN_TICK_INTERVAL_MS } from "./throttle";
 
 export const MIN_KETOS_BALANCE_YOCTO = 2n * 10n ** 24n;
-export const DEPTH_BATCH_SIZE = 8;
-export const MEASURING_PRIORITY = 4;
 export const ORDER_BATCH_SIZE = 5;
 export const SNAPSHOT_INTERVAL_MS = 3_600_000;
 export const PRICE_REFRESH_INTERVAL_MS = 300_000;
+export const FUNDING_INTERVAL_MS = 3_600_000;
 
 export interface KeeperChain {
   markets(): Promise<Market[]>;
@@ -55,25 +53,11 @@ export type TickSummary =
       liquidations: Step<{ positionId: number; market: MarketId; accountId: string }>[];
       crossLiquidations: Step<{ accountId: string }>[];
       snapshots: Step<Record<never, never>> | { skipped: true; nextAtMs: number };
+      errors: { step: string; error: string }[];
     }
   | { ok: false; startedAt: string; reason: string };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
-
-/**
- * Stable minute slots cover the entire registry, even when a market repeatedly fails measurement.
- * Markets never measured (just listed) are added on top of the slot, at most
- * MEASURING_PRIORITY of them, so a new listing opens after the next tick instead of waiting for
- * its slot, and assets 1Click cannot quote never push measured markets out of rotation.
- */
-export function depthBatch(markets: readonly Market[], nowMs: number): Market[] {
-  if (markets.length <= DEPTH_BATCH_SIZE) return [...markets];
-  const batches = Math.ceil(markets.length / DEPTH_BATCH_SIZE);
-  const start = (Math.floor(nowMs / MIN_TICK_INTERVAL_MS) % batches) * DEPTH_BATCH_SIZE;
-  const slot = markets.slice(start, start + DEPTH_BATCH_SIZE);
-  const extra = markets.filter((m) => isMeasuring(m) && !slot.includes(m)).slice(0, MEASURING_PRIORITY);
-  return [...slot, ...extra];
-}
 
 /** Transactions remain serial: one restricted signer, no overlapping nonce allocation. */
 export async function runTick(chain: KeeperChain, depthSource: DepthSource, now: () => number = Date.now): Promise<TickSummary> {
@@ -89,8 +73,18 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
   }
 
   let markets = await chain.markets();
+  const errors: { step: string; error: string }[] = [];
+  const read = async <T>(step: string, load: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await load();
+    } catch (e) {
+      errors.push({ step, error: message(e) });
+      return fallback;
+    }
+  };
   const depth: Step<{ market: MarketId; measuredAtMs?: number }>[] = [];
-  for (const curve of await depthSource.sample(depthBatch(markets, started))) {
+  const curves = await read("depth", () => depthSource.sample(markets), []);
+  for (const curve of curves) {
     if ("error" in curve) {
       depth.push(curve);
       continue;
@@ -103,17 +97,9 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
     }
   }
 
-  const funding: Step<{ market: MarketId }>[] = [];
-  for (const market of markets) {
-    try {
-      funding.push({ market: market.id, tx: await chain.settleFunding(market.id) });
-    } catch (e) {
-      funding.push({ market: market.id, error: message(e) });
-    }
-  }
-
-  const openOrders = await chain.openOrders();
-  const positionsBeforeOrders = openOrders.length ? await chain.openPositions() : [];
+  const openOrders = await read("orders", () => chain.openOrders(), []);
+  const positionsBeforeOrders = openOrders.length
+    ? await read("order positions", () => chain.openPositions(), []) : [];
   const positionAt = new Map(positionsBeforeOrders.map((p) => [p.id, p]));
   const activeMarkets = new Set(markets.filter((m) => m.oi_long > 0n || m.oi_short > 0n).map((m) => m.id));
   for (const { request } of openOrders) {
@@ -133,15 +119,16 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
     } else {
       requestedPrices = true;
       const tx = await chain.refreshPrices(refreshMarkets);
-      markets = await chain.markets();
+      markets = await read("prices markets", () => chain.markets(), markets);
       prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, tx };
     }
   } catch (e) {
-    markets = await chain.markets();
+    markets = await read("prices markets", () => chain.markets(), markets);
     prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, error: message(e) };
   }
   // Price refresh changes position equity as well as market prices.
-  const orderPositions = requestedPrices && openOrders.length ? await chain.openPositions() : positionsBeforeOrders;
+  const orderPositions = requestedPrices && openOrders.length
+    ? await read("refreshed order positions", () => chain.openPositions(), positionsBeforeOrders) : positionsBeforeOrders;
   const triggered = findTriggeredOrders(openOrders, orderPositions, markets);
   const orders: Step<{ ids: number[]; results?: OrderResult[] }>[] = [];
   for (let i = 0; i < triggered.length; i += ORDER_BATCH_SIZE) {
@@ -155,7 +142,7 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
   }
 
   // Orders can open or close positions and change cross cash. Never liquidate the pre-execution view.
-  const positions = await chain.openPositions();
+  const positions = await read("liquidation positions", () => chain.openPositions(), []);
   const liquidations: Step<{ positionId: number; market: MarketId; accountId: string }>[] = [];
   for (const p of findLiquidatable(positions, markets, now())) {
     const base = { positionId: p.id, market: p.market_id, accountId: p.account_id };
@@ -178,6 +165,19 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
     }
   }
 
+  // Fills and liquidations checkpoint funding as OI changes. Re-read before paying for a settlement.
+  markets = await read("funding markets", () => chain.markets(), markets);
+  const funding: Step<{ market: MarketId }>[] = [];
+  for (const market of markets) {
+    if ((market.oi_long === 0n && market.oi_short === 0n)
+      || now() - market.funding.last_accrual_ms <= FUNDING_INTERVAL_MS) continue;
+    try {
+      funding.push({ market: market.id, tx: await chain.settleFunding(market.id) });
+    } catch (e) {
+      funding.push({ market: market.id, error: message(e) });
+    }
+  }
+
   let snapshots: Extract<TickSummary, { ok: true }>["snapshots"];
   try {
     const last = await chain.lastSnapshotMs();
@@ -191,6 +191,6 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
   return {
     ok: true, startedAt, durationMs: now() - started, marketCount: markets.length,
     depth, prices, funding, orders, scannedOrders: openOrders.length, scanned: positions.length,
-    liquidations, crossLiquidations, snapshots,
+    liquidations, crossLiquidations, snapshots, errors,
   };
 }

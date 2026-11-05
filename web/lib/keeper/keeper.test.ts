@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CrossAccount, Market, MarketId, Order, Position } from "../near/types";
 import { findLiquidatable, findTriggeredOrders, isFreshPrice } from "./scan";
 import { MIN_TICK_INTERVAL_MS, TickGate, retryAfterMs } from "./throttle";
-import { depthBatch, MEASURING_PRIORITY, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, PRICE_REFRESH_INTERVAL_MS, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
+import { FUNDING_INTERVAL_MS, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, PRICE_REFRESH_INTERVAL_MS, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
 
 const NOW = 1_762_190_000_000;
 const USD = 1_000_000n;
@@ -257,6 +257,28 @@ describe("keeper tick", () => {
     await runTick(chain, depthSource, () => NOW);
     expect(chain.calls.filter((call) => call.startsWith("refresh_prices"))).toEqual(["refresh_prices NEAR"]);
   });
+
+  it("still executes triggered orders and liquidations when refresh and both registry re-reads fail", async () => {
+    let reads = 0;
+    const chain = fakeChain({
+      markets: async () => {
+        if (reads++ > 0) throw new Error("registry RPC unavailable");
+        return [market("NEAR"), { ...market("OTHER", PRICE_REFRESH_INTERVAL_MS), oi_long: USD }];
+      },
+      openOrders: async () => [entry(1)],
+      refreshPrices: async () => { throw new Error("oracle unavailable"); },
+      executeOrders: async () => ({ tx: "tx-filled", results: [
+        { status: "filled", order_id: 1, position_id: 4, price: 400_000_000n },
+      ] }),
+    });
+    const summary = await runTick(chain, depthSource, () => NOW);
+    expect(summary).toMatchObject({
+      ok: true,
+      prices: { error: "oracle unavailable" },
+      orders: [{ tx: "tx-filled" }],
+      liquidations: [{ positionId: 3, tx: "tx-liq-3" }, { positionId: 1, tx: "tx-liq-1" }],
+    });
+  });
 });
 
 function entry(id: number, kind: "limit" | "stop_market" = "limit", side: "long" | "short" = "long"): Order {
@@ -312,31 +334,55 @@ describe("keeper order triggers", () => {
   });
 });
 
-describe("keeper v2", () => {
-  it("covers the complete registry in bounded minute slots, including the partial last batch", () => {
-    const markets = Array.from({ length: 19 }, (_, i) => market(`LISTED${i}`));
-    const batches = [0, 1, 2].map((minute) => depthBatch(markets, minute * MIN_TICK_INTERVAL_MS));
-    expect(batches.map((batch) => batch.length)).toEqual([8, 8, 3]);
-    expect(new Set(batches.flat().map((m) => m.id))).toEqual(new Set(markets.map((m) => m.id)));
-    expect(depthBatch(markets, 3 * MIN_TICK_INTERVAL_MS)).toEqual(batches[0]);
-    expect(depthBatch([], NOW)).toEqual([]);
+describe("keeper maintenance", () => {
+  it("publishes every market in one pass, including never-measured listings", async () => {
+    const registry = Array.from({ length: 19 }, (_, i) => ({
+      ...market(`LISTED${i}`), depth_measured_at_ms: i % 2 ? 0 : NOW - 60_000,
+    }));
+    const published = new Map<string, number>();
+    const chain = fakeChain({
+      markets: async () => registry,
+      openPositions: async () => [],
+      setDepth: async (id, _samples, measuredAtMs) => {
+        published.set(id, measuredAtMs);
+        return `tx-${id}`;
+      },
+    });
+    await runTick(chain, {
+      sample: async (markets) => markets.map(({ id: market }) => ({
+        market, measuredAtMs: NOW, samples: [{ size_usd: 10_000, impact_bps: 50 }],
+      })),
+    }, () => NOW);
+    expect(published).toEqual(new Map(registry.map(({ id }) => [id, NOW])));
   });
 
-  it("measures never-measured listings on the next tick, capped, without dropping the slot", () => {
-    const measured = Array.from({ length: 16 }, (_, i) => market(`LISTED${i}`));
-    const fresh = Array.from({ length: 6 }, (_, i) => ({ ...market(`NEW${i}`), depth_measured_at_ms: 0 }));
-    const markets = [...measured, ...fresh];
-    const batch = depthBatch(markets, 0);
-    // Minute 0 is the first slot: all 8 of it, plus the 4 oldest unmeasured listings.
-    expect(batch.map((m) => m.id)).toEqual([
-      ...measured.slice(0, 8).map((m) => m.id),
-      ...fresh.slice(0, MEASURING_PRIORITY).map((m) => m.id),
-    ]);
-    // An unmeasured listing already in the slot is not sampled twice.
-    const inSlot = depthBatch(markets, 2 * MIN_TICK_INTERVAL_MS).map((m) => m.id);
-    expect(inSlot.slice(0, 6)).toEqual(fresh.map((m) => m.id));
-    expect(new Set(inSlot).size).toBe(inSlot.length);
-    expect(inSlot).toHaveLength(6);
+  it("settles only overdue active funding, after both liquidation paths", async () => {
+    const registry = [
+      { ...market("DUE"), oi_short: USD, funding: { ...market("DUE").funding, last_accrual_ms: NOW - FUNDING_INTERVAL_MS - 1 } },
+      { ...market("BOUNDARY"), oi_long: USD, funding: { ...market("BOUNDARY").funding, last_accrual_ms: NOW - FUNDING_INTERVAL_MS } },
+      { ...market("IDLE"), funding: { ...market("IDLE").funding, last_accrual_ms: 0 } },
+      { ...market("FRESH"), oi_long: USD },
+    ];
+    const chain = fakeChain({
+      markets: async () => registry,
+      openPositions: async () => [
+        position(1, "DUE", 0n),
+        { ...position(2, "DUE", 0n), margin_mode: "cross" },
+      ],
+      crossAccount: async (id) => crossHealth(id, { liquidatable: true }),
+    });
+    const summary = await runTick(chain, { sample: async () => [] }, () => NOW);
+    expect(summary.ok && summary.funding).toEqual([{ market: "DUE", tx: "tx-funding-DUE" }]);
+    expect(chain.calls).toEqual(["liquidate 1", "liquidate_cross trader.test", "settle_funding DUE"]);
+  });
+
+  it("continues liquidation scanning when the depth provider and order index are unavailable", async () => {
+    const chain = fakeChain({ openOrders: async () => { throw new Error("orders RPC unavailable"); } });
+    const summary = await runTick(chain, { sample: async () => { throw new Error("1Click offline"); } }, () => NOW);
+    expect(summary).toMatchObject({
+      errors: [{ step: "depth", error: "1Click offline" }, { step: "orders", error: "orders RPC unavailable" }],
+      liquidations: [{ positionId: 3, tx: "tx-liq-3" }, { positionId: 1, tx: "tx-liq-1" }],
+    });
   });
 
   it("never liquidates a cross leg individually; uses aggregate cash, freshness and account health once", async () => {
@@ -387,6 +433,30 @@ describe("keeper v2", () => {
     expect(JSON.parse(JSON.stringify(summary)).orders[0].results[0].price).toBe("400000000");
   });
 
+  it("does not reuse a pre-fill liquidation candidate when the post-fill position read fails", async () => {
+    let closed = false;
+    const stop: Order = { id: 10, account_id: "trader.test", created_at_ms: NOW,
+      request: { kind: "stop_loss", position_id: 1, trigger_price: 400_000_000n } };
+    const chain = fakeChain({
+      openOrders: async () => [stop],
+      openPositions: async () => {
+        if (closed) throw new Error("position RPC unavailable");
+        return [position(1, "NEAR", 0n)];
+      },
+      executeOrders: async () => {
+        closed = true;
+        return { tx: "tx-stop", results: [{ status: "filled", order_id: 10, position_id: 1, price: 400_000_000n }] };
+      },
+    });
+    const summary = await runTick(chain, depthSource, () => NOW);
+    expect(closed).toBe(true);
+    expect(summary).toMatchObject({
+      orders: [{ tx: "tx-stop" }], liquidations: [], crossLiquidations: [],
+      errors: [{ step: "liquidation positions", error: "position RPC unavailable" }],
+    });
+    expect(chain.calls.filter((call) => call.startsWith("liquidate"))).toEqual([]);
+  });
+
   it("bounds order gas and reports refunded rejections distinctly from OCO skips", async () => {
     const ids = Array.from({ length: ORDER_BATCH_SIZE * 2 + 1 }, (_, i) => i + 1);
     const executed: number[] = [];
@@ -422,7 +492,8 @@ describe("keeper v2", () => {
   it("isolates failed depth, funding, oracle, order and snapshot steps without suppressing liquidations", async () => {
     let reads = 0;
     const chain = fakeChain({
-      markets: async () => [{ ...market("NEAR", reads++ === 0 ? PRICE_REFRESH_INTERVAL_MS : 10_000), oi_long: USD }],
+      markets: async () => [{ ...market("NEAR", reads++ === 0 ? PRICE_REFRESH_INTERVAL_MS : 10_000), oi_long: USD,
+        funding: { ...market("NEAR").funding, last_accrual_ms: NOW - FUNDING_INTERVAL_MS - 1 } }],
       setDepth: async () => { throw new Error("depth failed"); },
       settleFunding: async () => { throw new Error("funding failed"); },
       refreshPrices: async () => { throw new Error("oracle receipt failed"); },

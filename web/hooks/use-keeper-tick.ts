@@ -10,6 +10,7 @@ const INTERVAL_MS = 60_000;
 
 const tickResponseSchema = z.object({
   ok: z.boolean(),
+  state: z.literal("throttled").optional(),
   reason: z.string().optional(),
   liquidations: z.array(z.object({ tx: z.string().optional() })).optional(),
 });
@@ -22,7 +23,7 @@ export type KeeperStatus =
 
 /**
  * Asks the server keeper for a pass (depth, prices, liquidations) while the page is open and
- * visible. Ticks requested by other visitors are throttled server-side and answered with 429.
+ * visible. Ticks requested by other visitors return a successful throttled state.
  */
 export function useKeeperTick(): KeeperStatus {
   const queryClient = useQueryClient();
@@ -42,7 +43,7 @@ export function useKeeperTick(): KeeperStatus {
       try {
         const res = await fetch("/api/keeper/tick", { method: "POST", signal: controller.signal });
         const body = tickResponseSchema.safeParse(await res.json().catch(() => null));
-        if (res.status === 429) {
+        if (body.success && body.data.state === "throttled") {
           setStatus((s) => (s.state === "running" ? { state: "waiting" } : s));
           const retryAfter = Number(res.headers.get("Retry-After"));
           return schedule(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 + 1_000 : INTERVAL_MS);
