@@ -56,7 +56,7 @@ fn shares_nav_and_reserves_follow_only_assigned_markets() {
     let tail = ketos.get_vault(VaultId::LongTail);
     assert_eq!(tail.reserved.0, 550 * USD);
     assert_eq!(tail.traders_unrealized_pnl.0, 50 * USD as i128);
-    assert_eq!(tail.nav.0, 1_950_500_000);
+    assert_eq!(tail.nav.0, 1_951_500_000);
     deposit_to(&mut ketos, "long-tail", "other-lp.test", 1_000 * USD);
     let lp = ketos.get_vault_account(VaultId::LongTail, id("other-lp.test"));
     assert_eq!(lp.shares.0, 1_000 * USD * 2_000 * USD / tail.nav.0);
@@ -68,11 +68,11 @@ fn shares_nav_and_reserves_follow_only_assigned_markets() {
         0
     );
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(position.id).0, 149 * USD);
+    assert_eq!(ketos.close_position_now(position.id).0, 147 * USD);
     assert_eq!(ketos.get_vault(VaultId::Core), core);
     let tail = ketos.get_vault(VaultId::LongTail);
     assert_eq!(tail.reserved.0, 0);
-    assert_eq!(tail.revenue.fees.0, USD);
+    assert_eq!(tail.revenue.fees.0, 3 * USD);
     assert_eq!(tail.revenue.trader_pnl.0, -50 * USD as i128);
     assert_eq!(
         tail.balance.0 as i128 - 3_000 * USD as i128,
@@ -85,7 +85,7 @@ fn winning_tail_position_cannot_spend_core_liquidity() {
     let mut ketos = two_vaults();
     ctx("lp.test", 1);
     let epoch = ketos.vaults[VaultId::LongTail.index()].share_epoch;
-    let _ = ketos.withdraw_vault(VaultId::LongTail, U128(1_500 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::LongTail, U128(1_500 * USD));
     ctx(CONTRACT, 0);
     ketos.on_vault_withdrawn(
         VaultId::LongTail,
@@ -99,11 +99,11 @@ fn winning_tail_position_cannot_spend_core_liquidity() {
     let p = open(&mut ketos, "ZEC", Side::Long, 100 * USD, 5);
     set_price(&mut ketos, "ZEC", 3 * P4, T0_MS);
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(p.id).0, 599 * USD);
+    assert_eq!(ketos.close_position_now(p.id).0, 597 * USD);
     assert_eq!(ketos.get_vault(VaultId::Core), core);
     let tail = ketos.get_vault(VaultId::LongTail);
-    assert_eq!(tail.balance.0, USD);
-    assert_eq!(revenue_total(&tail.revenue), -499 * USD as i128);
+    assert_eq!(tail.balance.0, 3 * USD);
+    assert_eq!(revenue_total(&tail.revenue), -497 * USD as i128);
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn withdrawal_reserve_and_failure_callback_are_vault_local() {
     let core_epoch = ketos.vaults[VaultId::Core.index()].share_epoch;
     let tail_epoch = ketos.vaults[VaultId::LongTail.index()].share_epoch;
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(10_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(10_000 * USD));
     assert_eq!(ketos.get_vault(VaultId::Core).balance.0, 0);
     assert_eq!(ketos.get_vault(VaultId::LongTail), tail_before);
     ctx(CONTRACT, 0);
@@ -135,7 +135,7 @@ fn withdrawal_reserve_and_failure_callback_are_vault_local() {
     );
     assert_eq!(ketos.get_vault(VaultId::LongTail), tail_before);
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::LongTail, U128(1_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::LongTail, U128(1_000 * USD));
     let tail_after = ketos.get_vault(VaultId::LongTail);
     assert_eq!(tail_after.total_shares.0, 1_000 * USD);
     ctx(CONTRACT, 0);
@@ -157,7 +157,7 @@ fn shares_in_another_vault_do_not_authorize_a_withdrawal() {
     let mut ketos = setup();
     deposit_to(&mut ketos, "core", "lp.test", 1_000 * USD);
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::LongTail, U128(USD));
+    let _ = ketos.withdraw_vault_now(VaultId::LongTail, U128(USD));
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn realized_funding_fees_and_liquidations_reconcile_per_vault() {
         ketos.get_vault(VaultId::LongTail).funding_net_due.0,
         500_000
     );
-    ketos.close_position(payer.id);
+    ketos.close_position_now(payer.id);
     assert_eq!(
         ketos.get_vault(VaultId::LongTail).funding_net_due.0,
         -250_000
@@ -190,9 +190,9 @@ fn realized_funding_fees_and_liquidations_reconcile_per_vault() {
         ketos.get_vault(VaultId::LongTail).reserved.0,
         110 * USD + 250_000
     );
-    ketos.close_position(receiver.id);
+    ketos.close_position_now(receiver.id);
     let tail = ketos.get_vault(VaultId::LongTail);
-    assert_eq!(tail.revenue.fees.0, 800_000 + borrow);
+    assert_eq!(tail.revenue.fees.0, 2_400_000 + borrow);
     assert_eq!(tail.revenue.funding.0, 500_000);
     assert_eq!(tail.revenue.trader_pnl.0, 0);
     assert_eq!(
@@ -202,10 +202,10 @@ fn realized_funding_fees_and_liquidations_reconcile_per_vault() {
     assert_eq!(ketos.get_vault(VaultId::Core), core_before);
     set_depth_at(&mut ketos, "ZEC", measured_curve(), at);
     ctx_at("alice.test", at);
-    let p = ketos.open_position("ZEC".into(), Side::Long, U128(100 * USD), 5, None, None);
+    let p = ketos.open_position_now("ZEC".into(), Side::Long, U128(100 * USD), 5, None, None);
     set_price(&mut ketos, "ZEC", p.liquidation_price.0, at);
     ctx_at("stranger.test", at);
-    let record = ketos.liquidate(p.id);
+    let record = ketos.liquidate_now(p.id);
     let tail = ketos.get_vault(VaultId::LongTail);
     assert_eq!(tail.revenue.liquidations, record.penalty);
     assert_eq!(tail.revenue.liquidations.0, 5 * USD);
@@ -223,12 +223,12 @@ fn underwater_funding_is_not_recorded_as_collected_revenue() {
     let at = T0_MS + 10 * HOUR_MS;
     set_price(&mut ketos, "ZEC", P4 / 2, at);
     ctx_at("stranger.test", at);
-    ketos.liquidate(p.id);
+    ketos.liquidate_now(p.id);
     let tail = ketos.get_vault(VaultId::LongTail);
     assert_eq!(tail.revenue.funding.0, 0);
-    assert_eq!(tail.revenue.fees.0, 500_000);
+    assert_eq!(tail.revenue.fees.0, 1_500_000);
     assert_eq!(tail.revenue.liquidations.0, 0);
-    assert_eq!(tail.revenue.trader_pnl.0, 99_500_000);
+    assert_eq!(tail.revenue.trader_pnl.0, 98_500_000);
     assert_eq!(tail.balance.0, 2_100 * USD);
     assert_eq!(revenue_total(&tail.revenue), 100 * USD as i128);
 }
@@ -241,8 +241,8 @@ fn snapshots_are_permissionless_hourly_immutable_and_ordered_after_wraparound() 
     ctx_at("stranger.test", T0_MS);
     let first = ketos.snapshot_vaults();
     assert_eq!(first[0].nav.0, 10_000 * USD);
-    assert_eq!(first[1].nav.0, 1_950_500_000);
-    assert_eq!(first[1].tvl.0, 2_000 * USD + 500_000);
+    assert_eq!(first[1].nav.0, 1_951_500_000);
+    assert_eq!(first[1].tvl.0, 2_000 * USD + 1_500_000);
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ctx_at("anyone.test", T0_MS + SNAPSHOT_INTERVAL_MS - 1);
         ketos.snapshot_vaults();
@@ -253,7 +253,7 @@ fn snapshots_are_permissionless_hourly_immutable_and_ordered_after_wraparound() 
         vec![first[1].clone()]
     );
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(position.id);
+    ketos.close_position_now(position.id);
     assert_eq!(ketos.get_vault_history(VaultId::LongTail)[0], first[1]);
     let mut expected = Vec::new();
     for hour in 1..=VAULT_HISTORY_LEN + 3 {
@@ -291,12 +291,12 @@ fn offsetting_long_and_short_leave_lp_withdrawal_liquidity() {
     let before = ketos.get_vault(VaultId::Core);
     assert_eq!(ketos.vault_exposure(VaultId::Core), 5_000 * USD);
     assert_eq!(before.reserved.0, 5_500 * USD);
-    assert_eq!(before.available.0, 4_510 * USD);
+    assert_eq!(before.available.0, 4_550 * USD);
     assert_eq!(before.available_to_withdraw, before.available);
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(4_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(4_000 * USD));
     let after = ketos.get_vault(VaultId::Core);
-    assert_eq!(before.balance.0 - after.balance.0, 4_004 * USD);
+    assert_eq!(before.balance.0 - after.balance.0, 4_020 * USD);
     assert_eq!(after.reserved.0, 5_500 * USD);
     assert!(ketos.vault_exposure(VaultId::Core) <= 2 * after.nav.0);
 }
@@ -357,7 +357,7 @@ fn losing_counterparty_does_not_cancel_a_winners_full_liability() {
         view.traders_unrealized_pnl.0,
         500 * USD as i128 - loser.margin.0 as i128
     );
-    assert_eq!(view.nav.0, 1_600_500_000);
+    assert_eq!(view.nav.0, 1_601_500_000);
 }
 
 #[test]
@@ -385,30 +385,26 @@ fn funding_receivers_remain_liabilities_when_the_payer_is_insolvent() {
 fn settled_cross_bad_debt_is_excluded_from_lp_capital_before_default() {
     let mut ketos = two_vaults();
     ctx_at("alice.test", T0_MS);
-    let loser = ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(100 * USD),
-        5,
-        None,
-        Some(crate::cross::MarginMode::Cross),
-    );
-    ketos.open_position(
-        "ZEC".into(),
-        Side::Long,
-        U128(100 * USD),
-        1,
-        None,
-        Some(crate::cross::MarginMode::Cross),
-    );
+    let loser = ketos.open_position_now("NEAR".into(),
+    Side::Long,
+    U128(100 * USD),
+    5,
+    None,
+    Some(crate::cross::MarginMode::Cross),);
+    ketos.open_position_now("ZEC".into(),
+    Side::Long,
+    U128(100 * USD),
+    1,
+    None,
+    Some(crate::cross::MarginMode::Cross),);
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(loser.id);
+    ketos.close_position_now(loser.id);
     let view = ketos.get_vault(VaultId::Core);
-    assert_eq!(view.cross_receivable.0, 151 * USD);
-    assert_eq!(view.balance.0, 10_251 * USD);
+    assert_eq!(view.cross_receivable.0, 153 * USD);
+    assert_eq!(view.balance.0, 10_253 * USD);
     assert_eq!(view.nav.0, 10_100 * USD);
-    assert_eq!(view.reserved.0, 151 * USD);
+    assert_eq!(view.reserved.0, 153 * USD);
     deposit_to(&mut ketos, "core", "new-lp.test", 1_010 * USD);
     assert_eq!(
         ketos.get_vault_account(VaultId::Core, id("new-lp.test")).shares.0,
@@ -423,17 +419,17 @@ fn withdrawals_preserve_the_global_cap_after_unrealized_gains_reduce_nav() {
     set_price(&mut ketos, "ZEC", 3 * P4, T0_MS);
     ctx_at("viewer.test", T0_MS);
     let view = ketos.get_vault(VaultId::LongTail);
-    assert_eq!(view.available_to_withdraw.0, 1_000_500_000);
+    assert_eq!(view.available_to_withdraw.0, 1_001_500_000);
     assert!(view.available.0 < view.balance.0 - view.reserved.0);
     ctx("lp.test", 1);
     let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = ketos.withdraw_vault(VaultId::LongTail, U128(1_500 * USD));
+        let _ = ketos.withdraw_vault_now(VaultId::LongTail, U128(1_500 * USD));
     }));
     assert!(rejected.is_err());
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::LongTail, U128(1_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::LongTail, U128(1_000 * USD));
     let after = ketos.get_vault(VaultId::LongTail);
-    assert_eq!(after.nav.0, 750_250_000);
+    assert_eq!(after.nav.0, 750_750_000);
     assert!(ketos.vault_exposure(VaultId::LongTail) <= after.nav.0);
 }
 
@@ -443,7 +439,7 @@ fn deposit_rejects_a_stale_assigned_market_without_positions() {
     let mut ketos = two_vaults();
     set_price(&mut ketos, "BTC", P4, T0_MS - crate::market::MAX_PRICE_AGE_MS - 1);
     ctx_at(USDC, T0_MS);
-    let _ = ketos.ft_on_transfer(id("new-lp.test"), U128(USD), "deposit_vault:core".into());
+    ketos.deposit_vault(VaultId::Core, &id("new-lp.test"), USD);
 }
 
 #[test]
@@ -452,7 +448,7 @@ fn deposit_rejects_an_unpriced_assigned_market_without_positions() {
     let mut ketos = two_vaults();
     set_price(&mut ketos, "DOGE", 0, T0_MS);
     ctx_at(USDC, T0_MS);
-    let _ = ketos.ft_on_transfer(id("new-lp.test"), U128(USD), "deposit_vault:long-tail".into());
+    ketos.deposit_vault(VaultId::LongTail, &id("new-lp.test"), USD);
 }
 
 #[test]
@@ -467,7 +463,7 @@ fn withdrawal_rejects_a_stale_assigned_market_without_positions() {
         .attached_deposit(NearToken::from_yoctonear(1))
         .prepaid_gas(Gas::from_tgas(300))
         .build());
-    let _ = ketos.withdraw_vault(VaultId::LongTail, U128(USD));
+    let _ = ketos.withdraw_vault_now(VaultId::LongTail, U128(USD));
 }
 
 #[test]
@@ -476,7 +472,7 @@ fn withdrawal_rejects_an_unpriced_assigned_market_without_positions() {
     let mut ketos = two_vaults();
     set_price(&mut ketos, "BTC", 0, T0_MS);
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(USD));
 }
 
 #[test]
@@ -486,7 +482,7 @@ fn unpriced_markets_in_other_vaults_do_not_gate_lp_writes() {
     ctx_at(USDC, T0_MS);
     let _ = ketos.ft_on_transfer(id("new-lp.test"), U128(USD), "deposit_vault:core".into());
     ctx("new-lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(USD));
 }
 
 #[test]
@@ -502,7 +498,7 @@ fn unowned_surplus_gets_protocol_shares_before_the_first_lp() {
     assert_eq!(protocol.value.0, 500 * USD);
     assert_eq!(ketos.get_vault(VaultId::LongTail).total_shares.0, 1_500 * USD);
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::LongTail, lp.shares);
+    let _ = ketos.withdraw_vault_now(VaultId::LongTail, lp.shares);
     assert_eq!(ketos.get_vault(VaultId::LongTail).balance.0, 500 * USD);
     assert_eq!(ketos.get_vault_account(VaultId::LongTail, id(CONTRACT)).value.0, 500 * USD);
 }
@@ -514,7 +510,7 @@ fn zero_nav_recapitalization_invalidates_old_shares_even_for_a_returning_lp() {
     let p = open(&mut ketos, "NEAR", Side::Long, 1_000 * USD, 20);
     set_price(&mut ketos, "NEAR", 2 * P4, T0_MS);
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(p.id).0, 11_000 * USD);
+    assert_eq!(ketos.close_position_now(p.id).0, 11_000 * USD);
     assert_eq!(ketos.get_vault(VaultId::Core).nav.0, 0);
     deposit_to(&mut ketos, "core", "recap-lp.test", 1_000 * USD);
     assert!(ketos.vaults[VaultId::Core.index()].share_epoch > old_epoch);
@@ -533,11 +529,11 @@ fn failed_pending_withdrawal_after_wipeout_credits_cash_without_reviving_old_sha
     assert!(ketos.get_account(id("lp.test")).is_none());
     let epoch = ketos.vaults[VaultId::Core.index()].share_epoch;
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(5_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(5_000 * USD));
     let p = open(&mut ketos, "NEAR", Side::Long, 500 * USD, 20);
     set_price(&mut ketos, "NEAR", 2 * P4, T0_MS);
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(p.id).0, 5_500 * USD);
+    assert_eq!(ketos.close_position_now(p.id).0, 5_500 * USD);
     deposit_to(&mut ketos, "core", "recap-lp.test", 1_000 * USD);
     let recap = ketos.get_vault(VaultId::Core);
     ctx(CONTRACT, 0);
@@ -560,7 +556,7 @@ fn a_new_first_deposit_also_separates_pending_full_withdrawals() {
     let mut ketos = two_vaults();
     let epoch = ketos.vaults[VaultId::Core.index()].share_epoch;
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(10_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(10_000 * USD));
     deposit_to(&mut ketos, "core", "new-lp.test", 1_000 * USD);
     let recap = ketos.get_vault(VaultId::Core);
     ctx(CONTRACT, 0);
@@ -583,7 +579,7 @@ fn failed_full_withdrawal_cannot_capture_surplus_earned_without_shares() {
     let mut ketos = two_vaults();
     let epoch = ketos.vaults[VaultId::Core.index()].share_epoch;
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(10_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(10_000 * USD));
     ketos.record_opening_fee(VaultId::Core, T0_MS, 100 * USD);
     ctx(CONTRACT, 0);
     ketos.on_vault_withdrawn(
@@ -608,7 +604,7 @@ fn lp_writes_accept_prices_at_the_exact_freshness_boundary() {
     let mut ketos = two_vaults();
     let at = T0_MS + crate::market::MAX_PRICE_AGE_MS;
     ctx_at(USDC, at);
-    let _ = ketos.ft_on_transfer(id("new-lp.test"), U128(USD), "deposit_vault:core".into());
+    ketos.deposit_vault(VaultId::Core, &id("new-lp.test"), USD);
     testing_env!(VMContextBuilder::new()
         .current_account_id(id(CONTRACT))
         .predecessor_account_id(id("new-lp.test"))
@@ -616,6 +612,6 @@ fn lp_writes_accept_prices_at_the_exact_freshness_boundary() {
         .attached_deposit(NearToken::from_yoctonear(1))
         .prepaid_gas(Gas::from_tgas(300))
         .build());
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(USD));
     assert_eq!(ketos.get_vault_account(VaultId::Core, id("new-lp.test")).shares.0, 0);
 }

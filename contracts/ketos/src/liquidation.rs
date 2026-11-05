@@ -3,7 +3,7 @@
 
 use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
-use near_sdk::{env, near, require, AccountId};
+use near_sdk::{env, near, require, AccountId, PromiseOrValue};
 
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::MarketId;
@@ -57,14 +57,25 @@ pub fn split_equity(equity: i128, size: u128) -> (u128, u128, u128) {
 
 #[near]
 impl Ketos {
-    /// Liquidates `position_id` at the oracle price if its equity is at or below its
-    /// maintenance margin (the position's liquidation price has been reached).
-    pub fn liquidate(&mut self, position_id: PositionId) -> LiquidationRecord {
+    #[payable]
+    pub fn liquidate(&mut self, position_id: PositionId) -> PromiseOrValue<LiquidationRecord> {
+        let ids = self.position_price_market_ids(position_id);
+        let action = crate::pull_prices::PullAction::Liquidate { liquidator: env::predecessor_account_id(), position_id };
+        if let Some(promise) = self.pull_for_action(action, ids) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.liquidate_now(position_id))
+    }
+
+    pub(crate) fn liquidate_now(&mut self, position_id: PositionId) -> LiquidationRecord {
+        self.liquidate_for(env::predecessor_account_id(), position_id)
+    }
+
+    pub(crate) fn liquidate_for(&mut self, liquidator: AccountId, position_id: PositionId) -> LiquidationRecord {
         require!(
             self.positions.get(&position_id).map(|p| p.margin_mode) != Some(crate::cross::MarginMode::Cross),
             "ERR_USE_CROSS_LIQUIDATION"
         );
-        let liquidator = env::predecessor_account_id();
         let now_ms = env::block_timestamp_ms();
         let position = self
             .positions

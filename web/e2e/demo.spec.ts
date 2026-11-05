@@ -10,7 +10,7 @@ test.use({ viewport: { width: 1440, height: 900 } });
 
 const USDC = 1_000_000n;
 // A keeper pass runs at most once a minute and samples 1Click for up to twelve markets.
-const KEEPER_WAIT = 180_000;
+const KEEPER_WAIT = 420_000;
 
 async function expectSinglePrimary(page: Page, label: RegExp): Promise<void> {
   const primary = page.locator("[data-primary]:visible");
@@ -62,7 +62,7 @@ async function fillMarketOrder(
 }
 
 test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits", async ({ page }) => {
-  // Three scenes wait for a keeper pass: limit fill, listing, stop loss + liquidation.
+  // Active-market surveillance refreshes prices at most every five minutes.
   test.setTimeout(1_200_000);
   const trader = traderAccountId();
   const pageErrors: string[] = [];
@@ -165,7 +165,8 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await selectMarket(page, "BTC");
     await ticket.getByTestId("order-type-limit").click();
     await ticket.getByTestId("side-short").click();
-    await setLeverage(page, 5);
+    // Rest through depth updates: 2× remains valid at the lowest open-market tier.
+    await setLeverage(page, 2);
     // A sell limit rests above the $77,561.50 oracle price.
     await ticket.locator('input[name="order-trigger"]').fill("78000");
     await ticket.locator('input[name="order-size"]').fill("500");
@@ -180,7 +181,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(limit).toHaveCount(0, { timeout: KEEPER_WAIT });
     await page.getByTestId("account-tab-positions").click();
     await expect(positions).toHaveCount(2);
-    await expect(positions.filter({ hasText: "BTC" })).toContainText("Short 5×");
+    await expect(positions.filter({ hasText: "BTC" })).toContainText("Short 2×");
     await page.getByTestId("account-tab-trades").click();
     const fill = accountPanel.locator('[data-testid^="trade-"]').filter({ hasText: "BTC" });
     await expect(fill).toContainText("Open Short");
@@ -319,7 +320,12 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     const row = page.locator('[data-testid^="stress-position-"]').filter({ hasText: "ETH" });
     await expect(row).toContainText("Would liquidate");
     await expect(page.getByTestId("stress-notional")).toHaveText("$500.00");
-    await expect(page.getByTestId("stress-debt-core")).toHaveText(/^\$150\./);
+    const ethPosition = (await sandboxViews().positions(trader)).find((position) => position.market_id === "ETH")!;
+    const expectedDebt = Number(ethPosition.size / 2n - ethPosition.margin +
+      ethPosition.borrow_fee + ethPosition.funding_paid - ethPosition.funding_received) / Number(USDC);
+    // The UI freezes accrual at its last poll; compare cents, not a pre-impact fee fixture.
+    await expect.poll(async () => parseUsd(await page.getByTestId("stress-debt-core").innerText()))
+      .toBeCloseTo(expectedDebt, 2);
     await expect(page.getByTestId("stress-debt-long-tail")).toHaveText("$0.00");
     // The scenario is read-only.
     expect((await getMarket("ETH")).oi_long).toBe("500000000");
@@ -332,9 +338,10 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(page).toHaveURL(/\/trade/);
     await selectMarket(page, "NEAR");
     await expect(page.getByTestId("mark-price")).toHaveText("$4.00");
-    await fillMarketOrder(page, ticket, { side: "long", leverage: 5, size: 500 });
+    const liquidationLeverage = Math.min(5, (await getMarket("NEAR")).max_leverage);
+    await fillMarketOrder(page, ticket, { side: "long", leverage: liquidationLeverage, size: 500 });
     await page.locator("[data-primary]:visible").click();
-    await expectToast(page, /Long NEAR 5× opened · \$500\.00/);
+    await expectToast(page, new RegExp(`Long NEAR ${liquidationLeverage}× opened · \\$500\\.00`));
     await fillMarketOrder(page, ticket, { side: "long", leverage: 2, size: 400, stopLoss: 3.8 });
     await page.locator("[data-primary]:visible").click();
     await expectToast(page, /Long NEAR 2× opened · \$400\.00/);
@@ -342,7 +349,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(positions).toHaveCount(4);
 
     // Maintenance is locked at entry and varies with the live liquidity tier.
-    const near = (await sandboxViews().positions(trader)).find((p) => p.market_id === "NEAR" && p.leverage === 5)!;
+    const near = (await sandboxViews().positions(trader)).find((p) => p.market_id === "NEAR" && p.size === 500n * USDC)!;
     await setOraclePrice("wrap.near", Number(near.liquidation_price * 999n / 1_000n) / 1e8);
     await page.getByTestId("account-tab-liquidations").click();
     const liquidation = page.locator('[data-testid^="liquidation-"]').filter({ hasText: "Yours" });

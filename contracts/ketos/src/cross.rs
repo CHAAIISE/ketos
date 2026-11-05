@@ -1,6 +1,6 @@
 use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
-use near_sdk::{env, near, require, AccountId};
+use near_sdk::{env, near, require, AccountId, PromiseOrValue};
 
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::liquidation::{split_equity, LiquidationRecord};
@@ -121,7 +121,8 @@ impl Ketos {
         price: u128,
         now_ms: u64,
     ) -> U128 {
-        let (position, marked) = self.remove_position(position_id, price, now_ms);
+        let (position, mut marked) = self.remove_position(position_id, price, now_ms);
+        marked.close_fee += self.impact_fee(&position.market_id, position.size);
         let index = self
             .markets
             .get(&position.market_id)
@@ -354,13 +355,25 @@ impl Ketos {
         self.get_position(position_id).unwrap()
     }
 
-    /// Closes whole positions by increasing equity/maintenance ratio, stopping as soon as health recovers.
-    pub fn liquidate_cross(&mut self, account_id: AccountId) -> Vec<LiquidationRecord> {
+    #[payable]
+    pub fn liquidate_cross(&mut self, account_id: AccountId) -> PromiseOrValue<Vec<LiquidationRecord>> {
+        let ids = self.cross_price_market_ids(&account_id);
+        let action = crate::pull_prices::PullAction::LiquidateCross { liquidator: env::predecessor_account_id(), account_id: account_id.clone() };
+        if let Some(promise) = self.pull_for_action(action, ids) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.liquidate_cross_now(account_id))
+    }
+
+    pub(crate) fn liquidate_cross_now(&mut self, account_id: AccountId) -> Vec<LiquidationRecord> {
+        self.liquidate_cross_for(env::predecessor_account_id(), account_id)
+    }
+
+    pub(crate) fn liquidate_cross_for(&mut self, liquidator: AccountId, account_id: AccountId) -> Vec<LiquidationRecord> {
         let mut health = self.get_cross_account(account_id.clone());
         require!(health.prices_fresh, "ERR_STALE_CROSS_PRICE");
         require!(health.liquidatable, "ERR_CROSS_HEALTHY");
         let now_ms = env::block_timestamp_ms();
-        let liquidator = env::predecessor_account_id();
         let mut records = Vec::new();
         while health.liquidatable {
             let account = self.accounts.get(&account_id).unwrap();

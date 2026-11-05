@@ -16,6 +16,8 @@ pub mod math;
 pub mod oracle;
 pub mod orders;
 pub mod position;
+pub mod pull_prices;
+mod priced_actions;
 pub mod vault;
 pub mod worker_prices;
 
@@ -56,6 +58,7 @@ enum StorageKey {
     ActiveTraders,
     PnlRanking,
     VolumeRanking,
+    PriceDeposits,
 }
 
 #[near(serializers = [json])]
@@ -98,6 +101,10 @@ pub struct Ketos {
     pnl_ranking: TreeMap<(i128, AccountId), ()>,
     volume_ranking: TreeMap<(u128, AccountId), ()>,
     trader_activity_count: u64,
+    /// Request lease and prepaid oracle credits require migration on existing deployments.
+    last_price_request_ms: Option<u64>,
+    price_deposits: LookupMap<AccountId, u128>,
+    price_deposits_total: u128,
 }
 
 #[near]
@@ -141,6 +148,9 @@ impl Ketos {
             pnl_ranking: TreeMap::new(StorageKey::PnlRanking),
             volume_ranking: TreeMap::new(StorageKey::VolumeRanking),
             trader_activity_count: 0,
+            last_price_request_ms: None,
+            price_deposits: LookupMap::new(StorageKey::PriceDeposits),
+            price_deposits_total: 0,
         };
         for config in default_markets() {
             contract.register_market(config);
@@ -192,6 +202,10 @@ impl FungibleTokenReceiver for Ketos {
                     "long-tail" => VaultId::LongTail,
                     _ => env::panic_str("ERR_UNKNOWN_VAULT"),
                 };
+                require!(amount.0 >= vault::MIN_VAULT_DEPOSIT, "ERR_MIN_VAULT_DEPOSIT: 1 USDC");
+                if let Some(request) = self.pull_for_vault_deposit(sender_id.clone(), vault_id, amount) {
+                    return PromiseOrValue::Promise(request);
+                }
                 self.deposit_vault(vault_id, &sender_id, amount.0);
             }
             _ if msg.starts_with(listing::MSG_LIST_MARKET) => {

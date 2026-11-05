@@ -1,6 +1,6 @@
 use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
-use near_sdk::{env, near, require, AccountId};
+use near_sdk::{env, near, require, AccountId, PromiseOrValue};
 
 use crate::cross::MarginMode;
 use crate::funding::side_index;
@@ -245,7 +245,8 @@ impl Ketos {
         price: u128,
         now_ms: u64,
     ) -> (Position, Marked, u128) {
-        let (position, marked) = self.remove_position(id, price, now_ms);
+        let (position, mut marked) = self.remove_position(id, price, now_ms);
+        marked.close_fee += self.impact_fee(&position.market_id, position.size);
         let owed = marked.equity - to_i128(marked.close_fee);
         let mut payout = u128::try_from(owed.max(0)).unwrap_or(0);
         let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
@@ -265,7 +266,9 @@ impl Ketos {
             .markets
             .get(&position.market_id)
             .unwrap_or_else(|| env::panic_str("ERR_UNKNOWN_MARKET"));
-        position.view(id, market, env::block_timestamp_ms())
+        let mut view = position.view(id, market, env::block_timestamp_ms());
+        view.close_fee.0 += self.impact_fee(&position.market_id, position.size);
+        view
     }
 }
 
@@ -388,30 +391,55 @@ impl Ketos {
     }
 }
 
-#[near]
 impl Ketos {
-    /// Opens at the fresh oracle price, optionally attaching full-position TP/SL exits.
-    pub fn open_position(
-        &mut self,
-        market_id: MarketId,
-        side: Side,
-        margin: U128,
-        leverage: u32,
-        brackets: Option<Brackets>,
-        margin_mode: Option<MarginMode>,
+    pub(crate) fn open_position_now(
+        &mut self, market_id: MarketId, side: Side, margin: U128, leverage: u32,
+        brackets: Option<Brackets>, margin_mode: Option<MarginMode>,
     ) -> PositionView {
         self.try_open_position_for(env::predecessor_account_id(), market_id, side, margin, leverage, brackets, margin_mode.unwrap_or_default())
             .unwrap_or_else(|reason| env::panic_str(&reason))
     }
 
-    /// Closes the caller's position at the oracle price; the result lands in free margin.
-    pub fn close_position(&mut self, position_id: PositionId) -> U128 {
-        let position = self.positions.get(&position_id)
-            .unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
+    pub(crate) fn close_position_now(&mut self, position_id: PositionId) -> U128 {
+        let position = self.positions.get(&position_id).unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
         require!(position.account_id == env::predecessor_account_id(), "ERR_NOT_OWNER");
         let now_ms = env::block_timestamp_ms();
-        let price = self.markets.get(&position.market_id).unwrap().fresh_price(now_ms);
+        let price = self.markets.get(&position.market_id).unwrap()
+            .closing_price(now_ms).unwrap_or_else(|reason| env::panic_str(reason));
         self.close_position_at(position_id, price, now_ms)
+    }
+}
+
+#[near]
+impl Ketos {
+    #[payable]
+    pub fn open_position(
+        &mut self, market_id: MarketId, side: Side, margin: U128, leverage: u32,
+        brackets: Option<Brackets>, margin_mode: Option<MarginMode>,
+    ) -> PromiseOrValue<PositionView> {
+        let account_id = env::predecessor_account_id();
+        let ids = self.open_price_market_ids(&market_id, &account_id, margin_mode.unwrap_or_default());
+        let action = crate::pull_prices::PullAction::Open {
+            account_id, market_id: market_id.clone(), side, margin, leverage,
+            brackets: brackets.clone(), margin_mode: margin_mode.unwrap_or_default(),
+        };
+        if let Some(promise) = self.pull_for_action(action, ids) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.open_position_now(market_id, side, margin, leverage, brackets, margin_mode))
+    }
+
+    #[payable]
+    pub fn close_position(&mut self, position_id: PositionId) -> PromiseOrValue<U128> {
+        let position = self.positions.get(&position_id).unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
+        let account_id = env::predecessor_account_id();
+        require!(position.account_id == account_id, "ERR_NOT_OWNER");
+        let ids = vec![position.market_id.clone()];
+        let action = crate::pull_prices::PullAction::Close { account_id, position_id };
+        if let Some(promise) = self.pull_for_action(action, ids) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.close_position_now(position_id))
     }
 
     pub fn get_position(&self, position_id: PositionId) -> Option<PositionView> {

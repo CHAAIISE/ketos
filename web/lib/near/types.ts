@@ -78,7 +78,7 @@ export const accountSchema = z.object({
   account_id: z.string(),
   /** Free margin, USDC units (6 decimals). */
   margin: u128,
-  /** Margin locked by pending entry orders. */
+  /** Pending entry collateral plus refundable order-executor rewards. */
   reserved_margin: u128,
 });
 export type MarginAccount = z.infer<typeof accountSchema>;

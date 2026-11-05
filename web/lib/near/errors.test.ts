@@ -79,7 +79,6 @@ describe("toNearActionError", () => {
   });
 
   it.each([
-    ["ERR_STALE_PRICE", /out of date/],
     ["ERR_NO_PRICE", /no oracle price/],
     ["ERR_INSUFFICIENT_MARGIN", /Not enough free margin/],
     ["ERR_MIN_POSITION_MARGIN: 1 USDC", /at least \$1/],

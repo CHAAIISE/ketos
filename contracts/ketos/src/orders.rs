@@ -1,17 +1,22 @@
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::json;
-use near_sdk::{env, near, require, AccountId};
+use near_sdk::{env, near, require, AccountId, PromiseOrValue};
 
 use crate::cross::MarginMode;
 use crate::history::{HistoryEvent, HistoryKind};
-use crate::market::{MarketId, MAX_PRICE_AGE_MS};
+use crate::market::{MarketId, MAX_OPEN_PRICE_AGE_MS};
 use crate::math::trade_fee;
 use crate::position::{Position, PositionId, Side, MIN_POSITION_MARGIN};
+use crate::market::USD;
 use crate::{emit_event, Ketos, KetosExt};
 
 pub type OrderId = u64;
 pub const MAX_OPEN_ORDERS: usize = 50;
 pub const MAX_EXECUTE_ORDERS: usize = 50;
+
+pub(crate) fn execution_reward(size: u128) -> u128 {
+    trade_fee(size, 5).max(USD / 10)
+}
 
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -131,6 +136,8 @@ pub struct Order {
     pub account_id: AccountId,
     pub request: OrderRequest,
     pub created_at_ms: u64,
+    /// Separate USDC collateral, refunded on cancellation or paid exactly once on fill.
+    pub execution_reward: U128,
 }
 
 #[near(serializers = [json])]
@@ -182,7 +189,7 @@ impl Ketos {
         if market.price.0 == 0 {
             return Err("ERR_NO_PRICE".into());
         }
-        if now_ms.saturating_sub(market.price_timestamp_ms) > MAX_PRICE_AGE_MS {
+        if now_ms.saturating_sub(market.price_timestamp_ms) > MAX_OPEN_PRICE_AGE_MS {
             return Err("ERR_STALE_PRICE".into());
         }
         let size = margin.checked_mul(leverage as u128).ok_or("ERR_OVERFLOW")?;
@@ -213,21 +220,38 @@ impl Ketos {
             return Err("ERR_TOO_MANY_ORDERS".into());
         }
         if let Some(brackets) = brackets {
+            let rewards = execution_reward(size).checked_mul(slots as u128).ok_or("ERR_OVERFLOW")?;
+            if account.margin < margin.checked_add(rewards).ok_or("ERR_OVERFLOW")? {
+                return Err("ERR_INSUFFICIENT_MARGIN".into());
+            }
             brackets.validate(side, market.price.0)?;
         }
-        Ok((market.price.0, size, trade_fee(size, market.fee_bps)))
+        let fee = trade_fee(size, market.fee_bps) + self.impact_fee(market_id, size);
+        if fee >= margin {
+            return Err("ERR_FEES_EXCEED_MARGIN".into());
+        }
+        Ok((market.price.0, size, fee))
     }
 
     fn insert_order(&mut self, account_id: AccountId, request: OrderRequest) -> Order {
         let id = self.next_order_id;
+        let size = request.entry().map_or_else(
+            || self.positions.get(&request.position_id().unwrap()).unwrap().size,
+            |entry| entry.margin.0 * u128::from(entry.leverage),
+        );
+        let reward = execution_reward(size);
         self.next_order_id += 1;
         let order = Order {
             id,
             account_id: account_id.clone(),
             request,
             created_at_ms: env::block_timestamp_ms(),
+            execution_reward: U128(reward),
         };
         let account = self.accounts.get_mut(&account_id).unwrap();
+        require!(account.margin >= reward, "ERR_INSUFFICIENT_MARGIN");
+        account.margin -= reward;
+        account.reserved_margin += reward;
         if let Some(entry) = order.request.entry() {
             account.margin -= entry.margin.0;
             account.reserved_margin += entry.margin.0;
@@ -246,11 +270,13 @@ impl Ketos {
         order
     }
 
-    /// Removal releases reserved entry collateral exactly once. Exits reserve no extra margin.
+    /// Removal releases reserved entry collateral and executor reward exactly once.
     fn remove_order(&mut self, id: OrderId) -> Option<Order> {
         let order = self.orders.remove(&id)?;
         let account = self.accounts.get_mut(&order.account_id).unwrap();
         account.orders.retain(|order_id| *order_id != id);
+        account.reserved_margin -= order.execution_reward.0;
+        account.margin += order.execution_reward.0;
         if let Some(entry) = order.request.entry() {
             account.reserved_margin -= entry.margin.0;
             account.margin += entry.margin.0;
@@ -309,70 +335,55 @@ impl Ketos {
 
 #[near]
 impl Ketos {
-    /// Entry margin is reserved now; liquidity, leverage and price are checked again at execution.
-    pub fn place_order(&mut self, request: OrderRequest) -> Order {
+    #[payable]
+    pub fn place_order(&mut self, request: OrderRequest) -> PromiseOrValue<Order> {
         let account_id = env::predecessor_account_id();
-        let account = self
-            .accounts
-            .get(&account_id)
-            .unwrap_or_else(|| env::panic_str("ERR_NO_ACCOUNT"));
-        require!(
-            account.orders.len() < MAX_OPEN_ORDERS,
-            "ERR_TOO_MANY_ORDERS"
-        );
-        require!(request.trigger_price() > 0, "ERR_ZERO_TRIGGER_PRICE");
+        let ids = request.position_id().map_or_else(Vec::new, |id| self.position_price_market_ids(id));
+        let action = crate::pull_prices::PullAction::PlaceOrder { account_id, request: request.clone() };
+        if let Some(promise) = self.pull_for_action(action, ids) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.place_order_now(request))
+    }
+
+    pub(crate) fn place_order_now(&mut self, request: OrderRequest) -> Order {
+        self.try_place_order_for(env::predecessor_account_id(), request)
+            .unwrap_or_else(|reason| env::panic_str(&reason))
+    }
+
+    pub(crate) fn try_place_order_for(&mut self, account_id: AccountId, request: OrderRequest) -> Result<Order, String> {
+        let account = self.accounts.get(&account_id).ok_or("ERR_NO_ACCOUNT")?;
+        if account.orders.len() >= MAX_OPEN_ORDERS { return Err("ERR_TOO_MANY_ORDERS".into()); }
+        if request.trigger_price() == 0 { return Err("ERR_ZERO_TRIGGER_PRICE".into()); }
         if let Some(entry) = request.entry() {
-            let market = self
-                .markets
-                .get(&entry.market_id)
-                .unwrap_or_else(|| env::panic_str("ERR_UNKNOWN_MARKET"));
-            require!(
-                entry.margin.0 >= MIN_POSITION_MARGIN,
-                "ERR_MIN_POSITION_MARGIN: 1 USDC"
-            );
-            require!(
-                (1..=market.max_leverage_cap).contains(&entry.leverage),
-                "ERR_INVALID_LEVERAGE"
-            );
-            require!(account.margin >= entry.margin.0, "ERR_INSUFFICIENT_MARGIN");
+            let market = self.markets.get(&entry.market_id).ok_or("ERR_UNKNOWN_MARKET")?;
+            if entry.margin.0 < MIN_POSITION_MARGIN { return Err("ERR_MIN_POSITION_MARGIN: 1 USDC".into()); }
+            if !(1..=market.max_leverage_cap).contains(&entry.leverage) { return Err("ERR_INVALID_LEVERAGE".into()); }
+            let size = entry.margin.0.checked_mul(u128::from(entry.leverage)).ok_or("ERR_OVERFLOW")?;
+            let required = entry.margin.0.checked_add(execution_reward(size)).ok_or("ERR_OVERFLOW")?;
+            if account.margin < required { return Err("ERR_INSUFFICIENT_MARGIN".into()); }
             if let Some(brackets) = &entry.brackets {
-                brackets
-                    .validate(entry.side, entry.trigger_price.0)
-                    .unwrap_or_else(|reason| env::panic_str(&reason));
+                brackets.validate(entry.side, entry.trigger_price.0)?;
             }
         } else {
-            let position = self
-                .positions
-                .get(&request.position_id().unwrap())
-                .unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
-            require!(position.account_id == account_id, "ERR_NOT_OWNER");
-            let existing = if request.is_take_profit() {
-                position.take_profit
-            } else {
-                position.stop_loss
-            };
-            require!(existing.is_none(), "ERR_EXIT_ORDER_EXISTS");
-            let price = self
-                .markets
-                .get(&position.market_id)
-                .unwrap()
-                .fresh_price(env::block_timestamp_ms());
+            let position = self.positions.get(&request.position_id().unwrap()).ok_or("ERR_NO_POSITION")?;
+            if position.account_id != account_id { return Err("ERR_NOT_OWNER".into()); }
+            let existing = if request.is_take_profit() { position.take_profit } else { position.stop_loss };
+            if existing.is_some() { return Err("ERR_EXIT_ORDER_EXISTS".into()); }
+            if account.margin < execution_reward(position.size) { return Err("ERR_INSUFFICIENT_MARGIN".into()); }
+            let market = self.markets.get(&position.market_id).unwrap();
+            if market.price.0 == 0 { return Err("ERR_NO_PRICE".into()); }
+            if env::block_timestamp_ms().saturating_sub(market.price_timestamp_ms) > crate::market::MAX_PRICE_AGE_MS {
+                return Err("ERR_STALE_PRICE".into());
+            }
             let brackets = if request.is_take_profit() {
-                Brackets {
-                    take_profit: Some(U128(request.trigger_price())),
-                    stop_loss: None,
-                }
+                Brackets { take_profit: Some(U128(request.trigger_price())), stop_loss: None }
             } else {
-                Brackets {
-                    take_profit: None,
-                    stop_loss: Some(U128(request.trigger_price())),
-                }
+                Brackets { take_profit: None, stop_loss: Some(U128(request.trigger_price())) }
             };
-            brackets
-                .validate(position.side, price)
-                .unwrap_or_else(|reason| env::panic_str(&reason));
+            brackets.validate(position.side, market.price.0)?;
         }
-        self.insert_order(account_id, request)
+        Ok(self.insert_order(account_id, request))
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
@@ -391,9 +402,22 @@ impl Ketos {
         );
     }
 
-    /// Permissionless, bounded batch. Missing, stale and untriggered orders stay untouched.
-    /// Triggered entries that fail admission are removed and their full margin is released.
-    pub fn execute_orders(&mut self, ids: Vec<OrderId>) -> Vec<OrderExecution> {
+    #[payable]
+    pub fn execute_orders(&mut self, ids: Vec<OrderId>) -> PromiseOrValue<Vec<OrderExecution>> {
+        require!(ids.len() <= MAX_EXECUTE_ORDERS, "ERR_ORDER_BATCH_TOO_LARGE");
+        let markets = self.orders_price_market_ids(&ids);
+        let action = crate::pull_prices::PullAction::ExecuteOrders { executor: env::predecessor_account_id(), ids: ids.clone() };
+        if let Some(promise) = self.pull_for_action(action, markets) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.execute_orders_now(ids))
+    }
+
+    pub(crate) fn execute_orders_now(&mut self, ids: Vec<OrderId>) -> Vec<OrderExecution> {
+        self.execute_orders_for(env::predecessor_account_id(), ids, false)
+    }
+
+    pub(crate) fn execute_orders_for(&mut self, executor: AccountId, ids: Vec<OrderId>, allow_fallback: bool) -> Vec<OrderExecution> {
         require!(ids.len() <= MAX_EXECUTE_ORDERS, "ERR_ORDER_BATCH_TOO_LARGE");
         let now_ms = env::block_timestamp_ms();
         ids.into_iter().map(|id| {
@@ -406,11 +430,26 @@ impl Ketos {
                 (&position.market_id, position.side)
             };
             let market = self.markets.get(market_id).unwrap();
-            if market.price.0 == 0 || now_ms.saturating_sub(market.price_timestamp_ms) > MAX_PRICE_AGE_MS {
+            if market.price.0 == 0 {
                 return skipped;
             }
-            let price = market.price.0;
-            if !order.request.triggered(side, price) { return skipped; }
+            let price = if order.request.entry().is_some() {
+                if allow_fallback || now_ms.saturating_sub(market.price_timestamp_ms) > MAX_OPEN_PRICE_AGE_MS {
+                    return skipped;
+                }
+                market.price.0
+            } else {
+                // A stale quote cannot invent a newly crossed trigger.
+                if !order.request.triggered(side, market.price.0) { return skipped; }
+                let price = if allow_fallback {
+                    market.failed_pull_close_price(side, now_ms)
+                } else {
+                    let Ok(price) = market.closing_price(now_ms) else { return skipped; };
+                    price
+                };
+                price
+            };
+            if order.request.entry().is_some() && !order.request.triggered(side, price) { return skipped; }
             let fill_market = market_id.clone();
             let fill_size = if let Some(entry) = order.request.entry() {
                 // Opening admission checks overflow before any fill is recorded.
@@ -419,11 +458,14 @@ impl Ketos {
                 self.positions.get(&order.request.position_id().unwrap()).unwrap().size
             };
             let order = self.remove_order(id).unwrap();
+            let reward = order.execution_reward.0;
+            self.accounts.get_mut(&order.account_id).unwrap().margin -= reward;
             let position_id = match order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
                     match self.try_open_position_for(order.account_id.clone(), entry.market_id, entry.side, entry.margin, entry.leverage, entry.brackets, entry.margin_mode) {
                         Ok(position) => position.id,
                         Err(reason) => {
+                            self.accounts.get_mut(&order.account_id).unwrap().margin += reward;
                             emit_event("order_rejected", json!({ "order_id": id, "reason": reason, "refunded_margin": entry.margin }));
                             return OrderExecution::Rejected { order_id: id, reason };
                         }
@@ -434,7 +476,8 @@ impl Ketos {
                     position_id
                 }
             };
-            self.record_history(&order.account_id, HistoryEvent {
+            self.accounts.entry(executor.clone()).or_default().margin += reward;
+            self.record_order_fill(&order.account_id, HistoryEvent {
                 sequence: 0,
                 kind: HistoryKind::OrderFill,
                 position_id,
@@ -444,14 +487,14 @@ impl Ketos {
                 price: U128(price),
                 size: U128(fill_size),
                 pnl: near_sdk::json_types::I128(0),
-                realized_pnl: near_sdk::json_types::I128(0),
-                fees: U128(0),
+                realized_pnl: near_sdk::json_types::I128(-crate::math::to_i128(reward)),
+                fees: U128(reward),
                 funding_paid: U128(0),
                 funding_received: U128(0),
                 funding_payment: near_sdk::json_types::I128(0),
                 timestamp_ms: now_ms,
             });
-            emit_event("order_filled", json!({ "order_id": id, "account_id": order.account_id, "position_id": position_id, "price": U128(price), "executor": env::predecessor_account_id() }));
+            emit_event("order_filled", json!({ "order_id": id, "account_id": order.account_id, "position_id": position_id, "price": U128(price), "executor": executor, "execution_reward": U128(reward) }));
             OrderExecution::Filled { order_id: id, position_id, price: U128(price) }
         }).collect()
     }

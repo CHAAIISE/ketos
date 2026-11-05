@@ -13,10 +13,13 @@ use crate::Ketos;
 
 mod capital;
 mod cross;
+mod execution_policy;
 mod funding;
 mod history;
 mod listing;
 mod orders;
+mod oracle_policy;
+mod pull_prices;
 mod vaults;
 mod worker_prices;
 
@@ -116,10 +119,10 @@ fn registry_addition_uses_asset_prices_market_fees_and_risk_limits() {
     deposit(&mut ketos, "alice.test", 200 * USD);
     let p = open(&mut ketos, "NEW", Side::Long, 100 * USD, 3);
     assert_eq!(p.entry_price.0, P4);
-    assert_eq!(p.margin.0, 100 * USD - 150_000);
-    assert_eq!(p.close_fee.0, 150_000);
+    assert_eq!(p.margin.0, 100 * USD - 750_000);
+    assert_eq!(p.close_fee.0, 750_000);
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(p.id).0, 100 * USD - 300_000);
+    assert_eq!(ketos.close_position_now(p.id).0, 100 * USD - 1_500_000);
 }
 
 #[test]
@@ -374,13 +377,13 @@ fn trading_setup() -> Ketos {
 
 fn open(ketos: &mut Ketos, market: &str, side: Side, margin: u128, leverage: u32) -> PositionView {
     ctx_at("alice.test", T0_MS);
-    ketos.open_position(market.into(), side, U128(margin), leverage, None, None)
+    ketos.open_position_now(market.into(), side, U128(margin), leverage, None, None)
 }
 
 fn close_at(ketos: &mut Ketos, position: u64, price: u128, now_ms: u64) -> u128 {
     set_price(ketos, "NEAR", price, now_ms);
     ctx_at("alice.test", now_ms);
-    ketos.close_position(position).0
+    ketos.close_position_now(position).0
 }
 
 #[test]
@@ -388,10 +391,10 @@ fn open_locks_margin_and_charges_fee_to_vault() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     assert_eq!(p.size.0, 500 * USD);
-    assert_eq!(p.margin.0, 100 * USD - 500_000);
+    assert_eq!(p.margin.0, 100 * USD - 1_500_000);
     assert_eq!(p.entry_price.0, P4);
     assert_eq!(margin(&ketos, "alice.test"), 100 * USD);
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 500_000);
+    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 1_500_000);
     assert_eq!(
         ketos.get_market("NEAR".into()).unwrap().market.oi_long.0,
         500 * USD
@@ -399,7 +402,7 @@ fn open_locks_margin_and_charges_fee_to_vault() {
     assert_eq!(ketos.get_positions(id("alice.test")), vec![p.clone()]);
     // Maintenance 10% of notional at 5x max leverage; liquidation ~ -10% minus the fee.
     assert_eq!(p.maintenance_margin.0, 50 * USD);
-    assert_eq!(p.liquidation_price.0, 360_400_000);
+    assert_eq!(p.liquidation_price.0, 361_200_000);
 }
 
 #[test]
@@ -412,7 +415,7 @@ fn open_positions_are_listed_page_by_page() {
     assert_eq!(ketos.get_open_positions(Some(1), Some(1)), vec![b.clone()]);
     assert!(ketos.get_open_positions(Some(3), None).is_empty());
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(a.id);
+    ketos.close_position_now(a.id);
     assert_eq!(ketos.get_open_positions(None, None).len(), 2);
 }
 
@@ -420,12 +423,12 @@ fn open_positions_are_listed_page_by_page() {
 fn winning_long_is_paid_by_the_vault() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
-    // +10%: PnL +50 USDC, closing fee 0.5, borrow fee over 1 minute.
+    // +10%: PnL +50 USDC, closing fee 1.5 including impact, borrow fee over 1 minute.
     let payout = close_at(&mut ketos, p.id, 440_000_000, T0_MS + 60_000);
     // Utilization 500 / 100,000: rate = 10_000_000 + 450_000 per hour; the index grows by
     // ceil(10_450_000 / 60) = 174_167; fee = ceil(500e6 × 174_167 / 1e12) = 88.
     // One-sided funding: ceil(500 USDC × 0.05% / 60) = 4,167 micro-USDC.
-    assert_eq!(payout, 99_500_000 + 50 * USD - 500_000 - 88 - 4_167);
+    assert_eq!(payout, 98_500_000 + 50 * USD - 1_500_000 - 88 - 4_167);
     assert_eq!(margin(&ketos, "alice.test"), 100 * USD + payout);
     // Vault + trader balances are conserved.
     assert_eq!(
@@ -443,10 +446,10 @@ fn losing_long_pays_the_vault() {
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     // -5%: PnL -25 USDC.
     let payout = close_at(&mut ketos, p.id, 380_000_000, T0_MS);
-    assert_eq!(payout, 99_500_000 - 25 * USD - 500_000);
+    assert_eq!(payout, 98_500_000 - 25 * USD - 1_500_000);
     assert_eq!(
         ketos.vaults[0].balance,
-        10_000 * USD + 500_000 + 25 * USD + 500_000
+        10_000 * USD + 1_500_000 + 25 * USD + 1_500_000
     );
     assert_eq!(
         ketos.vaults[0].balance + margin(&ketos, "alice.test"),
@@ -458,11 +461,11 @@ fn losing_long_pays_the_vault() {
 fn winning_short_on_price_drop() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let p = ketos.open_position("NEAR".into(), Side::Short, U128(50 * USD), 2, None, None);
+    let p = ketos.open_position_now("NEAR".into(), Side::Short, U128(50 * USD), 2, None, None);
     assert_eq!(p.size.0, 100 * USD);
     // -20%: short PnL +20 USDC.
     let payout = close_at(&mut ketos, p.id, 320_000_000, T0_MS);
-    assert_eq!(payout, 50 * USD - 100_000 + 20 * USD - 100_000);
+    assert_eq!(payout, 50 * USD - 300_000 + 20 * USD - 300_000);
 }
 
 #[test]
@@ -490,7 +493,7 @@ fn borrow_fee_accrues_hourly_with_utilization() {
     assert_eq!(view.equity.0, (p.margin.0 - expected - 2_500_000) as i128);
 
     let payout = close_at(&mut ketos, p.id, P4, T0_MS + 10 * HOUR_MS);
-    assert_eq!(payout, p.margin.0 - expected - 500_000 - 2_500_000);
+    assert_eq!(payout, p.margin.0 - expected - 1_500_000 - 2_500_000);
 }
 
 #[test]
@@ -502,7 +505,7 @@ fn borrow_rate_is_charged_at_the_utilization_in_force() {
     set_price(&mut ketos, "NEAR", P4, T0_MS + 5 * HOUR_MS);
     set_depth_at(&mut ketos, "NEAR", measured_curve(), T0_MS + 5 * HOUR_MS);
     ctx_at("alice.test", T0_MS + 5 * HOUR_MS);
-    ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, None, None);
+    ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, None, None);
     ctx_at("alice.test", T0_MS + 5 * HOUR_MS);
     let fee = ketos.get_position(first.id).unwrap().borrow_fee.0;
     let rate = math::borrow_rate_per_hour(100 * USD, 100_000 * USD);
@@ -514,7 +517,7 @@ fn borrow_rate_is_charged_at_the_utilization_in_force() {
 fn stale_price_is_refused() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS + 120_001);
-    ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, None, None);
+    ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, None, None);
 }
 
 #[test]
@@ -523,7 +526,7 @@ fn close_with_stale_price_is_refused() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     ctx_at("alice.test", T0_MS + 121_000);
-    ketos.close_position(p.id);
+    ketos.close_position_now(p.id);
 }
 
 #[test]
@@ -533,7 +536,7 @@ fn missing_price_is_refused() {
     set_price(&mut ketos, "BTC", 0, T0_MS);
     set_depth_at(&mut ketos, "BTC", measured_curve(), T0_MS);
     ctx_at("alice.test", T0_MS);
-    ketos.open_position("BTC".into(), Side::Long, U128(100 * USD), 2, None, None);
+    ketos.open_position_now("BTC".into(), Side::Long, U128(100 * USD), 2, None, None);
 }
 
 #[test]
@@ -556,7 +559,7 @@ fn only_owner_can_close() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     ctx_at("bob.test", T0_MS);
-    ketos.close_position(p.id);
+    ketos.close_position_now(p.id);
 }
 
 // Exit-liquidity caps
@@ -587,6 +590,7 @@ fn depth_sets_leverage_tier_and_cap() {
     for (i, (capacity, leverage, max_oi)) in tiers.into_iter().enumerate() {
         let at = T0_MS + i as u64 * 60_000;
         set_depth_at(&mut ketos, "BTC", curve_up_to(capacity), at);
+        set_price(&mut ketos, "BTC", P4, at);
         let m = ketos.get_market("BTC".into()).unwrap();
         assert_eq!(m.market.max_leverage, leverage, "capacity {capacity}");
         assert_eq!(m.market.exit_capacity.0, capacity as u128 * USD);
@@ -606,19 +610,19 @@ fn size_beyond_exit_capacity_is_refused_with_remaining_cap() {
     ketos.vaults[VaultId::LongTail.index()].balance = 100_000 * USD;
     deposit(&mut ketos, "whale.test", 30_000 * USD);
     ctx_at("whale.test", T0_MS);
-    ketos.open_position("ZEC".into(), Side::Short, U128(12_000 * USD), 5, None, None);
+    ketos.open_position_now("ZEC".into(), Side::Short, U128(12_000 * USD), 5, None, None);
     ctx_at("whale.test", T0_MS);
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ketos.open_position("ZEC".into(), Side::Short, U128(8_001 * USD), 5, None, None);
+        ketos.open_position_now("ZEC".into(), Side::Short, U128(8_001 * USD), 5, None, None);
     }))
     .unwrap_err();
     let msg = err.downcast_ref::<String>().unwrap();
     assert!(msg.contains("ERR_EXCEEDS_EXIT_LIQUIDITY: cap 40000000000"), "{msg}");
     // Exactly the remaining cap fits; the other side has its own cap.
     ctx_at("whale.test", T0_MS);
-    ketos.open_position("ZEC".into(), Side::Short, U128(8_000 * USD), 5, None, None);
+    ketos.open_position_now("ZEC".into(), Side::Short, U128(8_000 * USD), 5, None, None);
     ctx_at("whale.test", T0_MS);
-    ketos.open_position("ZEC".into(), Side::Long, U128(2_000 * USD), 5, None, None);
+    ketos.open_position_now("ZEC".into(), Side::Long, U128(2_000 * USD), 5, None, None);
     let zec = ketos.get_market("ZEC".into()).unwrap().market;
     assert_eq!((zec.oi_short.0, zec.oi_long.0), (100_000 * USD, 10_000 * USD));
 }
@@ -630,13 +634,13 @@ fn market_closes_when_depth_is_older_than_30_minutes() {
     set_price(&mut ketos, "NEAR", P4, limit);
     ctx_at("alice.test", limit);
     assert!(ketos.get_market("NEAR".into()).unwrap().is_open);
-    let p = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5, None, None);
+    let p = ketos.open_position_now("NEAR".into(), Side::Long, U128(50 * USD), 5, None, None);
 
     set_price(&mut ketos, "NEAR", P4, limit + 1);
     ctx_at("alice.test", limit + 1);
     assert!(!ketos.get_market("NEAR".into()).unwrap().is_open);
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 5, None, None);
+        ketos.open_position_now("NEAR".into(), Side::Long, U128(50 * USD), 5, None, None);
     }))
     .unwrap_err();
     assert!(err
@@ -645,7 +649,7 @@ fn market_closes_when_depth_is_older_than_30_minutes() {
         .contains("ERR_MARKET_CLOSED: depth sample older than 30 minutes"));
     // Closing is never blocked by stale depth.
     ctx_at("alice.test", limit + 1);
-    ketos.close_position(p.id);
+    ketos.close_position_now(p.id);
 }
 
 #[test]
@@ -655,7 +659,7 @@ fn market_with_thin_exit_liquidity_takes_no_positions() {
     set_depth_at(&mut ketos, "NEAR", curve_up_to(1_000), T0_MS + 1);
     set_price(&mut ketos, "NEAR", P4, T0_MS + 1);
     ctx_at("alice.test", T0_MS + 1);
-    ketos.open_position("NEAR".into(), Side::Long, U128(10 * USD), 2, None, None);
+    ketos.open_position_now("NEAR".into(), Side::Long, U128(10 * USD), 2, None, None);
 }
 
 #[test]
@@ -705,7 +709,7 @@ fn unsorted_samples_are_refused() {
 fn liquidate_at(ketos: &mut Ketos, position: u64, price: u128, now_ms: u64) -> LiquidationRecord {
     set_price(ketos, "NEAR", price, now_ms);
     ctx_at("bob.test", now_ms);
-    ketos.liquidate(position)
+    ketos.liquidate_now(position)
 }
 
 #[test]
@@ -713,7 +717,7 @@ fn liquidate_at(ketos: &mut Ketos, position: u64, price: u128, now_ms: u64) -> L
 fn healthy_position_cannot_be_liquidated() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
-    // -7.5%: equity 62 USDC, maintenance 50.
+    // -7.5%: equity 61 USDC, maintenance 50.
     liquidate_at(&mut ketos, p.id, 370_000_000, T0_MS);
 }
 
@@ -729,7 +733,7 @@ fn one_tick_above_liquidation_price_is_still_healthy() {
 fn liquidation_at_the_liquidation_price_pays_penalty_reward_and_remainder() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
-    assert_eq!(p.liquidation_price.0, 360_400_000);
+    assert_eq!(p.liquidation_price.0, 361_200_000);
     let r = liquidate_at(&mut ketos, p.id, p.liquidation_price.0, T0_MS);
     // Equity sits exactly on the 50 USDC maintenance: 1 to the liquidator, 5 to the vault.
     assert_eq!(r.equity.0, 50 * USD as i128);
@@ -737,7 +741,7 @@ fn liquidation_at_the_liquidation_price_pays_penalty_reward_and_remainder() {
     assert_eq!(r.liquidator, id("bob.test"));
     assert_eq!(margin(&ketos, "bob.test"), USD);
     assert_eq!(margin(&ketos, "alice.test"), 100 * USD + 44 * USD);
-    // Opening fee 0.5 + trader loss 49.5 + penalty 5.
+    // Opening fee 1.5 + trader loss 48.5 + penalty 5.
     assert_eq!(ketos.vaults[0].balance, 10_055 * USD);
     assert_eq!(
         ketos.vaults[0].balance + margin(&ketos, "alice.test") + margin(&ketos, "bob.test"),
@@ -756,9 +760,9 @@ fn liquidation_at_the_liquidation_price_pays_penalty_reward_and_remainder() {
 fn negative_equity_is_absorbed_by_the_vault() {
     let mut ketos = trading_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
-    // -25%: loss 125 USDC on 99.5 of margin.
+    // -25%: loss 125 USDC on 98.5 of margin.
     let r = liquidate_at(&mut ketos, p.id, 300_000_000, T0_MS);
-    assert_eq!(r.equity.0, -25_500_000);
+    assert_eq!(r.equity.0, -26_500_000);
     assert_eq!((r.reward.0, r.penalty.0, r.returned.0), (0, 0, 0));
     assert_eq!(ketos.vaults[0].balance, 10_100 * USD);
     assert!(ketos.get_account(id("bob.test")).is_none());
@@ -769,9 +773,9 @@ fn negative_equity_is_absorbed_by_the_vault() {
 fn short_is_liquidated_when_price_rises() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let p = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 5, None, None);
-    assert_eq!(p.liquidation_price.0, 439_600_000);
-    let r = liquidate_at(&mut ketos, p.id, 439_600_000, T0_MS);
+    let p = ketos.open_position_now("NEAR".into(), Side::Short, U128(100 * USD), 5, None, None);
+    assert_eq!(p.liquidation_price.0, 438_800_000);
+    let r = liquidate_at(&mut ketos, p.id, 438_800_000, T0_MS);
     assert_eq!(r.side, Side::Short);
     assert_eq!(r.returned.0, 44 * USD);
 }
@@ -783,7 +787,7 @@ fn liquidation_needs_a_fresh_price() {
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     set_price(&mut ketos, "NEAR", 300_000_000, T0_MS);
     ctx_at("bob.test", T0_MS + 120_001);
-    ketos.liquidate(p.id);
+    ketos.liquidate_now(p.id);
 }
 
 #[test]
@@ -854,13 +858,13 @@ fn deposit_after_trader_gains_mints_more_shares_below_par() {
     set_price(&mut ketos, "NEAR", 440_000_000, T0_MS);
     let v = vault_at(&ketos, T0_MS);
     assert_eq!(v.traders_unrealized_pnl.0, 50 * USD as i128);
-    assert_eq!(v.balance.0, 10_000 * USD + 500_000);
-    assert_eq!(v.nav.0, 9_950_500_000);
-    assert_eq!(v.share_price.0, 995_050);
+    assert_eq!(v.balance.0, 10_000 * USD + 1_500_000);
+    assert_eq!(v.nav.0, 9_951_500_000);
+    assert_eq!(v.share_price.0, 995_150);
 
     deposit_vault(&mut ketos, "lp2.test", 1_000 * USD);
     let lp2 = ketos.get_vault_account(VaultId::Core, id("lp2.test"));
-    assert_eq!(lp2.shares.0, 1_000 * USD * 10_000 * USD / 9_950_500_000);
+    assert_eq!(lp2.shares.0, 1_000 * USD * 10_000 * USD / 9_951_500_000);
     assert!(lp2.shares.0 > 1_000 * USD);
     // Rounding favors the vault: the new LP's stake is worth at most what was deposited.
     assert!(lp2.value.0 <= 1_000 * USD && lp2.value.0 >= 1_000 * USD - 1);
@@ -876,7 +880,7 @@ fn nav_includes_borrow_fees_due() {
     let v = vault_at(&ketos, T0_MS + 10 * HOUR_MS);
     assert_eq!(v.borrow_fees_due.0, fee);
     assert_eq!(v.funding_net_due.0, 2_500_000);
-    assert_eq!(v.nav.0, 10_000 * USD + 500_000 + fee + 2_500_000);
+    assert_eq!(v.nav.0, 10_000 * USD + 1_500_000 + fee + 2_500_000);
 }
 
 #[test]
@@ -886,7 +890,7 @@ fn vault_withdrawal_is_limited_to_unreserved_usdc() {
     let v = vault_at(&ketos, T0_MS);
     // Reserve the largest side plus a 10% buffer, not both gross sides.
     assert_eq!(v.reserved.0, 550 * USD);
-    assert_eq!(v.available.0, 9_450_500_000);
+    assert_eq!(v.available.0, 9_451_500_000);
 
     testing_env!(VMContextBuilder::new()
         .current_account_id(id(CONTRACT))
@@ -895,25 +899,25 @@ fn vault_withdrawal_is_limited_to_unreserved_usdc() {
         .block_timestamp(T0_MS * 1_000_000)
         .build());
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = ketos.withdraw_vault(VaultId::Core, U128(10_000 * USD));
+        let _ = ketos.withdraw_vault_now(VaultId::Core, U128(10_000 * USD));
     }))
     .unwrap_err();
     assert!(err
         .downcast_ref::<String>()
         .unwrap()
-        .contains("ERR_VAULT_RESERVED: available 9450500000"));
+        .contains("ERR_VAULT_RESERVED: available 9451500000"));
 
     // A partial withdrawal within the unreserved balance goes through at NAV.
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(9_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(9_000 * USD));
     let lp = ketos.get_vault_account(VaultId::Core, id("lp.test"));
     assert_eq!(lp.shares.0, 1_000 * USD);
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 500_000 - 9_000_450_000);
+    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 1_500_000 - 9_001_350_000);
     let receipts = get_created_receipts();
     let MockAction::FunctionCallWeight { args, .. } = &receipts[0].actions[0] else {
         panic!("expected ft_transfer");
     };
     let args: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(args).unwrap();
-    assert_eq!(args["amount"], "9000450000");
+    assert_eq!(args["amount"], "9001350000");
 
     // Once the position is closed nothing is reserved any more.
     close_at(&mut ketos, p.id, P4, T0_MS);
@@ -926,7 +930,7 @@ fn vault_withdrawal_is_limited_to_unreserved_usdc() {
 fn failed_vault_withdrawal_restores_shares() {
     let mut ketos = vault_setup();
     ctx("lp.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(4_000 * USD));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(4_000 * USD));
     assert_eq!(ketos.get_vault_account(VaultId::Core, id("lp.test")).shares.0, 6_000 * USD);
     ctx(CONTRACT, 0);
     let sent = ketos.on_vault_withdrawn(VaultId::Core, id("lp.test"),
@@ -944,12 +948,12 @@ fn fee_apr_annualizes_the_trailing_week() {
     let mut ketos = vault_setup();
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     let v = vault_at(&ketos, T0_MS);
-    assert_eq!(v.fees_7d.0, 500_000);
-    // 0.5 USDC × 365 / 7 over a 10,000.5 USDC NAV.
-    assert_eq!(v.fee_apr_bps, 26);
+    assert_eq!(v.fees_7d.0, 1_500_000);
+    // 1.5 USDC × 365 / 7 over a 10,001.5 USDC NAV.
+    assert_eq!(v.fee_apr_bps, 78);
     // Liquidation adds its penalty; a fully underwater position pays no fee.
     let r = liquidate_at(&mut ketos, p.id, p.liquidation_price.0, T0_MS);
-    assert_eq!(vault_at(&ketos, T0_MS).fees_7d.0, 500_000 + r.penalty.0);
+    assert_eq!(vault_at(&ketos, T0_MS).fees_7d.0, 1_500_000 + r.penalty.0);
     assert_eq!(vault_at(&ketos, T0_MS + 7 * 24 * HOUR_MS).fees_7d.0, 0);
 }
 
@@ -958,7 +962,7 @@ fn fee_apr_annualizes_the_trailing_week() {
 fn cannot_withdraw_more_shares_than_held() {
     let mut ketos = vault_setup();
     ctx("bob.test", 1);
-    let _ = ketos.withdraw_vault(VaultId::Core, U128(1));
+    let _ = ketos.withdraw_vault_now(VaultId::Core, U128(1));
 }
 
 // Oracle
@@ -971,7 +975,7 @@ const ORACLE: &str = "oracle.test";
 fn price_data(at_ms: u64, prices: &[(&str, Option<(u128, u8)>)]) -> PriceData {
     PriceData {
         timestamp: U64(at_ms * 1_000_000),
-        recency_duration_sec: 300,
+        recency_duration_sec: 0,
         prices: prices
             .iter()
             .map(|(asset_id, price)| AssetOptionalPrice {
@@ -1002,11 +1006,11 @@ fn refresh_needs_the_oracle_deposit_in_free_balance() {
     let mut ketos = setup();
     testing_env!(VMContextBuilder::new()
         .current_account_id(id(CONTRACT))
-        .predecessor_account_id(id("anyone.test"))
+        .predecessor_account_id(id("keeper.test"))
         .account_balance(NearToken::from_millinear(19))
         .storage_usage(0)
         .build());
-    let _ = ketos.refresh_prices();
+    let _ = ketos.refresh_prices(None);
 }
 
 #[test]

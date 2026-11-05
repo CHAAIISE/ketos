@@ -16,14 +16,12 @@ fn cross_open(
     leverage: u32,
 ) -> PositionView {
     ctx_at("alice.test", T0_MS);
-    ketos.open_position(
-        market.into(),
-        side,
-        U128(collateral),
-        leverage,
-        None,
-        Some(MarginMode::Cross),
-    )
+    ketos.open_position_now(market.into(),
+    side,
+    U128(collateral),
+    leverage,
+    None,
+    Some(MarginMode::Cross),)
 }
 
 fn health(ketos: &Ketos) -> crate::cross::CrossAccountView {
@@ -78,7 +76,7 @@ fn cross_health_offsets_multi_position_losses_without_free_or_isolated_margin() 
     assert!(long_view.equity.0 < 0);
     assert_eq!(view.equity.0, long_view.equity.0 + short_view.equity.0);
     assert_eq!(view.maintenance_margin.0, 100 * USD);
-    assert_eq!(view.health_bps.unwrap().0, 19_900);
+    assert_eq!(view.health_bps.unwrap().0, 19_700);
     assert_eq!(view.position_count, 2);
     assert!(!view.liquidatable);
     assert_eq!(
@@ -97,15 +95,15 @@ fn cross_loss_remains_due_until_other_vault_gain_repays_it() {
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     set_price(&mut ketos, "ZEC", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(long.id).0, 0);
-    assert_eq!(health(&ketos).cash.0, -(151 * USD as i128));
-    assert_eq!(health(&ketos).debt_by_vault, [U128(151 * USD), U128(0)]);
-    assert_eq!(ketos.get_vault(VaultId::Core).cross_receivable.0, 151 * USD);
+    assert_eq!(ketos.close_position_now(long.id).0, 0);
+    assert_eq!(health(&ketos).cash.0, -(153 * USD as i128));
+    assert_eq!(health(&ketos).debt_by_vault, [U128(153 * USD), U128(0)]);
+    assert_eq!(ketos.get_vault(VaultId::Core).cross_receivable.0, 153 * USD);
     assert_eq!(margin(&ketos, "alice.test"), 0);
     assert_backed(&ketos, 20_200 * USD);
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(short.id);
-    assert_eq!(margin(&ketos, "alice.test"), 198 * USD);
+    ketos.close_position_now(short.id);
+    assert_eq!(margin(&ketos, "alice.test"), 194 * USD);
     assert_eq!(health(&ketos).cash.0, 0);
     assert_eq!(health(&ketos).health_bps, None);
     assert_eq!(ketos.get_vault(VaultId::Core).cross_receivable.0, 0);
@@ -115,7 +113,7 @@ fn cross_loss_remains_due_until_other_vault_gain_repays_it() {
             .unwrap()
             .realized_pnl
             .0,
-        -(2 * USD as i128)
+        -(6 * USD as i128)
     );
     assert_backed(&ketos, 20_200 * USD);
 }
@@ -128,21 +126,21 @@ fn cross_liquidation_closes_riskiest_first_and_stops_after_recovery() {
     set_price(&mut ketos, "NEAR", 280_000_000, T0_MS);
     assert!(health(&ketos).liquidatable);
     ctx_at("keeper.test", T0_MS);
-    let records = ketos.liquidate_cross(id("alice.test"));
+    let records = ketos.liquidate_cross_now(id("alice.test"));
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].position_id, risky.id);
     assert_eq!(records[0].reward.0, USD);
     assert_eq!(records[0].penalty.0, 5 * USD);
     assert_eq!(margin(&ketos, "keeper.test"), USD);
-    assert_eq!(health(&ketos).equity.0, 43_400_000);
+    assert_eq!(health(&ketos).equity.0, 42_200_000);
     assert_eq!(health(&ketos).maintenance_margin.0, 10 * USD);
     assert!(!health(&ketos).liquidatable);
     assert!(ketos.get_position(safe.id).is_some());
     assert_eq!(ketos.get_liquidations(None), records);
     assert_backed(&ketos, 20_200 * USD);
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(safe.id);
-    assert_eq!(margin(&ketos, "alice.test"), 43_300_000);
+    ketos.close_position_now(safe.id);
+    assert_eq!(margin(&ketos, "alice.test"), 41_900_000);
     assert_backed(&ketos, 20_200 * USD);
 }
 
@@ -154,7 +152,7 @@ fn cross_insolvency_is_absorbed_only_by_the_creditor_vaults() {
     let tail_before = ketos.get_vault(VaultId::LongTail);
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("keeper.test", T0_MS);
-    let records = ketos.liquidate_cross(id("alice.test"));
+    let records = ketos.liquidate_cross_now(id("alice.test"));
     assert_eq!(records.len(), 2);
     assert!(records.iter().all(|r| r.reward.0 == 0 && r.penalty.0 == 0));
     assert_eq!(health(&ketos).position_count, 0);
@@ -177,17 +175,15 @@ fn cross_insolvency_is_absorbed_only_by_the_creditor_vaults() {
 fn switch_to_cross_preserves_size_fees_funding_and_brackets() {
     let mut ketos = cross_setup();
     ctx_at("alice.test", T0_MS);
-    let isolated = ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(100 * USD),
-        5,
-        Some(Brackets {
-            take_profit: Some(U128(500_000_000)),
-            stop_loss: Some(U128(300_000_000)),
-        }),
-        None,
-    );
+    let isolated = ketos.open_position_now("NEAR".into(),
+    Side::Long,
+    U128(100 * USD),
+    5,
+    Some(Brackets {
+        take_profit: Some(U128(500_000_000)),
+        stop_loss: Some(U128(300_000_000)),
+    }),
+    None,);
     let before_vault = ketos.get_vault(VaultId::Core);
     let history_before = ketos.get_account_stats(id("alice.test")).unwrap();
     let switched = ketos.switch_to_cross(isolated.id);
@@ -231,7 +227,7 @@ fn isolated_liquidation_cannot_bypass_cross_health() {
     let position = cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("keeper.test", T0_MS);
-    ketos.liquidate(position.id);
+    ketos.liquidate_now(position.id);
 }
 
 #[test]
@@ -240,17 +236,17 @@ fn cross_liquidation_rejects_healthy_account() {
     let mut ketos = cross_setup();
     cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     ctx_at("keeper.test", T0_MS);
-    ketos.liquidate_cross(id("alice.test"));
+    ketos.liquidate_cross_now(id("alice.test"));
 }
 
 #[test]
 fn shared_cash_top_up_covers_debt_without_using_reserved_orders() {
     let mut ketos = cross_setup();
-    deposit(&mut ketos, "alice.test", 300 * USD);
+    deposit(&mut ketos, "alice.test", 300 * USD + 100_000);
     let long = cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     cross_open(&mut ketos, "ZEC", Side::Short, 100 * USD, 5);
     ctx_at("alice.test", T0_MS);
-    let order = ketos.place_order(OrderRequest::Limit(EntryOrder {
+    let order = ketos.place_order_now(OrderRequest::Limit(EntryOrder {
         market_id: "NEAR".into(),
         side: Side::Long,
         margin: U128(100 * USD),
@@ -262,9 +258,9 @@ fn shared_cash_top_up_covers_debt_without_using_reserved_orders() {
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     set_price(&mut ketos, "ZEC", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(long.id);
+    ketos.close_position_now(long.id);
     ketos.add_cross_margin(U128(200 * USD));
-    assert_eq!(health(&ketos).cash.0, 49 * USD as i128);
+    assert_eq!(health(&ketos).cash.0, 47 * USD as i128);
     assert_eq!(health(&ketos).debt_by_vault, [U128(0); 2]);
     assert_eq!(
         ketos
@@ -272,13 +268,13 @@ fn shared_cash_top_up_covers_debt_without_using_reserved_orders() {
             .unwrap()
             .reserved_margin
             .0,
-        100 * USD
+        100_100_000
     );
-    ketos.remove_cross_margin(U128(49 * USD));
-    assert_eq!(margin(&ketos, "alice.test"), 49 * USD);
+    ketos.remove_cross_margin(U128(47 * USD));
+    assert_eq!(margin(&ketos, "alice.test"), 47 * USD);
     ketos.cancel_order(order.id);
-    assert_eq!(margin(&ketos, "alice.test"), 149 * USD);
-    assert_backed(&ketos, 20_500 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 147_100_000);
+    assert_backed(&ketos, 20_500 * USD + 100_000);
 }
 
 #[test]
@@ -323,35 +319,34 @@ fn cross_liquidation_requires_fresh_prices_for_every_peer() {
     let now = T0_MS + 120_001;
     set_price(&mut ketos, "NEAR", P4 / 2, now);
     ctx_at("keeper.test", now);
-    ketos.liquidate_cross(id("alice.test"));
+    ketos.liquidate_cross_now(id("alice.test"));
 }
 
 #[test]
 fn cross_bracket_exit_uses_shared_settlement_and_cancels_its_peer() {
     let mut ketos = cross_setup();
+    deposit(&mut ketos, "alice.test", USD);
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position(
-        "NEAR".into(),
-        Side::Long,
-        U128(100 * USD),
-        5,
-        Some(Brackets {
-            take_profit: Some(U128(500_000_000)),
-            stop_loss: Some(U128(300_000_000)),
-        }),
-        Some(MarginMode::Cross),
-    );
+    let position = ketos.open_position_now("NEAR".into(),
+    Side::Long,
+    U128(100 * USD),
+    5,
+    Some(Brackets {
+        take_profit: Some(U128(500_000_000)),
+        stop_loss: Some(U128(300_000_000)),
+    }),
+    Some(MarginMode::Cross),);
     cross_open(&mut ketos, "ZEC", Side::Long, 100 * USD, 1);
     set_price(&mut ketos, "NEAR", 280_000_000, T0_MS);
     ctx_at("keeper.test", T0_MS);
-    let filled = ketos.execute_orders(vec![position.stop_loss.unwrap()]);
+    let filled = ketos.execute_orders_now(vec![position.stop_loss.unwrap()]);
     assert!(
         matches!(filled[0], OrderExecution::Filled { position_id, .. } if position_id == position.id)
     );
     assert!(ketos.get_orders(id("alice.test")).is_empty());
-    assert_eq!(health(&ketos).cash.0, -(51 * USD as i128));
+    assert_eq!(health(&ketos).cash.0, -(53 * USD as i128));
     assert_eq!(health(&ketos).position_count, 1);
-    assert_backed(&ketos, 20_200 * USD);
+    assert_backed(&ketos, 20_201 * USD);
 }
 
 #[test]
@@ -367,9 +362,9 @@ fn triggered_cross_entry_preserves_mode_and_refunds_when_peer_is_stale() {
         brackets: None,
         margin_mode: MarginMode::Cross,
     };
-    let first = ketos.place_order(OrderRequest::Limit(entry.clone()));
+    let first = ketos.place_order_now(OrderRequest::Limit(entry.clone()));
     ctx_at("keeper.test", T0_MS);
-    let fills = ketos.execute_orders(vec![first.id]);
+    let fills = ketos.execute_orders_now(vec![first.id]);
     let OrderExecution::Filled { position_id, .. } = fills[0] else {
         panic!("expected fill");
     };
@@ -378,7 +373,7 @@ fn triggered_cross_entry_preserves_mode_and_refunds_when_peer_is_stale() {
         MarginMode::Cross
     );
     ctx_at("alice.test", T0_MS);
-    let pending = ketos.place_order(OrderRequest::Limit(EntryOrder {
+    let pending = ketos.place_order_now(OrderRequest::Limit(EntryOrder {
         market_id: "ZEC".into(),
         ..entry
     }));
@@ -386,9 +381,9 @@ fn triggered_cross_entry_preserves_mode_and_refunds_when_peer_is_stale() {
     set_price(&mut ketos, "ZEC", P4, now);
     ctx_at("keeper.test", now);
     assert!(
-        matches!(&ketos.execute_orders(vec![pending.id])[0], OrderExecution::Rejected { reason, .. } if reason == "ERR_STALE_CROSS_PRICE")
+        matches!(&ketos.execute_orders_now(vec![pending.id])[0], OrderExecution::Rejected { reason, .. } if reason == "ERR_STALE_CROSS_PRICE")
     );
-    assert_eq!(margin(&ketos, "alice.test"), 150 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 149_875_000);
     assert_eq!(
         ketos
             .get_account(id("alice.test"))
@@ -414,7 +409,7 @@ fn cross_position_bound_keeps_account_liquidation_executable() {
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("keeper.test", T0_MS);
     assert_eq!(
-        ketos.liquidate_cross(id("alice.test")).len(),
+        ketos.liquidate_cross_now(id("alice.test")).len(),
         MAX_CROSS_POSITIONS as usize
     );
     assert_backed(&ketos, 20_200 * USD);
@@ -426,17 +421,17 @@ fn same_vault_receivable_is_netted_before_capping_a_cross_gain() {
     let long = cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     let short = cross_open(&mut ketos, "NEAR", Side::Short, 100 * USD, 5);
     // Model a later cash loss while retaining the two already collected opening fees.
-    ketos.vaults[VaultId::Core.index()].balance = USD;
+    ketos.vaults[VaultId::Core.index()].balance = 3 * USD;
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(long.id);
-    assert_eq!(health(&ketos).cash.0, -(151 * USD as i128));
-    assert_eq!(ketos.get_vault(VaultId::Core).balance.0, 251_500_000);
+    ketos.close_position_now(long.id);
+    assert_eq!(health(&ketos).cash.0, -(153 * USD as i128));
+    assert_eq!(ketos.get_vault(VaultId::Core).balance.0, 254_500_000);
     assert_backed(&ketos, 10_200 * USD);
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(short.id);
-    assert_eq!(margin(&ketos, "alice.test"), 198 * USD);
-    assert_eq!(ketos.get_vault(VaultId::Core).balance.0, 2 * USD);
+    ketos.close_position_now(short.id);
+    assert_eq!(margin(&ketos, "alice.test"), 194 * USD);
+    assert_eq!(ketos.get_vault(VaultId::Core).balance.0, 6 * USD);
     assert_backed(&ketos, 10_200 * USD);
 }
 
@@ -444,11 +439,11 @@ fn same_vault_receivable_is_netted_before_capping_a_cross_gain() {
 fn cross_liquidation_triggers_at_exact_aggregate_maintenance() {
     let mut ketos = cross_setup();
     cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
-    set_price(&mut ketos, "NEAR", 360_400_000, T0_MS);
+    set_price(&mut ketos, "NEAR", 361_200_000, T0_MS);
     assert_eq!(health(&ketos).equity.0, 50 * USD as i128);
     assert_eq!(health(&ketos).health_bps.unwrap().0, 10_000);
     ctx_at("keeper.test", T0_MS);
-    let records = ketos.liquidate_cross(id("alice.test"));
+    let records = ketos.liquidate_cross_now(id("alice.test"));
     assert_eq!(records.len(), 1);
     assert_eq!(margin(&ketos, "alice.test"), 144 * USD);
     assert_backed(&ketos, 20_200 * USD);

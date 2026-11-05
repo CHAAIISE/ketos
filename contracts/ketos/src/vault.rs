@@ -4,7 +4,7 @@
 use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
 use near_sdk::{
-    assert_one_yocto, env, log, near, require, AccountId, Gas, NearToken, Promise, PromiseError,
+    env, log, near, require, AccountId, Gas, NearToken, Promise, PromiseError,
 };
 
 use crate::market::{VaultId, USD};
@@ -172,14 +172,14 @@ impl Ketos {
             .sum()
     }
 
-    fn require_fresh_vault_prices(&self, vault_id: VaultId) {
+    pub(crate) fn require_fresh_vault_prices(&self, vault_id: VaultId) {
         let now_ms = env::block_timestamp_ms();
         for market in self.markets.values().filter(|market| market.vault_id == vault_id) {
             market.fresh_price(now_ms);
         }
     }
 
-    fn vault_shares_held(&self, vault_id: VaultId, account_id: &AccountId) -> u128 {
+    pub(crate) fn vault_shares_held(&self, vault_id: VaultId, account_id: &AccountId) -> u128 {
         self.vault_shares[vault_id.index()]
             .get(account_id)
             .filter(|(epoch, _)| *epoch == self.vaults[vault_id.index()].share_epoch)
@@ -244,8 +244,24 @@ impl Ketos {
 impl Ketos {
     #[payable]
     pub fn withdraw_vault(&mut self, vault_id: VaultId, shares: U128) -> Promise {
-        assert_one_yocto();
-        let account_id = env::predecessor_account_id();
+        require!(env::attached_deposit().as_yoctonear() >= 1, "ERR_ONE_YOCTO_REQUIRED");
+        let action = crate::pull_prices::PullAction::WithdrawVault {
+            account_id: env::predecessor_account_id(), vault_id, shares,
+        };
+        let ids = self.vault_price_market_ids(vault_id);
+        if let Some(promise) = self.pull_for_action(action, ids) {
+            return promise;
+        }
+        self.withdraw_vault_for(env::predecessor_account_id(), vault_id, shares)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn withdraw_vault_now(&mut self, vault_id: VaultId, shares: U128) -> Promise {
+        near_sdk::assert_one_yocto();
+        self.withdraw_vault_for(env::predecessor_account_id(), vault_id, shares)
+    }
+
+    pub(crate) fn withdraw_vault_for(&mut self, account_id: AccountId, vault_id: VaultId, shares: U128) -> Promise {
         let shares = shares.0;
         require!(shares > 0, "ERR_ZERO_SHARES");
         self.require_fresh_vault_prices(vault_id);

@@ -60,9 +60,9 @@ function decodeSuccessValue(base64: string): unknown {
 }
 
 /**
- * Checks a final execution outcome and extracts its return value. A failing receipt also counts:
- * a rejected `ft_on_transfer` is refunded by the token, so the transaction status alone reads
- * as success even though the deposit never happened.
+ * Decodes the final execution result. Oracle failures can be recovered by an action callback,
+ * and rejected FT receiver calls by the token resolver, so final success takes precedence over
+ * intermediate receipt failures. Callers interpret null cancellations and refunded FT amounts.
  */
 export function settleOutcome(raw: unknown): TxResult {
   const parsed = outcomeSchema.safeParse(raw);
@@ -72,11 +72,14 @@ export function settleOutcome(raw: unknown): TxResult {
 
   const status = typeof outcome.status === "object" ? outcome.status : undefined;
   if (status?.Failure !== undefined) throw new TxFailureError(status.Failure, txHash);
+  if (status?.SuccessValue !== undefined) {
+    return { txHash, value: decodeSuccessValue(status.SuccessValue) };
+  }
   for (const receipt of outcome.receipts_outcome ?? []) {
     const receiptStatus = receipt.outcome.status;
     if (typeof receiptStatus === "object" && receiptStatus.Failure !== undefined) {
       throw new TxFailureError(receiptStatus.Failure, txHash);
     }
   }
-  return { txHash, value: status?.SuccessValue !== undefined ? decodeSuccessValue(status.SuccessValue) : undefined };
+  return { txHash, value: undefined };
 }

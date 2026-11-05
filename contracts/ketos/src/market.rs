@@ -5,7 +5,7 @@ use crate::depth::MAX_DEPTH_AGE_MS;
 use crate::funding::{funding_rate, Funding};
 use crate::math::{
     borrow_index_delta, borrow_rate_per_hour, mul_div_ceil, mul_div_floor, to_i128,
-    RATE_PRECISION,
+    BPS, RATE_PRECISION,
 };
 use crate::position::Side;
 use crate::{Ketos, KetosExt};
@@ -22,8 +22,10 @@ pub const DEFAULT_MAX_LEVERAGE: u32 = 2;
 /// Below this exit capacity a market takes no new positions.
 pub const MIN_OPEN_CAPACITY: u128 = 10_000 * USD;
 
-/// Prices older than this are refused for opening and closing positions.
+/// Normal closes, liquidations and LP valuation require prices within this age.
 pub const MAX_PRICE_AGE_MS: u64 = 120_000;
+pub const MAX_OPEN_PRICE_AGE_MS: u64 = 30_000;
+pub const STALE_CLOSE_INTERVAL_MS: u64 = 10 * 60_000;
 
 pub type MarketId = String;
 
@@ -119,10 +121,12 @@ pub struct MarketView {
     pub effective_max_oi_per_side: U128,
     /// The measured capacity reached the largest size in the latest sample grid.
     pub measured_cap_is_grid_max: bool,
-    /// Depth is usable and at least one side has room under both liquidity and capital limits.
+    /// Depth and capital admit a price-pull request; execution still requires a fresh mark.
     pub is_open: bool,
     /// Signed hourly rate, RATE_PRECISION scale: positive means longs pay shorts.
     pub funding_rate_per_hour: I128,
+    pub close_only: bool,
+    pub stale_close_spread_bps: u32,
 }
 
 impl Market {
@@ -222,6 +226,9 @@ impl Market {
                 && vault_within_limit
                 && self.oi_long.0.min(self.oi_short.0) < effective_cap,
             funding_rate_per_hour: I128(funding_rate(self.oi_long.0, self.oi_short.0)),
+            close_only: self.price.0 > 0
+                && now_ms.saturating_sub(self.price_timestamp_ms) > MAX_OPEN_PRICE_AGE_MS,
+            stale_close_spread_bps: self.stale_close_spread_bps(now_ms),
         }
     }
 
@@ -267,6 +274,35 @@ impl Market {
             "ERR_STALE_PRICE"
         );
         self.price.0
+    }
+
+    pub(crate) fn stale_close_spread_bps(&self, now_ms: u64) -> u32 {
+        let age = now_ms.saturating_sub(self.price_timestamp_ms);
+        if age <= crate::pull_prices::ACTION_CACHE_MAX_AGE_MS {
+            return 0;
+        }
+        (age.div_ceil(STALE_CLOSE_INTERVAL_MS).min(6) * 50) as u32
+    }
+
+    /// A successful pull or cache hit uses the normal mark; fallback needs a failed pull.
+    pub(crate) fn closing_price(&self, now_ms: u64) -> Result<u128, &'static str> {
+        if self.price.0 == 0 {
+            return Err("ERR_NO_PRICE");
+        }
+        let age = now_ms.saturating_sub(self.price_timestamp_ms);
+        if age <= MAX_PRICE_AGE_MS {
+            return Ok(self.price.0);
+        }
+        Err("ERR_STALE_PRICE")
+    }
+
+    pub(crate) fn failed_pull_close_price(&self, side: Side, now_ms: u64) -> u128 {
+        let age = now_ms.saturating_sub(self.price_timestamp_ms);
+        let spread = u128::from((age.div_ceil(STALE_CLOSE_INTERVAL_MS).clamp(1, 6) * 50) as u32);
+        match side {
+            Side::Long => mul_div_floor(self.price.0, BPS - spread, BPS),
+            Side::Short => mul_div_ceil(self.price.0, BPS + spread, BPS),
+        }
     }
 }
 

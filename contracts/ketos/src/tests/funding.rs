@@ -7,7 +7,7 @@ fn pair(long_leverage: u32, short_leverage: u32) -> (Ketos, PositionView, Positi
     deposit(&mut ketos, "bob.test", 1_000 * USD);
     let long = open(&mut ketos, "NEAR", Side::Long, 100 * USD, long_leverage);
     ctx_at("bob.test", T0_MS);
-    let short = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), short_leverage, None, None);
+    let short = ketos.open_position_now("NEAR".into(), Side::Short, U128(100 * USD), short_leverage, None, None);
     (ketos, long, short)
 }
 
@@ -77,7 +77,7 @@ fn assert_ten_hour_funding(long_leverage: u32, short_leverage: u32) {
     for (position, owner) in [(&long, "alice.test"), (&short, "bob.test")] {
         ctx_at(owner, now);
         let marked = ketos.get_position(position.id).unwrap();
-        let payout = ketos.close_position(position.id).0;
+        let payout = ketos.close_position_now(position.id).0;
         assert_eq!(payout as i128, marked.equity.0 - marked.close_fee.0 as i128);
         payouts += payout;
         assert!(get_logs().iter().any(|line| line.contains("\"event\":\"funding_settled\"")));
@@ -97,7 +97,7 @@ fn a_new_position_never_inherits_funding_from_before_its_entry() {
     set_depth_at(&mut ketos, "NEAR", measured_curve(), now);
     set_price(&mut ketos, "NEAR", P4, now);
     ctx_at("alice.test", now);
-    let new = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 1, None, None);
+    let new = ketos.open_position_now("NEAR".into(), Side::Short, U128(100 * USD), 1, None, None);
     assert_eq!(new.funding_payment.0, 0);
     assert_eq!(ketos.get_position(first.id).unwrap().funding_payment.0, 1_500_000);
     ctx_at("stranger.test", now + HOUR_MS);
@@ -112,7 +112,7 @@ fn funding_direction_changes_only_after_open_interest_changes() {
     set_depth_at(&mut ketos, "NEAR", measured_curve(), now);
     set_price(&mut ketos, "NEAR", P4, now);
     ctx_at("bob.test", now);
-    let new = ketos.open_position("NEAR".into(), Side::Short, U128(800 * USD), 1, None, None);
+    let new = ketos.open_position_now("NEAR".into(), Side::Short, U128(800 * USD), 1, None, None);
     assert_eq!(new.funding_received.0, 0);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().funding_rate_per_hour.0, -250_000_000);
     ctx_at("stranger.test", now + HOUR_MS);
@@ -123,7 +123,7 @@ fn funding_direction_changes_only_after_open_interest_changes() {
     assert_eq!(ketos.get_position(new.id).unwrap().funding_payment.0, 200_000);
     set_price(&mut ketos, "NEAR", P4, now + HOUR_MS);
     ctx_at("bob.test", now + HOUR_MS);
-    ketos.close_position(new.id);
+    ketos.close_position_now(new.id);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().funding_rate_per_hour.0, 250_000_000);
 }
 
@@ -174,7 +174,7 @@ fn frequent_checkpoints_preserve_fractional_index_growth() {
 fn funding_alone_can_make_a_position_liquidatable() {
     let mut ketos = trading_setup();
     let position = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
-    // Price is unchanged: 200 hours of funding erodes more than the $49.50 buffer.
+    // Price is unchanged: 200 hours of funding erodes more than the $48.50 buffer.
     let now = T0_MS + 200 * HOUR_MS;
     set_price(&mut ketos, "NEAR", P4, now);
     ctx_at("liquidator.test", now);
@@ -183,7 +183,7 @@ fn funding_alone_can_make_a_position_liquidatable() {
     assert!(marked.equity.0 + marked.funding_payment.0 > marked.maintenance_margin.0 as i128);
     assert!(marked.liquidation_price.0 > P4);
     let vault_before = ketos.vaults[VaultId::Core.index()].balance;
-    let record = ketos.liquidate(position.id);
+    let record = ketos.liquidate_now(position.id);
     assert_eq!(record.funding_paid.0, 50 * USD);
     assert_eq!(record.funding_payment, marked.funding_payment);
     assert_eq!(record.equity, marked.equity);
@@ -197,15 +197,15 @@ fn receivers_are_paid_even_when_payer_is_underwater() {
     let now = T0_MS + 10 * HOUR_MS;
     set_price(&mut ketos, "NEAR", P4 / 2, now);
     ctx_at("liquidator.test", now);
-    let record = ketos.liquidate(long.id);
+    let record = ketos.liquidate_now(long.id);
     assert!(record.equity.0 < 0);
     assert_eq!(record.funding_paid.0, 750_000);
     ctx_at("bob.test", now);
     let receiver = ketos.get_position(short.id).unwrap();
     assert_eq!(receiver.funding_received.0, 250_000);
-    let payout = ketos.close_position(short.id).0;
+    let payout = ketos.close_position_now(short.id).0;
     assert_eq!(payout as i128, receiver.equity.0 - receiver.close_fee.0 as i128);
-    assert_eq!(ketos.vaults[0].balance + payout, 10_000 * USD + 100 * USD + 100_000 + short.margin.0);
+    assert_eq!(ketos.vaults[0].balance + payout, 10_000 * USD + 100 * USD + 300_000 + short.margin.0);
 }
 
 #[test]

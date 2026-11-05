@@ -28,10 +28,10 @@ describe("settleOutcome", () => {
     const failure = {
       ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: ERR_STALE_PRICE" } } },
     };
-    expect(() => settleOutcome(outcome({ Failure: failure }))).toThrow(TxFailureError);
+    expect(() => settleOutcome(outcome({ Failure: failure }, [{ SuccessValue: b64('"100"') }]))).toThrow(TxFailureError);
   });
 
-  it("throws when a deposit was refused and refunded", () => {
+  it("returns the resolved zero accepted amount when a rejected FT deposit was refunded", () => {
     // ft_transfer_call → ft_on_transfer panics → ft_resolve_transfer refunds and returns "0".
     const raw = outcome({ SuccessValue: b64('"0"') }, [
       { SuccessReceiptId: "R1" },
@@ -45,14 +45,24 @@ describe("settleOutcome", () => {
       },
       { SuccessValue: b64('"0"') },
     ]);
-    try {
-      settleOutcome(raw);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(TxFailureError);
-      expect((error as TxFailureError).txHash).toBe("9fGkPq3Zs1");
-      expect((error as Error).message).toContain("ERR_MIN_FIRST_DEPOSIT");
-    }
+    expect(settleOutcome(raw)).toEqual({ txHash: "9fGkPq3Zs1", value: "0" });
+  });
+
+  it("returns a successful fallback close payout despite a failed oracle receipt", () => {
+    const raw = outcome({ SuccessValue: b64('"97500000"') }, [
+      { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Oracle unavailable" } } } } },
+      { SuccessValue: b64("false") },
+      { SuccessValue: b64('"97500000"') },
+    ]);
+    expect(settleOutcome(raw)).toEqual({ txHash: "9fGkPq3Zs1", value: "97500000" });
+  });
+
+  it("preserves an explicit action cancellation after oracle failure", () => {
+    const raw = outcome({ SuccessValue: b64("null") }, [
+      { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Oracle unavailable" } } } } },
+      { SuccessValue: b64("null") },
+    ]);
+    expect(settleOutcome(raw)).toEqual({ txHash: "9fGkPq3Zs1", value: null });
   });
 
   it("tolerates wallets that return no outcome", () => {

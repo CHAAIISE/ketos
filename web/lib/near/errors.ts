@@ -108,7 +108,7 @@ function fromPanic(panic: string, details: string): NearActionError {
         `This market is closed to new positions${arg ? ` (${arg})` : ""}. Open positions can still be closed; try again once liquidity recovers.`,
       );
     case "ERR_STALE_PRICE":
-      return make("The oracle price is out of date. Wait for the next price update (about a minute) and retry.");
+      return make("This action needs a newer oracle price. Wait for a price refresh and retry. After a 10-minute outage, positions can close at the last price with an adverse spread.");
     case "ERR_NO_PRICE":
       return make("This market has no oracle price yet. Try again in a minute.");
     case "ERR_LEVERAGE_TOO_HIGH": {
@@ -122,7 +122,9 @@ function fromPanic(panic: string, details: string): NearActionError {
     case "ERR_LEVERAGE_TOO_LOW":
       return make("Leverage must be at least 1x.");
     case "ERR_INSUFFICIENT_MARGIN":
-      return make("Not enough free margin. Deposit more USDC or lower the amount.");
+      return make("Not enough free margin, including reserved order rewards. Deposit more USDC or lower the amount.");
+    case "ERR_FEES_EXCEED_MARGIN":
+      return make("Trading and liquidity-impact fees would consume the margin. Lower leverage or wait for a deeper liquidity curve.");
     case "ERR_MIN_POSITION_MARGIN":
       return make("A position needs at least $1 of margin.");
     case "ERR_MIN_FIRST_DEPOSIT":

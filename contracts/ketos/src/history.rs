@@ -38,7 +38,7 @@ pub struct HistoryEvent {
     pub pnl: I128,
     /// Trading settlement delta, excluding collateral transfers and executor reward income.
     pub realized_pnl: I128,
-    /// Collected trading/borrow fees, plus penalties and liquidator reward on liquidation.
+    /// Collected trading/borrow fees, penalties and order/liquidation executor rewards.
     pub fees: U128,
     pub funding_paid: U128,
     pub funding_received: U128,
@@ -153,9 +153,11 @@ impl Ketos {
                 .remove(&(stats.volume.0, account_id.clone()));
         }
         stats.realized_pnl.0 += event.realized_pnl.0;
-        stats.volume.0 += event.size.0;
-        stats.trades += 1;
-        stats.committed_margin.0 += collateral;
+        if event.kind != HistoryKind::OrderFill {
+            stats.volume.0 += event.size.0;
+            stats.trades += 1;
+            stats.committed_margin.0 += collateral;
+        }
         let activity = self.trader_activity_count;
         self.trader_activity_count += 1;
         stats.last_activity = Some(activity);
@@ -175,6 +177,11 @@ impl Ketos {
                 .remove(&(stats.volume.0, oldest.1.clone()));
             self.active_traders.remove(&oldest);
         }
+    }
+
+    pub(crate) fn record_order_fill(&mut self, account_id: &AccountId, event: HistoryEvent) {
+        self.record_trade(account_id, &event, 0);
+        self.record_history(account_id, event);
     }
 
     pub(crate) fn record_entry(

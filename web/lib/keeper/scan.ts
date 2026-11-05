@@ -3,7 +3,8 @@ import { isLiquidatable, type Market, type MarketId, type Order, type Position }
 export const MAX_PRICE_AGE_MS = 120_000;
 
 export function isFreshPrice(market: Market, nowMs: number): boolean {
-  return market.price > 0n && nowMs - market.price_timestamp_ms <= MAX_PRICE_AGE_MS;
+  const ageMs = nowMs - market.price_timestamp_ms;
+  return market.price > 0n && ageMs >= 0 && ageMs <= MAX_PRICE_AGE_MS;
 }
 
 /** Cross equity includes cash and every cross position; it cannot be inferred from one leg. */
@@ -21,8 +22,8 @@ export function findLiquidatable(positions: readonly Position[], markets: readon
     });
 }
 
-/** Mirrors OrderRequest::triggered; the contract rechecks price, admission and OCO at execution. */
-export function findTriggeredOrders(orders: readonly Order[], positions: readonly Position[], markets: readonly Market[], nowMs: number): Order[] {
+/** Cached prices only nominate candidates; each contract execution pulls and rechecks its market. */
+export function findTriggeredOrders(orders: readonly Order[], positions: readonly Position[], markets: readonly Market[]): Order[] {
   const priceAt = new Map(markets.map((m) => [m.id, m]));
   const positionAt = new Map(positions.map((p) => [p.id, p]));
   return orders.filter((order) => {
@@ -30,7 +31,7 @@ export function findTriggeredOrders(orders: readonly Order[], positions: readonl
     const target = "position_id" in request ? positionAt.get(request.position_id) : request;
     if (!target) return false;
     const market = priceAt.get(target.market_id);
-    if (!market || !isFreshPrice(market, nowMs)) return false;
+    if (!market || market.price <= 0n) return false;
     const above = request.kind === "limit" || request.kind === "stop_loss"
       ? target.side === "short" : target.side === "long";
     return above ? market.price >= request.trigger_price : market.price <= request.trigger_price;

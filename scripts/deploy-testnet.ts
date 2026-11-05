@@ -31,7 +31,7 @@ type RpcResult<T> = { result?: T; error?: { cause?: { name?: string } } };
 type ContractState = { account: AccountView | null; initialized: boolean };
 type Vault = { balance: string; nav: string; total_shares: string; cross_receivable: string };
 type VaultAccount = { shares: string };
-type Market = { id: string; price_source: string; vault_id: string; max_leverage_cap: number };
+type Market = { id: string; price_source: string; vault_id: string; max_leverage_cap: number; price: string; price_timestamp_ms: number };
 
 function upsertEnv(file: string, values: Record<string, string>): void {
   const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
@@ -327,18 +327,6 @@ async function main(): Promise<void> {
       console.log(`${vaultId}: 10000 USDC deployment seed shares already present`);
       return;
     }
-    const keeper = new Account(ids.keeper, provider, keeperKey as KeyPairString);
-    await keeper.callFunction({
-      contractId: ids.ketos, methodName: "refresh_prices", args: {},
-      gas: teraToGas("300"), waitUntil: "FINAL",
-    });
-    const markets = await view<(Market & { price: string; price_timestamp_ms: number })[]>(ids.ketos, "get_markets");
-    const block = await provider.viewBlock({ finality: "final" });
-    const nowMs = Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n);
-    if (markets.some((market) => market.vault_id === vaultId &&
-        (BigInt(market.price) === 0n || nowMs - market.price_timestamp_ms > 120_000))) {
-      throw new Error(`${vaultId}: every assigned market needs a fresh price before the LP seed; no seed transfer sent`);
-    }
     const balance = BigInt(await view<string>(ids.usdc, "ft_balance_of", { account_id: seedAccountId }));
     if (balance < VAULT_SEED) {
       await parent.callFunction({
@@ -346,10 +334,17 @@ async function main(): Promise<void> {
         args: { account_id: seedAccountId, amount: (VAULT_SEED - balance).toString() }, waitUntil: "FINAL",
       });
     }
+    const priceDeposit = BigInt(await view<string>(ids.ketos, "get_vault_price_request_deposit", args));
+    if (priceDeposit > 0n) {
+      await seedAccount.callFunction({
+        contractId: ids.ketos, methodName: "fund_price_requests", args: {},
+        deposit: priceDeposit, waitUntil: "FINAL",
+      });
+    }
     const accepted = await seedAccount.callFunction<string>({
       contractId: ids.usdc, methodName: "ft_transfer_call",
       args: { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: `deposit_vault:${vaultId}` },
-      deposit: 1n, gas: teraToGas("100"), waitUntil: "FINAL",
+      deposit: 1n, gas: teraToGas("300"), waitUntil: "FINAL",
     });
     if (accepted !== VAULT_SEED.toString()) {
       throw new Error(`${vaultId}: seed transfer did not accept all 10000 USDC (refunded or partially accepted); no seed success recorded`);

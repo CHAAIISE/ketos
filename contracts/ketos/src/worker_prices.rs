@@ -18,7 +18,13 @@ const REQUEST_GAS: Gas = Gas::from_tgas(10);
 const CALLBACK_GAS: Gas = Gas::from_tgas(30);
 
 impl Ketos {
-    pub(crate) fn request_worker_prices(&self, asset_ids: &[String]) -> Promise {
+    pub(crate) fn request_worker_prices(&self, asset_ids: &[&str]) -> Promise {
+        self.request_worker_prices_with_gas(asset_ids, REQUEST_GAS, CALLBACK_GAS, None)
+    }
+
+    pub(crate) fn request_worker_prices_with_gas(
+        &self, asset_ids: &[&str], request_gas: Gas, callback_gas: Gas, requested_at_ms: Option<u64>,
+    ) -> Promise {
         let args = json!({
             "source": { "Project": {
                 "project_id": WORKER_PROJECT,
@@ -40,14 +46,14 @@ impl Ketos {
                 "request_execution",
                 args.to_string().into_bytes(),
                 WORKER_DEPOSIT,
-                REQUEST_GAS,
+                request_gas,
                 GasWeight(1),
             )
             .then(Promise::new(env::current_account_id()).function_call(
                 "on_worker_prices",
-                json!({ "asset_ids": asset_ids }).to_string().into_bytes(),
+                json!({ "asset_ids": asset_ids, "requested_at_ms": requested_at_ms }).to_string().into_bytes(),
                 NearToken::from_yoctonear(0),
-                CALLBACK_GAS,
+                callback_gas,
             ))
     }
 }
@@ -63,6 +69,7 @@ impl Ketos {
     pub fn on_worker_prices(
         &mut self,
         asset_ids: Vec<String>,
+        requested_at_ms: Option<u64>,
         #[callback_result] result: Result<Option<Value>, PromiseError>,
     ) -> u32 {
         let Ok(Some(Value::Object(response))) = result else {
@@ -76,6 +83,11 @@ impl Ketos {
         };
         let now_ms = env::block_timestamp_ms();
         if timestamp_ms == 0 || timestamp_ms > now_ms || now_ms - timestamp_ms > MAX_PRICE_AGE_MS {
+            return 0;
+        }
+        if requested_at_ms.is_some_and(|requested| {
+            timestamp_ms < requested || now_ms - timestamp_ms > crate::market::MAX_OPEN_PRICE_AGE_MS
+        }) {
             return 0;
         }
         let Some(prices) = response.get("prices").and_then(Value::as_object) else {

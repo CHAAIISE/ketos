@@ -133,7 +133,7 @@ describe("portfolioTotals", () => {
 });
 
 describe("cumulativePnl", () => {
-  it("books opening fees, close settlement and liquidation without counting funding or fills twice", () => {
+  it("books execution rewards separately from trading fees and counts settled funding once", () => {
     const events = [
       event({ realized_pnl: -2n * USD, fees: 2n * USD }),
       event({ sequence: 2, kind: "order_fill", order_id: 1, realized_pnl: -2n * USD }),
@@ -159,10 +159,10 @@ describe("cumulativePnl", () => {
         funding_payment: 2n * USD,
       }),
     ];
-    expect(cumulativePnl(events, -3n * USD)).toEqual([
-      { timestampMs: 1000, value: -2n * USD, sequence: 1 },
-      { timestampMs: 2000, value: 5n * USD, sequence: 4 },
-      { timestampMs: 3000, value: -3n * USD, sequence: 5 },
+    expect(cumulativePnl(events, -5n * USD)).toEqual([
+      { timestampMs: 1000, value: -4n * USD, sequence: 2 },
+      { timestampMs: 2000, value: 3n * USD, sequence: 4 },
+      { timestampMs: 3000, value: -5n * USD, sequence: 5 },
     ]);
   });
 
@@ -195,10 +195,10 @@ describe("cumulativePnl", () => {
       event({ sequence: 4, kind: "liquidation", timestamp_ms: 2000, realized_pnl: -1n * USD }),
       event({ sequence: 2, kind: "close", timestamp_ms: 1000, realized_pnl: 3n * USD }),
       event({ sequence: 1, timestamp_ms: 1000, realized_pnl: -1n * USD }),
-      event({ sequence: 3, kind: "order_fill", timestamp_ms: 1000, realized_pnl: 3n * USD }),
-    ], 1n * USD)).toEqual([
-      { timestampMs: 1000, value: 2n * USD, sequence: 2 },
-      { timestampMs: 2000, value: 1n * USD, sequence: 4 },
+      event({ sequence: 3, kind: "order_fill", timestamp_ms: 1000, realized_pnl: -1n * USD }),
+    ], 0n)).toEqual([
+      { timestampMs: 1000, value: 1n * USD, sequence: 3 },
+      { timestampMs: 2000, value: 0n, sequence: 4 },
     ]);
   });
 
@@ -211,12 +211,11 @@ describe("cumulativePnl", () => {
     ]);
   });
 
-  it("excludes transfers and annotations even when they carry nonzero amounts or deltas", () => {
+  it("excludes transfers and funding annotations even when they carry nonzero deltas", () => {
     expect(cumulativePnl([
       event({ kind: "deposit", size: 100n * USD, realized_pnl: 100n * USD }),
       event({ sequence: 2, kind: "withdrawal", size: 50n * USD, realized_pnl: -50n * USD }),
       event({ sequence: 3, kind: "funding", realized_pnl: 9n * USD }),
-      event({ sequence: 4, kind: "order_fill", realized_pnl: -2n * USD }),
     ], 25n * USD)).toEqual([]);
   });
 

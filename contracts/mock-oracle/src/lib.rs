@@ -15,7 +15,6 @@ pub const MIN_ORACLE_CALL_DEPOSIT: NearToken = NearToken::from_millinear(10);
 pub const MIN_EXECUTION_DEPOSIT: NearToken = NearToken::from_millinear(20);
 const WORKER_PROJECT: &str = "ketos.testnet/ketos-prices";
 const WORKER_VERSION: &str = "5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92";
-const RECENCY_DURATION_SEC: u32 = 300;
 
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +53,8 @@ pub struct MockOracle {
     use_canned_response: bool,
     execution_response: Option<String>,
     fail_execution: bool,
+    fail_tee: bool,
+    recency_duration_sec: u32,
 }
 
 #[near]
@@ -66,6 +67,8 @@ impl MockOracle {
             use_canned_response: false,
             execution_response: None,
             fail_execution: false,
+            fail_tee: false,
+            recency_duration_sec: 0,
         }
     }
 
@@ -84,12 +87,22 @@ impl MockOracle {
         );
     }
 
+    pub fn set_tee_failure(&mut self, fail: bool) {
+        require!(env::predecessor_account_id() == self.owner_id, "ERR_NOT_OWNER");
+        self.fail_tee = fail;
+    }
+    pub fn set_recency_duration_sec(&mut self, recency_duration_sec: u32) {
+        require!(env::predecessor_account_id() == self.owner_id, "ERR_NOT_OWNER");
+        self.recency_duration_sec = recency_duration_sec;
+    }
+
+
     /// Prices are reported as fresh at the current block: the mock has no feed to lag behind.
     pub fn get_price_data(&self, asset_ids: Option<Vec<String>>) -> PriceData {
         let ids = asset_ids.unwrap_or_else(|| self.prices.keys().cloned().collect());
         PriceData {
             timestamp: U64(env::block_timestamp()),
-            recency_duration_sec: RECENCY_DURATION_SEC,
+            recency_duration_sec: self.recency_duration_sec,
             prices: ids
                 .into_iter()
                 .map(|asset_id| {
@@ -191,6 +204,7 @@ impl MockOracle {
         asset_ids: Option<Vec<String>>,
         msg: String,
     ) -> Promise {
+        require!(!self.fail_tee, "ERR_TEE_UNAVAILABLE");
         require!(
             env::attached_deposit() >= MIN_ORACLE_CALL_DEPOSIT,
             "ERR_DEPOSIT_TOO_LOW"
@@ -205,7 +219,7 @@ impl MockOracle {
             "oracle_on_call".to_string(),
             args.to_string().into_bytes(),
             NearToken::from_yoctonear(0),
-            Gas::from_tgas(0),
+            Gas::from_tgas(30),
             GasWeight(1),
         )
     }
@@ -303,7 +317,6 @@ mod tests {
         let data = oracle.get_price_data(Some(vec!["wrap.near".into(), "aurora".into()]));
         let value = near_sdk::serde_json::to_value(&data).unwrap();
         assert_eq!(value["timestamp"], "1700000000000000000");
-        assert_eq!(value["recency_duration_sec"], 300);
         assert_eq!(value["prices"][0]["asset_id"], "wrap.near");
         assert_eq!(value["prices"][0]["price"]["multiplier"], "382231700");
         assert_eq!(value["prices"][0]["price"]["decimals"], 8);

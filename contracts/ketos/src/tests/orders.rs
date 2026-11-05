@@ -12,13 +12,13 @@ fn entry(side: Side, trigger_price: u128, margin: u128, leverage: u32) -> EntryO
 
 fn place(ketos: &mut Ketos, request: OrderRequest) -> Order {
     ctx_at("alice.test", T0_MS);
-    ketos.place_order(request)
+    ketos.place_order_now(request)
 }
 
 fn execute(ketos: &mut Ketos, ids: Vec<u64>, price: u128, now_ms: u64) -> Vec<OrderExecution> {
     set_price(ketos, "NEAR", price, now_ms);
     ctx_at("executor.test", now_ms);
-    ketos.execute_orders(ids)
+    ketos.execute_orders_now(ids)
 }
 
 fn brackets() -> Brackets {
@@ -39,7 +39,7 @@ fn entry_reserves_margin_cancellation_releases_it_without_fees_or_oi() {
     let account = ketos.get_account(id("alice.test")).unwrap();
     assert_eq!(
         (account.margin.0, account.reserved_margin.0),
-        (100 * USD, 100 * USD)
+        (99_750_000, 100_250_000)
     );
     assert_eq!(ketos.get_orders(id("alice.test")), vec![order.clone()]);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
@@ -71,14 +71,14 @@ fn reserved_entry_margin_cannot_be_withdrawn() {
         ketos.withdraw_margin(U128(51 * USD))
     }));
     assert!(error.is_err());
-    assert_eq!(margin(&ketos, "alice.test"), 50 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 49_625_000);
     assert_eq!(
         ketos
             .get_account(id("alice.test"))
             .unwrap()
             .reserved_margin
             .0,
-        150 * USD
+        150_375_000
     );
 }
 
@@ -125,7 +125,7 @@ fn limit_and_stop_entries_use_inclusive_opposite_triggers_for_both_sides() {
             .unwrap()
             .reserved_margin
             .0,
-        40 * USD
+        40_400_000
     );
     let low = execute(&mut ketos, ids.clone(), 380_000_000, T0_MS);
     assert!(matches!(
@@ -156,7 +156,7 @@ fn limit_and_stop_entries_use_inclusive_opposite_triggers_for_both_sides() {
     );
     assert!(positions
         .iter()
-        .all(|p| p.account_id == id("alice.test") && p.margin.0 == 9_980_000));
+        .all(|p| p.account_id == id("alice.test") && p.margin.0 == 9_940_000));
     assert_eq!(
         ketos
             .get_account(id("alice.test"))
@@ -166,7 +166,7 @@ fn limit_and_stop_entries_use_inclusive_opposite_triggers_for_both_sides() {
         0
     );
     assert!(ketos.get_positions(id("executor.test")).is_empty());
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 80_000);
+    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 240_000);
 }
 
 #[test]
@@ -198,7 +198,8 @@ fn gap_executes_at_current_oracle_price_and_duplicates_do_not_double_fill() {
         ketos.get_positions(id("alice.test"))[0].entry_price.0,
         370_000_000
     );
-    assert_eq!(margin(&ketos, "alice.test"), 100 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 99_750_000);
+    assert_eq!(margin(&ketos, "executor.test"), 250_000);
     assert_eq!(
         ketos.get_market("NEAR".into()).unwrap().market.oi_long.0,
         500 * USD
@@ -214,7 +215,7 @@ fn stale_or_missing_price_never_fills_or_releases_reserved_margin() {
     );
     ctx_at("executor.test", T0_MS + 120_001);
     assert_eq!(
-        ketos.execute_orders(vec![order.id]),
+        ketos.execute_orders_now(vec![order.id]),
         vec![OrderExecution::Skipped { order_id: order.id }]
     );
     assert_eq!(
@@ -227,7 +228,7 @@ fn stale_or_missing_price_never_fills_or_releases_reserved_margin() {
             .unwrap()
             .reserved_margin
             .0,
-        100 * USD
+        100_250_000
     );
     assert!(matches!(
         execute(&mut ketos, vec![order.id], P4, T0_MS + 120_001)[0],
@@ -262,7 +263,7 @@ fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
         }
     );
     assert!(matches!(result[2], OrderExecution::Filled { .. }));
-    assert_eq!(margin(&ketos, "alice.test"), 18_100 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 18_069_750_000);
     assert_eq!(
         ketos
             .get_account(id("alice.test"))
@@ -271,7 +272,7 @@ fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
             .0,
         0
     );
-    assert_eq!(ketos.vaults[0].balance, 60_000 * USD + 60_500_000);
+    assert_eq!(ketos.vaults[0].balance, 60_000 * USD + 218_700_000);
     assert_eq!(ketos.get_positions(id("alice.test")).len(), 2);
     assert!(ketos.get_orders(id("alice.test")).is_empty());
 }
@@ -279,6 +280,7 @@ fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
 #[test]
 fn tightened_leverage_and_stale_depth_reject_and_refund_triggered_entries() {
     let mut ketos = trading_setup();
+    deposit(&mut ketos, "alice.test", USD);
     let leveraged = place(
         &mut ketos,
         OrderRequest::Limit(entry(Side::Long, P4, 100 * USD, 5)),
@@ -310,7 +312,7 @@ fn tightened_leverage_and_stale_depth_reject_and_refund_triggered_entries() {
             reason: "ERR_MARKET_CLOSED: depth sample older than 30 minutes".into(),
         }]
     );
-    assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 201 * USD);
     assert_eq!(ketos.vaults[0].balance, 10_000 * USD);
 }
 
@@ -318,7 +320,7 @@ fn tightened_leverage_and_stale_depth_reject_and_refund_triggered_entries() {
 fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
+    let position = ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
     let tp = position.take_profit.unwrap();
     let sl = position.stop_loss.unwrap();
     assert_eq!(
@@ -327,7 +329,7 @@ fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
             .unwrap()
             .reserved_margin
             .0,
-        0
+        500_000
     );
     let result = execute(&mut ketos, vec![tp, sl, tp, sl], 380_000_000, T0_MS);
     assert_eq!(
@@ -345,10 +347,10 @@ fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
     );
     assert!(ketos.get_position(position.id).is_none());
     assert!(ketos.get_orders(id("alice.test")).is_empty());
-    assert_eq!(margin(&ketos, "alice.test"), 174 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 171_750_000);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
     assert_eq!(
-        ketos.vaults[0].balance + margin(&ketos, "alice.test"),
+        ketos.vaults[0].balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"),
         10_200 * USD
     );
 }
@@ -357,7 +359,7 @@ fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
 fn short_take_profit_closes_at_threshold_and_cancels_stop_loss() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 5, Some(Brackets {
+    let position = ketos.open_position_now("NEAR".into(), Side::Short, U128(100 * USD), 5, Some(Brackets {
         take_profit: Some(U128(380_000_000)),
         stop_loss: Some(U128(440_000_000)),
     }), None);
@@ -366,7 +368,7 @@ fn short_take_profit_closes_at_threshold_and_cancels_stop_loss() {
     let result = execute(&mut ketos, vec![tp, sl], 380_000_000, T0_MS);
     assert!(matches!(result[0], OrderExecution::Filled { .. }));
     assert_eq!(result[1], OrderExecution::Skipped { order_id: sl });
-    assert_eq!(margin(&ketos, "alice.test"), 224 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 221_750_000);
     assert!(ketos.get_orders(id("alice.test")).is_empty());
 }
 
@@ -381,19 +383,19 @@ fn pending_entry_attaches_brackets_only_after_fill_and_manual_close_cleans_them(
     let position = ketos.get_positions(id("alice.test"))[0].clone();
     assert!(position.take_profit.is_some() && position.stop_loss.is_some());
     ctx_at("alice.test", T0_MS);
-    ketos.close_position(position.id);
+    ketos.close_position_now(position.id);
     assert!(ketos.get_orders(id("alice.test")).is_empty());
-    assert_eq!(margin(&ketos, "alice.test"), 199 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 196_750_000);
 }
 
 #[test]
 fn liquidation_cleans_brackets_without_refunding_position_collateral_twice() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
+    let position = ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
     set_price(&mut ketos, "NEAR", 350_000_000, T0_MS);
     ctx_at("executor.test", T0_MS);
-    let liquidation = ketos.liquidate(position.id);
+    let liquidation = ketos.liquidate_now(position.id);
     assert!(ketos.get_orders(id("alice.test")).is_empty());
     assert_eq!(
         margin(&ketos, "alice.test"),
@@ -404,7 +406,7 @@ fn liquidation_cleans_brackets_without_refunding_position_collateral_twice() {
         10_200 * USD
     );
     assert_eq!(
-        ketos.execute_orders(vec![position.stop_loss.unwrap()]),
+        ketos.execute_orders_now(vec![position.stop_loss.unwrap()]),
         vec![OrderExecution::Skipped {
             order_id: position.stop_loss.unwrap()
         }]
@@ -433,7 +435,7 @@ fn cancelled_exit_can_be_replaced_without_changing_position_margin() {
     );
     let result = execute(&mut ketos, vec![tp.id], 440_000_000, T0_MS);
     assert!(matches!(result[0], OrderExecution::Filled { .. }));
-    assert_eq!(margin(&ketos, "alice.test"), 249 * USD);
+    assert_eq!(margin(&ketos, "alice.test"), 246_750_000);
 }
 
 #[test]
@@ -443,7 +445,7 @@ fn cannot_place_an_exit_on_another_accounts_position() {
     let position = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     deposit(&mut ketos, "stranger.test", USD);
     ctx_at("stranger.test", T0_MS);
-    ketos.place_order(OrderRequest::StopLoss {
+    ketos.place_order_now(OrderRequest::StopLoss {
         position_id: position.id,
         trigger_price: U128(380_000_000),
     });
@@ -454,8 +456,8 @@ fn cannot_place_an_exit_on_another_accounts_position() {
 fn duplicate_exit_is_rejected_instead_of_orphaning_first_order() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let position = ketos.open_position("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
-    ketos.place_order(OrderRequest::StopLoss {
+    let position = ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, Some(brackets()), None);
+    ketos.place_order_now(OrderRequest::StopLoss {
         position_id: position.id,
         trigger_price: U128(390_000_000),
     });
@@ -491,12 +493,12 @@ fn account_order_limit_includes_exit_orders() {
         );
         ctx_at("alice.test", T0_MS);
     }
-    ketos.open_position("NEAR".into(), Side::Long, U128(10 * USD), 5, Some(brackets()), None);
+    ketos.open_position_now("NEAR".into(), Side::Long, U128(10 * USD), 5, Some(brackets()), None);
 }
 
 #[test]
 #[should_panic(expected = "ERR_ORDER_BATCH_TOO_LARGE")]
 fn execution_batch_bound_is_enforced_before_mutation() {
     let mut ketos = trading_setup();
-    ketos.execute_orders(vec![0; 51]);
+    ketos.execute_orders_now(vec![0; 51]);
 }

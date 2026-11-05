@@ -168,9 +168,9 @@ fn realized_pnl_and_roi_follow_cash_settlement_not_unrealized_price_moves() {
     assert_eq!(first[1].kind, HistoryKind::Open);
     assert_eq!(
         (first[1].price.0, first[1].size.0, first[1].fees.0),
-        (P4, 500 * USD, USD / 2)
+        (P4, 500 * USD, 1_500_000)
     );
-    assert_eq!(first[1].realized_pnl.0, -(USD as i128 / 2));
+    assert_eq!(first[1].realized_pnl.0, -1_500_000);
     set_price(&mut ketos, "NEAR", 440_000_000, T0_MS);
     assert_eq!(
         ketos
@@ -178,7 +178,7 @@ fn realized_pnl_and_roi_follow_cash_settlement_not_unrealized_price_moves() {
             .unwrap()
             .realized_pnl
             .0,
-        -(USD as i128 / 2)
+        -1_500_000
     );
     close_at(&mut ketos, p.id, 440_000_000, T0_MS);
     let events = history(&ketos, "alice.test");
@@ -187,7 +187,7 @@ fn realized_pnl_and_roi_follow_cash_settlement_not_unrealized_price_moves() {
         [HistoryKind::Deposit, HistoryKind::Open, HistoryKind::Close]
     );
     assert_eq!(events[2].pnl.0, 50 * USD as i128);
-    assert_eq!(events[2].realized_pnl.0, 49_500_000);
+    assert_eq!(events[2].realized_pnl.0, 48_500_000);
     assert_eq!(events[2].timestamp_ms, T0_MS);
     let stats = ketos.get_account_stats(id("alice.test")).unwrap();
     assert_eq!(
@@ -198,7 +198,7 @@ fn realized_pnl_and_roi_follow_cash_settlement_not_unrealized_price_moves() {
         (stats.volume.0, stats.trades, stats.committed_margin.0),
         (1_000 * USD, 2, 100 * USD)
     );
-    assert_eq!(ketos.get_leaderboard(None, None)[0].roi_bps.0, 4_900);
+    assert_eq!(ketos.get_leaderboard(None, None)[0].roi_bps.0, 4_700);
     assert!(ketos.get_account_stats(id("nobody.test")).is_none());
     assert!(history(&ketos, "nobody.test").is_empty());
 }
@@ -211,7 +211,7 @@ fn insolvent_loss_is_capped_at_committed_collateral() {
     let events = history(&ketos, "alice.test");
     assert_eq!(events[2].pnl.0, -375_000_000);
     assert_eq!(events[2].fees.0, 0);
-    assert_eq!(events[2].realized_pnl.0, -99_500_000);
+    assert_eq!(events[2].realized_pnl.0, -98_500_000);
     assert_eq!(
         ketos
             .get_account_stats(id("alice.test"))
@@ -231,7 +231,7 @@ fn capped_vault_payout_does_not_report_a_profit_that_was_never_paid() {
     assert_eq!(close_at(&mut ketos, p.id, 800_000_000, T0_MS), 350 * USD);
     let events = history(&ketos, "alice.test");
     assert_eq!(events[2].pnl.0, 500 * USD as i128);
-    assert_eq!(events[2].realized_pnl.0, 250_500_000);
+    assert_eq!(events[2].realized_pnl.0, 251_500_000);
     assert_eq!(
         ketos
             .get_account_stats(id("alice.test"))
@@ -248,7 +248,7 @@ fn funding_history_is_realized_once_at_exit_and_keeps_payer_receiver_signs() {
     deposit(&mut ketos, "bob.test", 100 * USD);
     let long = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 3);
     ctx_at("bob.test", T0_MS);
-    let short = ketos.open_position("NEAR".into(), Side::Short, U128(100 * USD), 1, None, None);
+    let short = ketos.open_position_now("NEAR".into(), Side::Short, U128(100 * USD), 1, None, None);
     let now = T0_MS + HOUR_MS;
     ctx_at("executor.test", now);
     ketos.settle_funding("NEAR".into());
@@ -260,7 +260,7 @@ fn funding_history_is_realized_once_at_exit_and_keeps_payer_receiver_signs() {
         ("bob.test", short.id, 100 * USD, -25_000),
     ] {
         ctx_at(owner, now);
-        ketos.close_position(position);
+        ketos.close_position_now(position);
         let events = history(&ketos, owner);
         assert_eq!(
             events.iter().map(|e| e.kind).collect::<Vec<_>>(),
@@ -293,8 +293,8 @@ fn liquidation_history_charges_penalties_to_owner_not_executor() {
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     set_price(&mut ketos, "NEAR", 360_000_000, T0_MS);
     ctx_at("executor.test", T0_MS);
-    let liquidation = ketos.liquidate(p.id);
-    assert_eq!(liquidation.returned.0, 43_500_000);
+    let liquidation = ketos.liquidate_now(p.id);
+    assert_eq!(liquidation.returned.0, 42_500_000);
     let events = history(&ketos, "alice.test");
     assert_eq!(events[2].kind, HistoryKind::Liquidation);
     assert_eq!((events[2].pnl.0, events[2].fees.0), (-50_000_000, 6 * USD));
@@ -305,7 +305,7 @@ fn liquidation_history_charges_penalties_to_owner_not_executor() {
             .unwrap()
             .realized_pnl
             .0,
-        -56_500_000
+        -57_500_000
     );
     assert!(history(&ketos, "executor.test").is_empty());
     assert_eq!(
@@ -322,7 +322,7 @@ fn liquidation_history_charges_penalties_to_owner_not_executor() {
 fn order_fills_annotate_entry_and_bracket_exit_without_duplicate_trades() {
     let mut ketos = trading_setup();
     ctx_at("alice.test", T0_MS);
-    let order = ketos.place_order(OrderRequest::Limit(EntryOrder { market_id: "NEAR".into(),
+    let order = ketos.place_order_now(OrderRequest::Limit(EntryOrder { market_id: "NEAR".into(),
     side: Side::Long,
     margin: U128(100 * USD),
     leverage: 5,
@@ -332,14 +332,14 @@ fn order_fills_annotate_entry_and_bracket_exit_without_duplicate_trades() {
         stop_loss: Some(U128(380_000_000)),
     }), margin_mode: crate::cross::MarginMode::Isolated }));
     ctx_at("executor.test", T0_MS);
-    let filled = ketos.execute_orders(vec![order.id, order.id]);
+    let filled = ketos.execute_orders_now(vec![order.id, order.id]);
     let OrderExecution::Filled { position_id, .. } = filled[0] else {
         panic!("entry must fill");
     };
     let position = ketos.get_position(position_id).unwrap();
     assert_eq!(ketos.get_account_stats(id("alice.test")).unwrap().trades, 1);
     set_price(&mut ketos, "NEAR", 450_000_000, T0_MS);
-    ketos.execute_orders(vec![
+    ketos.execute_orders_now(vec![
         position.take_profit.unwrap(),
         position.stop_loss.unwrap(),
     ]);
@@ -360,7 +360,11 @@ fn order_fills_annotate_entry_and_bracket_exit_without_duplicate_trades() {
         (events[4].price.0, events[4].size.0),
         (450_000_000, 500 * USD)
     );
-    assert_eq!(events[2].realized_pnl.0 + events[4].realized_pnl.0, 0);
+    assert_eq!(events[2].fees.0, 250_000);
+    assert_eq!(events[4].fees.0, 250_000);
+    assert_eq!(events[2].realized_pnl.0, -250_000);
+    assert_eq!(events[4].realized_pnl.0, -250_000);
+    assert_eq!(margin(&ketos, "executor.test"), 500_000);
     let stats = ketos.get_account_stats(id("alice.test")).unwrap();
     assert_eq!((stats.trades, stats.volume.0), (2, 1_000 * USD));
     assert_eq!(
@@ -380,12 +384,12 @@ fn rejected_cancelled_and_untriggered_orders_do_not_create_trade_history() {
     leverage: 5,
     trigger_price: U128(380_000_000),
     brackets: None, margin_mode: crate::cross::MarginMode::Isolated };
-    let cancel = ketos.place_order(OrderRequest::Limit(entry.clone()));
+    let cancel = ketos.place_order_now(OrderRequest::Limit(entry.clone()));
     ketos.cancel_order(cancel.id);
-    let reject = ketos.place_order(OrderRequest::Limit(entry));
+    let reject = ketos.place_order_now(OrderRequest::Limit(entry));
     ctx_at("executor.test", T0_MS);
     assert_eq!(
-        ketos.execute_orders(vec![reject.id]),
+        ketos.execute_orders_now(vec![reject.id]),
         [OrderExecution::Skipped {
             order_id: reject.id
         }]
@@ -401,7 +405,7 @@ fn rejected_cancelled_and_untriggered_orders_do_not_create_trade_history() {
     );
     set_price(&mut ketos, "NEAR", 370_000_000, T0_MS + 1);
     assert!(matches!(
-        ketos.execute_orders(vec![reject.id])[0],
+        ketos.execute_orders_now(vec![reject.id])[0],
         OrderExecution::Rejected { .. }
     ));
     let events = history(&ketos, "alice.test");
@@ -419,7 +423,7 @@ fn history_ring_preserves_absolute_cursors_and_all_time_stats_after_wrap() {
     for _ in 0..105 {
         let position = open(&mut ketos, "NEAR", Side::Long, USD, 1);
         ctx_at("alice.test", T0_MS);
-        ketos.close_position(position.id);
+        ketos.close_position_now(position.id);
     }
     let events = history(&ketos, "alice.test");
     assert_eq!(
@@ -436,7 +440,7 @@ fn history_ring_preserves_absolute_cursors_and_all_time_stats_after_wrap() {
             stats.volume.0,
             stats.realized_pnl.0
         ),
-        (211, 210, 210 * USD, -210_000)
+        (211, 210, 210 * USD, -630_000)
     );
     assert_eq!(
         ketos.get_history(id("alice.test"), Some(209), Some(200)),
@@ -454,7 +458,7 @@ fn history_ring_preserves_absolute_cursors_and_all_time_stats_after_wrap() {
         .is_empty());
     deposit(&mut ketos, "bob.test", 5 * USD);
     ctx_at("bob.test", T0_MS);
-    ketos.open_position("NEAR".into(), Side::Short, U128(USD), 1, None, None);
+    ketos.open_position_now("NEAR".into(), Side::Short, U128(USD), 1, None, None);
     let bob = history(&ketos, "bob.test");
     assert_eq!(bob[0].sequence, 0);
     assert_eq!(bob[0].kind, HistoryKind::Deposit);
@@ -469,10 +473,10 @@ fn leaderboard_sorts_signed_pnl_and_volume_and_reindexes_existing_accounts() {
     let alice = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     deposit(&mut ketos, "bob.test", 100 * USD);
     ctx_at("bob.test", T0_MS);
-    let bob = ketos.open_position("NEAR".into(), Side::Short, U128(10 * USD), 5, None, None);
+    let bob = ketos.open_position_now("NEAR".into(), Side::Short, U128(10 * USD), 5, None, None);
     close_at(&mut ketos, alice.id, 360_000_000, T0_MS);
     ctx_at("bob.test", T0_MS);
-    ketos.close_position(bob.id);
+    ketos.close_position_now(bob.id);
     let pnl = ketos.get_leaderboard(Some(LeaderboardSort::Pnl), None);
     let volume = ketos.get_leaderboard(Some(LeaderboardSort::Volume), None);
     assert_eq!(
@@ -490,7 +494,7 @@ fn leaderboard_sorts_signed_pnl_and_volume_and_reindexes_existing_accounts() {
     );
     assert_eq!(
         (pnl[0].realized_pnl.0, pnl[1].realized_pnl.0),
-        (4_900_000, -51_000_000)
+        (4_700_000, -53_000_000)
     );
     assert_eq!(ketos.get_leaderboard(None, Some(1)), pnl[..1]);
     assert!(ketos.get_leaderboard(None, Some(0)).is_empty());
@@ -511,7 +515,7 @@ fn leaderboard_evicts_oldest_activity_without_losing_history_and_allows_reentry(
         let owner = format!("trader{i:03}.test");
         deposit(&mut ketos, &owner, 5 * USD);
         ctx_at(&owner, T0_MS);
-        ketos.open_position("NEAR".into(), Side::Long, U128(USD), 1, None, None);
+        ketos.open_position_now("NEAR".into(), Side::Long, U128(USD), 1, None, None);
         near_sdk::env::state_write(&ketos);
         drop(ketos);
         ketos = near_sdk::env::state_read().unwrap();
@@ -523,7 +527,7 @@ fn leaderboard_evicts_oldest_activity_without_losing_history_and_allows_reentry(
     assert_eq!(board.last().unwrap().account_id, id("trader001.test"));
     assert_eq!(history(&ketos, "trader000.test")[0].sequence, 0);
     ctx_at("trader000.test", T0_MS);
-    ketos.open_position("NEAR".into(), Side::Short, U128(USD), 1, None, None);
+    ketos.open_position_now("NEAR".into(), Side::Short, U128(USD), 1, None, None);
     ctx_at("viewer.test", T0_MS);
     let board = ketos.get_leaderboard(None, Some(500));
     assert!(board.iter().all(|e| e.account_id != id("trader001.test")));
@@ -537,7 +541,7 @@ fn leaderboard_evicts_oldest_activity_without_losing_history_and_allows_reentry(
             returning.volume.0,
             returning.realized_pnl.0
         ),
-        (2, 2 * USD, -2_000)
+        (2, 2 * USD, -6_000)
     );
     assert_eq!(
         (

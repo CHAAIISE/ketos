@@ -34,12 +34,18 @@ export interface TxReceipt {
 const toAmount = (value: unknown): bigint | null =>
   typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : null;
 
+const PRICED_ACTION_METHODS: Record<string, true> = {
+  open_position: true, close_position: true, place_order: true, execute_orders: true,
+  liquidate: true, liquidate_cross: true, withdraw_vault: true, pull_market_price: true,
+};
+
 /**
- * Sends a transaction built from the mutation variables and refreshes `invalidate` once it
- * settles, success or not: a failed receipt can still have moved funds (e.g. a refund).
+ * Prepares and sends wallet transactions serially, observing prerequisite funding/listing results
+ * before the next prompt. Refreshes `invalidate` on success or failure because funds may have moved.
  */
 function useTxMutation<TVars, TData extends TxReceipt>(options: {
-  build: (config: NearConfig, vars: TVars) => NearTransaction;
+  build: (config: NearConfig, vars: TVars, accountId: string) =>
+    NearTransaction | NearTransaction[] | Promise<NearTransaction | NearTransaction[]>;
   parse: (result: TxResult) => TData;
   invalidate: (accountId: string | null) => QueryKey[];
 }) {
@@ -50,7 +56,35 @@ function useTxMutation<TVars, TData extends TxReceipt>(options: {
       if (!wallet?.accountId) {
         throw new NearActionError({ code: "NOT_SIGNED_IN", message: "Connect a wallet first." });
       }
-      return options.parse(await wallet.signAndSendTransaction(options.build(config, vars)));
+      const built = await options.build(config, vars, wallet.accountId);
+      const transactions = Array.isArray(built) ? built : [built];
+      let result: TxResult | undefined;
+      for (const [index, transaction] of transactions.entries()) {
+        result = await wallet.signAndSendTransaction(transaction);
+        const pricedAction = transaction.actions.some((action) => PRICED_ACTION_METHODS[action.methodName]);
+        const transfer = transaction.actions.find((action) => action.methodName === "ft_transfer_call");
+        if ((pricedAction || transfer || index < transactions.length - 1) &&
+            (!result.txHash || result.value === undefined)) {
+          throw new NearActionError({
+            code: "UNCONFIRMED_TRANSACTION",
+            message: "The wallet did not report a confirmed result. Check the transaction status before retrying.",
+          });
+        }
+        if (pricedAction && result.value === null) {
+          throw new NearActionError({
+            code: "ACTION_CANCELLED",
+            message: "The action was cancelled because a fresh price was unavailable or its conditions changed. No trade or vault withdrawal was applied.",
+          });
+        }
+        if (transfer && result.value !== transfer.args.amount) {
+          throw new NearActionError({
+            code: "TRANSFER_REFUNDED",
+            message: "The token transfer was not fully accepted. Unused USDC was refunded; any unspent oracle deposit remains withdrawable.",
+          });
+        }
+      }
+      if (!result) throw new NearActionError({ code: "EMPTY_TRANSACTION", message: "No transaction was prepared." });
+      return options.parse(result);
     },
     onSettled: () =>
       Promise.all(

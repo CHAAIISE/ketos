@@ -3,7 +3,7 @@ use near_sdk::serde_json::{json, Value};
 
 fn deliver(ketos: &mut Ketos, now: u64, response: Value) -> u32 {
     ctx_at(CONTRACT, now);
-    ketos.on_worker_prices(vec!["DOGE".into(), "XRP".into()], Ok(Some(response)))
+    ketos.on_worker_prices(vec!["DOGE".into(), "XRP".into()], None, Ok(Some(response)))
 }
 
 fn response(at: u64) -> Value {
@@ -29,9 +29,9 @@ fn quorum_prices_enable_worker_market_trading_only_after_depth() {
     higher["prices"]["DOGE"][0] = json!("8800000");
     assert_eq!(deliver(&mut ketos, T0_MS + 1, higher), 2);
     ctx_at("alice.test", T0_MS + 1);
-    let payout = ketos.close_position(position.id).0;
-    // At +10%, the long earns $50 less both $0.50 trading fees and accrued charges.
-    assert!(payout <= 149 * USD && payout >= 149 * USD - 2);
+    let payout = ketos.close_position_now(position.id).0;
+    // At +10%, the long earns $50 less $3 in base/impact fees and accrued charges.
+    assert!(payout <= 147 * USD && payout >= 147 * USD - 2);
     let history = ketos.get_history(id("alice.test"), None, None);
     assert_eq!(history.len(), 4);
     assert_eq!(history[0].kind, crate::history::HistoryKind::Deposit);
@@ -52,9 +52,9 @@ fn malformed_missing_and_failed_results_preserve_price_and_original_age() {
         assert_eq!(stored_price(&ketos, "DOGE"), (8_000_000, T0_MS));
     }
     ctx_at(CONTRACT, T0_MS + 120_001);
-    assert_eq!(ketos.on_worker_prices(vec!["DOGE".into()], Ok(None)), 0);
+    assert_eq!(ketos.on_worker_prices(vec!["DOGE".into()], None, Ok(None)), 0);
     assert_eq!(
-        ketos.on_worker_prices(vec!["DOGE".into()], Err(PromiseError::Failed)),
+        ketos.on_worker_prices(vec!["DOGE".into()], None, Err(PromiseError::Failed)),
         0
     );
     assert_eq!(stored_price(&ketos, "DOGE"), (8_000_000, T0_MS));
@@ -128,6 +128,7 @@ fn worker_cannot_update_tee_signed_or_unrequested_markets() {
     assert_eq!(
         ketos.on_worker_prices(
             vec!["wrap.near".into(), "SIGNED.oracle".into()],
+            None,
             Ok(Some(data))
         ),
         0
@@ -154,9 +155,10 @@ fn refresh_accounts_for_both_adapters_before_spending_any_deposit() {
     let mut ketos = setup();
     testing_env!(VMContextBuilder::new()
         .current_account_id(id(CONTRACT))
+        .predecessor_account_id(id("keeper.test"))
         .account_balance(NearToken::from_millinear(39))
         .storage_usage(0)
         .prepaid_gas(Gas::from_tgas(200))
         .build());
-    let _ = ketos.refresh_prices();
+    let _ = ketos.refresh_prices(None);
 }

@@ -23,8 +23,12 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
       gas: teraToGas(tgas),
       waitUntil: "EXECUTED_OPTIMISTIC",
     });
-    // A successful outer transaction can hide a failed oracle receipt.
+    // A callback can recover an oracle failure; a final null is an unapplied liquidation.
     const result = settleOutcome(outcome);
+    if (methodName === "liquidate" || methodName === "liquidate_cross") {
+      if (result.value === null) throw new Error("Liquidation cancelled: price unavailable or conditions changed");
+      if (result.value === undefined) throw new Error("Liquidation result was not confirmed");
+    }
     return { tx: outcome.transaction.hash, value: result.value };
   };
 
@@ -34,6 +38,9 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
     openOrders: () => views.allOpenOrders(),
     crossAccount: (accountId) => views.crossAccount(accountId),
     lastSnapshotMs: async () => (await views.vaultHistory("core")).at(-1)?.timestamp_ms ?? null,
+    lastPriceRequestMs: async () => z.number().int().nonnegative().nullable().parse(
+      await views.provider.callFunction({ contractId: ketosContract, method: "get_last_price_request_ms", args: {} }),
+    ),
     ketosBalanceYocto: async () => {
       const state = await views.provider.viewAccount({ accountId: ketosContract });
       const spendable = BigInt(state.amount) - BigInt(state.storage_usage) * 10n ** 19n;
@@ -41,13 +48,13 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
     },
     setDepth: async (market, samples, measuredAtMs) =>
       (await call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30)).tx,
-    refreshPrices: async () => (await call("refresh_prices", {}, 300)).tx,
+    refreshPrices: async (marketIds) => (await call("refresh_prices", { market_ids: marketIds }, 300)).tx,
     executeOrders: async (ids) => {
-      const { tx, value } = await call("execute_orders", { ids }, 250);
+      const { tx, value } = await call("execute_orders", { ids }, 300);
       return { tx, results: z.array(orderExecutionSchema).parse(value) };
     },
-    liquidate: async (positionId) => (await call("liquidate", { position_id: positionId }, 50)).tx,
-    liquidateCross: async (accountId) => (await call("liquidate_cross", { account_id: accountId }, 150)).tx,
+    liquidate: async (positionId) => (await call("liquidate", { position_id: positionId }, 300)).tx,
+    liquidateCross: async (accountId) => (await call("liquidate_cross", { account_id: accountId }, 300)).tx,
     settleFunding: async (marketId) => (await call("settle_funding", { market_id: marketId }, 10)).tx,
     snapshotVaults: async () => (await call("snapshot_vaults", {}, 50)).tx,
   };

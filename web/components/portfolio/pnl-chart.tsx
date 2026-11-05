@@ -169,13 +169,13 @@ export function PnlChart({ events, total, loading }: { events: readonly HistoryE
                 One retained trading observation at {formatHistoryTime(latest.timestampMs)}. A curve needs at least two distinct trading timestamps.
               </>
             ) : (
-              <>No retained trading events to plot. Open, close and liquidation events create PnL observations.</>
+              <>No retained trading events to plot. Trades and paid order executions create PnL observations.</>
             )}
           </EmptyState>
         </div>
       )}
       <p className="text-label text-tertiary">
-        All-time booked PnL · source: last 200 account events, anchored to the all-time total. Fees and funding included once; transfers, funding annotations and order fills excluded. Earlier history is not plotted.
+        All-time booked PnL · source: last 200 account events, anchored to the all-time total. Trading fees, order rewards and settled funding included once; transfers and funding annotations excluded. Earlier history is not plotted.
       </p>
     </section>
   );

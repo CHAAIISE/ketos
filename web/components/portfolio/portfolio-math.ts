@@ -34,7 +34,8 @@ export interface PnlPoint {
 /** Absolute all-time booked PnL at retained trading events, without inventing earlier observations. */
 export function cumulativePnl(events: readonly HistoryEvent[], total: bigint): PnlPoint[] {
   const trading = events
-    .filter((event) => event.kind === "open" || event.kind === "close" || event.kind === "liquidation")
+    .filter((event) => event.kind === "open" || event.kind === "close" ||
+      event.kind === "liquidation" || event.kind === "order_fill")
     .sort((a, b) => a.sequence - b.sequence)
     .filter((event, index, sorted) => index === 0 || event.sequence !== sorted[index - 1].sequence);
 

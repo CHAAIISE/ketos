@@ -7,16 +7,18 @@ export const DEPTH_BATCH_SIZE = 8;
 export const MEASURING_PRIORITY = 4;
 export const ORDER_BATCH_SIZE = 5;
 export const SNAPSHOT_INTERVAL_MS = 3_600_000;
+export const PRICE_REFRESH_INTERVAL_MS = 300_000;
 
 export interface KeeperChain {
   markets(): Promise<Market[]>;
   openPositions(): Promise<Position[]>;
   openOrders(): Promise<Order[]>;
   crossAccount(accountId: string): Promise<CrossAccount>;
+  lastPriceRequestMs(): Promise<number | null>;
   lastSnapshotMs(): Promise<number | null>;
   ketosBalanceYocto(): Promise<bigint>;
   setDepth(market: MarketId, samples: DepthSample[], measuredAtMs: number): Promise<string>;
-  refreshPrices(): Promise<string>;
+  refreshPrices(marketIds: MarketId[]): Promise<string>;
   executeOrders(ids: number[]): Promise<{ tx: string; results: OrderExecution[] }>;
   liquidate(positionId: number): Promise<string>;
   liquidateCross(accountId: string): Promise<string>;
@@ -45,7 +47,7 @@ export type TickSummary =
       durationMs: number;
       marketCount: number;
       depth: Step<{ market: MarketId; measuredAtMs?: number }>[];
-      prices: Step<{ fresh: number; total: number }>;
+      prices: Step<{ fresh: number; total: number }> | { fresh: number; total: number; skipped: true };
       funding: Step<{ market: MarketId }>[];
       orders: Step<{ ids: number[]; results?: OrderResult[] }>[];
       scannedOrders: number;
@@ -110,19 +112,37 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
     }
   }
 
-  let prices: Step<{ fresh: number; total: number }>;
+  const openOrders = await chain.openOrders();
+  const positionsBeforeOrders = openOrders.length ? await chain.openPositions() : [];
+  const positionAt = new Map(positionsBeforeOrders.map((p) => [p.id, p]));
+  const activeMarkets = new Set(markets.filter((m) => m.oi_long > 0n || m.oi_short > 0n).map((m) => m.id));
+  for (const { request } of openOrders) {
+    const market = "market_id" in request ? request.market_id : positionAt.get(request.position_id)?.market_id;
+    if (market !== undefined) activeMarkets.add(market);
+  }
+  const active = markets.filter((m) => activeMarkets.has(m.id));
+  // One shared lease must cover staggered cache ages, not postpone the younger active feeds.
+  const refreshMarkets = active.some((m) => started - m.price_timestamp_ms >= PRICE_REFRESH_INTERVAL_MS)
+    ? active.map((m) => m.id) : [];
+  let prices: Extract<TickSummary, { ok: true }>["prices"];
+  let requestedPrices = false;
   try {
-    const tx = await chain.refreshPrices();
-    markets = await chain.markets();
-    prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, tx };
+    const lastRequest = refreshMarkets.length ? await chain.lastPriceRequestMs() : null;
+    if (refreshMarkets.length === 0 || (lastRequest !== null && started - lastRequest < PRICE_REFRESH_INTERVAL_MS)) {
+      prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, skipped: true };
+    } else {
+      requestedPrices = true;
+      const tx = await chain.refreshPrices(refreshMarkets);
+      markets = await chain.markets();
+      prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, tx };
+    }
   } catch (e) {
     markets = await chain.markets();
     prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, error: message(e) };
   }
-
-  const openOrders = await chain.openOrders();
-  const positionsBeforeOrders = openOrders.length ? await chain.openPositions() : [];
-  const triggered = findTriggeredOrders(openOrders, positionsBeforeOrders, markets, now());
+  // Price refresh changes position equity as well as market prices.
+  const orderPositions = requestedPrices && openOrders.length ? await chain.openPositions() : positionsBeforeOrders;
+  const triggered = findTriggeredOrders(openOrders, orderPositions, markets);
   const orders: Step<{ ids: number[]; results?: OrderResult[] }>[] = [];
   for (let i = 0; i < triggered.length; i += ORDER_BATCH_SIZE) {
     const ids = triggered.slice(i, i + ORDER_BATCH_SIZE).map((o) => o.id);

@@ -58,12 +58,12 @@ fn listed_market_trades_after_authenticated_price_and_depth_with_five_x_ceiling(
     let p = open(&mut ketos, "NEW", Side::Long, 100 * USD, 5);
     assert_eq!(p.entry_price.0, P4);
     assert_eq!(p.size.0, 500 * USD);
-    assert_eq!(p.margin.0, 99_500_000);
+    assert_eq!(p.margin.0, 94_500_000);
     assert_eq!(ketos.get_vault(VaultId::Core), core);
-    assert_eq!(ketos.get_vault(VaultId::LongTail).revenue.fees.0, 500_000);
+    assert_eq!(ketos.get_vault(VaultId::LongTail).revenue.fees.0, 5_500_000);
     ctx_at("alice.test", T0_MS);
-    assert_eq!(ketos.close_position(p.id).0, 99 * USD);
-    assert_eq!(ketos.get_vault(VaultId::LongTail).balance.0, 1_006 * USD);
+    assert_eq!(ketos.close_position_now(p.id).0, 89 * USD);
+    assert_eq!(ketos.get_vault(VaultId::LongTail).balance.0, 1_016 * USD);
 }
 
 #[test]

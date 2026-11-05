@@ -141,8 +141,40 @@ async function seed(rpcUrl) {
     await account.deployContract(readFileSync(root(`contracts/res/${wasm}.wasm`)));
     await account.callFunction({ contractId: accountId, methodName: "new", args: init, gas: teraToGas("100") });
   };
-  const call = (signer, contractId, methodName, args = {}, opts = {}) =>
-    signer.callFunction({ contractId, methodName, args, waitUntil: "FINAL", gas: teraToGas("100"), ...opts });
+  const call = async (signer, contractId, methodName, args = {}, opts = {}) => {
+    let deposit = opts.deposit;
+    if (contractId === ids.ketos && deposit === undefined) {
+      let quote;
+      if (methodName === "open_position") {
+        quote = ["get_price_request_deposit", { market: args.market_id }];
+      } else if (methodName === "place_order") {
+        quote = args.request.market_id
+          ? ["get_price_request_deposit", { market: args.request.market_id }]
+          : ["get_position_price_request_deposit", { position_id: args.request.position_id }];
+      } else if (methodName === "close_position" || methodName === "liquidate") {
+        quote = ["get_position_price_request_deposit", { position_id: args.position_id }];
+      } else if (methodName === "execute_orders") {
+        quote = ["get_orders_price_request_deposit", { ids: args.ids }];
+      } else if (methodName === "liquidate_cross") {
+        quote = ["get_cross_price_request_deposit", { account_id: args.account_id }];
+      } else if (methodName === "withdraw_vault") {
+        quote = ["get_vault_price_request_deposit", { vault_id: args.vault_id }];
+      }
+      deposit = quote && signer.accountId !== ids.keeper
+        ? BigInt(await view(ids.ketos, quote[0], quote[1]))
+        : 0n;
+      if (methodName === "withdraw_vault") deposit += 1n;
+    }
+    if (methodName === "ft_transfer_call" && args.receiver_id === ids.ketos && args.msg.startsWith("deposit_vault:")) {
+      const cost = BigInt(await view(ids.ketos, "get_vault_price_request_deposit", {
+        vault_id: args.msg.slice("deposit_vault:".length),
+      }));
+      if (cost > 0n) await call(signer, ids.ketos, "fund_price_requests", {}, { deposit: cost });
+    }
+    return signer.callFunction({
+      contractId, methodName, args, waitUntil: "FINAL", gas: teraToGas("300"), ...opts, deposit: deposit ?? 0n,
+    });
+  };
   const view = (contractId, method, args = {}) => provider.callFunction({ contractId, method, args });
 
   await deploy(ids.usdc, 10, "mock_usdc", { owner_id: DEFAULT_ACCOUNT_ID });
@@ -165,6 +197,10 @@ async function seed(rpcUrl) {
   for (const [assetId, price] of [...PRICES, ...LISTABLE_PRICES]) {
     await call(rootAccount, ids.oracle, "set_price", { asset_id: assetId, multiplier: price.toString(), decimals: 8 });
   }
+  for (const accountId of [ids.ketos, ids.lp]) {
+    await call(rootAccount, ids.usdc, "storage_deposit", { account_id: accountId }, { deposit: nearToYocto("0.0125") });
+  }
+  await call(rootAccount, ids.usdc, "mint", { account_id: ids.lp, amount: (2n * VAULT_SEED).toString() });
   await call(keeper, ids.ketos, "refresh_prices", {}, { gas: teraToGas("300") });
 
   const fixture = JSON.parse(readFileSync(DEPTH_FIXTURE, "utf8"));
@@ -178,11 +214,7 @@ async function seed(rpcUrl) {
     });
   }
 
-  for (const accountId of [ids.ketos, ids.lp]) {
-    await call(rootAccount, ids.usdc, "storage_deposit", { account_id: accountId }, { deposit: nearToYocto("0.0125") });
-  }
   for (const vaultId of ["core", "long-tail"]) {
-    await call(rootAccount, ids.usdc, "mint", { account_id: ids.lp, amount: VAULT_SEED.toString() });
     await call(
       as(ids.lp), ids.usdc, "ft_transfer_call",
       { receiver_id: ids.ketos, amount: VAULT_SEED.toString(), msg: `deposit_vault:${vaultId}` },

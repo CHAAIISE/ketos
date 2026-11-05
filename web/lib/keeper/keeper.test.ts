@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CrossAccount, Market, MarketId, Order, Position } from "../near/types";
-import { findLiquidatable, findTriggeredOrders } from "./scan";
+import { findLiquidatable, findTriggeredOrders, isFreshPrice } from "./scan";
 import { MIN_TICK_INTERVAL_MS, TickGate, retryAfterMs } from "./throttle";
-import { depthBatch, MEASURING_PRIORITY, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
+import { depthBatch, MEASURING_PRIORITY, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, PRICE_REFRESH_INTERVAL_MS, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
 
 const NOW = 1_762_190_000_000;
 const USD = 1_000_000n;
@@ -104,6 +104,13 @@ describe("liquidation scan", () => {
   it("skips markets that never had a price", () => {
     expect(findLiquidatable([position(5, "BTC", 0n)], [{ ...market("BTC"), price: 0n }], NOW)).toEqual([]);
   });
+
+  it("rejects future-dated marks and includes the exact freshness boundary", () => {
+    const liquidatable = [position(6, "NEAR", 0n)];
+    expect(findLiquidatable(liquidatable, [market("NEAR", -1)], NOW)).toEqual([]);
+    expect(findLiquidatable(liquidatable, [market("NEAR", 120_000)], NOW)).toEqual(liquidatable);
+    expect(findLiquidatable(liquidatable, [market("NEAR", 120_001)], NOW)).toEqual([]);
+  });
 });
 
 function fakeChain(overrides: Partial<KeeperChain> = {}): KeeperChain & { calls: string[] } {
@@ -115,13 +122,14 @@ function fakeChain(overrides: Partial<KeeperChain> = {}): KeeperChain & { calls:
     openOrders: async () => [],
     crossAccount: async () => { throw new Error("unexpected cross read"); },
     lastSnapshotMs: async () => NOW,
+    lastPriceRequestMs: async () => null,
     settleFunding: async (m) => (calls.push(`settle_funding ${m}`), `tx-funding-${m}`),
     executeOrders: async () => { throw new Error("unexpected order execution"); },
     liquidateCross: async (id) => (calls.push(`liquidate_cross ${id}`), `tx-cross-${id}`),
     snapshotVaults: async () => (calls.push("snapshot_vaults"), "tx-snapshot"),
     ketosBalanceYocto: async () => MIN_KETOS_BALANCE_YOCTO,
     setDepth: async (m) => (calls.push(`set_depth ${m}`), `tx-depth-${m}`),
-    refreshPrices: async () => (calls.push("refresh_prices"), "tx-prices"),
+    refreshPrices: async (ids) => (calls.push(`refresh_prices ${ids.join(",")}`), "tx-prices"),
     liquidate: async (id) => (calls.push(`liquidate ${id}`), `tx-liq-${id}`),
     ...overrides,
   };
@@ -142,8 +150,10 @@ describe("keeper tick", () => {
     expect(chain.calls).toEqual([]);
   });
 
-  it("pushes depth, refreshes prices before scanning, and keeps going after a failed step", async () => {
+  it("pushes depth, refreshes overdue active prices before scanning, and keeps going after a failed step", async () => {
+    let reads = 0;
     const chain = fakeChain({
+      markets: async () => [{ ...market("NEAR", reads++ === 0 ? PRICE_REFRESH_INTERVAL_MS : 10_000), oi_long: USD }],
       liquidate: async (id) => {
         throw new Error(`Smart contract panicked: ERR_NOT_LIQUIDATABLE ${id}`);
       },
@@ -159,12 +169,93 @@ describe("keeper tick", () => {
         { positionId: 1, error: "Smart contract panicked: ERR_NOT_LIQUIDATABLE 1" },
       ],
     });
+    expect(chain.calls).toContain("refresh_prices NEAR");
   });
 
   it("liquidates every under-margined position", async () => {
     const chain = fakeChain();
     const summary = await runTick(chain, depthSource, () => NOW);
     expect(summary.ok && summary.liquidations.map((l) => l.positionId)).toEqual([3, 1]);
+  });
+
+  it("skips oracle requests for inactive markets, even if they have never had a price", async () => {
+    const chain = fakeChain({ markets: async () => [
+      { ...market("NEAR", PRICE_REFRESH_INTERVAL_MS), price: 0n, price_timestamp_ms: 0 },
+      market("IDLE", PRICE_REFRESH_INTERVAL_MS * 10),
+    ], openPositions: async () => [] });
+    const summary = await runTick(chain, depthSource, () => NOW);
+    expect(chain.calls.filter((call) => call.startsWith("refresh_prices"))).toEqual([]);
+    expect(summary.ok && summary.prices).toEqual({ fresh: 0, total: 2, skipped: true });
+  });
+
+  it("keeps staggered active markets under surveillance without a second bill inside five minutes", async () => {
+    let clock = NOW;
+    let lastRequest = NOW - PRICE_REFRESH_INTERVAL_MS;
+    let requests = 0;
+    const registry = [
+      market("NEAR", PRICE_REFRESH_INTERVAL_MS),
+      market("EXIT", PRICE_REFRESH_INTERVAL_MS),
+      { ...market("FRESH", PRICE_REFRESH_INTERVAL_MS - 10_000), oi_long: USD },
+      market("IDLE", PRICE_REFRESH_INTERVAL_MS * 10),
+    ];
+    const order = entry(1);
+    const exit: Order = { id: 2, account_id: "trader.test", created_at_ms: NOW,
+      request: { kind: "stop_loss", position_id: 99, trigger_price: 0n } };
+    const orphan: Order = { ...exit, id: 3,
+      request: { kind: "stop_loss", position_id: 100, trigger_price: 0n } };
+    const chain = fakeChain({
+      markets: async () => registry.map((m) => ({ ...m })),
+      lastPriceRequestMs: async () => lastRequest,
+      openOrders: async () => [order, { ...order, id: 4 }, exit, orphan],
+      openPositions: async () => [position(99, "EXIT", 90n * USD)],
+      refreshPrices: async (ids) => {
+        requests++;
+        lastRequest = clock;
+        for (const m of registry) if (ids.includes(m.id)) m.price_timestamp_ms = clock;
+        return `tx-prices-${requests}`;
+      },
+      executeOrders: async (ids) => ({ tx: "tx-orders", results: ids.map((order_id) => ({ status: "skipped", order_id })) }),
+    });
+    const noDepth = { sample: async () => [] };
+    await runTick(chain, noDepth, () => clock);
+    expect(registry.slice(0, 3).every((m) => isFreshPrice(m, clock))).toBe(true);
+    expect(registry[3].price_timestamp_ms).toBe(NOW - PRICE_REFRESH_INTERVAL_MS * 10);
+    clock += PRICE_REFRESH_INTERVAL_MS - 1;
+    await runTick(chain, noDepth, () => clock);
+    expect(requests).toBe(1);
+    clock++;
+    await runTick(chain, noDepth, () => clock);
+    expect(requests).toBe(2);
+    expect(registry.slice(0, 3).every((m) => isFreshPrice(m, clock))).toBe(true);
+  });
+
+  it("does not refresh active prices again before the five-minute boundary", async () => {
+    const chain = fakeChain({ markets: async () => [{ ...market("NEAR", PRICE_REFRESH_INTERVAL_MS - 1), oi_long: USD }] });
+    const summary = await runTick(chain, depthSource, () => NOW);
+    expect(chain.calls.filter((call) => call.startsWith("refresh_prices"))).toEqual([]);
+    expect(summary.ok && summary.prices).toEqual({ fresh: 0, total: 1, skipped: true });
+  });
+
+  it.each([NOW - PRICE_REFRESH_INTERVAL_MS + 1, NOW + 1])(
+    "honours a persisted recent request at %s even when the cached price is old after an oracle failure",
+    async (lastRequest) => {
+      const chain = fakeChain({
+        markets: async () => [{ ...market("NEAR", PRICE_REFRESH_INTERVAL_MS * 10), oi_long: USD }],
+        lastPriceRequestMs: async () => lastRequest,
+      });
+      const summary = await runTick(chain, depthSource, () => NOW);
+      expect(chain.calls.filter((call) => call.startsWith("refresh_prices"))).toEqual([]);
+      expect(summary.ok && summary.prices).toEqual({ fresh: 0, total: 1, skipped: true });
+    },
+  );
+
+  it("allows an overdue active-market refresh at the persisted five-minute boundary", async () => {
+    const chain = fakeChain({
+      markets: async () => [{ ...market("NEAR", PRICE_REFRESH_INTERVAL_MS), oi_long: USD }],
+      lastPriceRequestMs: async () => NOW - PRICE_REFRESH_INTERVAL_MS,
+    });
+    await runTick(chain, depthSource, () => NOW);
+    expect(chain.calls.filter((call) => call.startsWith("refresh_prices"))).toEqual(["refresh_prices NEAR"]);
   });
 });
 
@@ -191,18 +282,33 @@ describe("keeper order triggers", () => {
         ? entry(1, kind, side)
         : { id: 1, account_id: p.account_id, created_at_ms: NOW, request: { kind, position_id: 9, trigger_price: 400_000_000n } };
       const above = kind === "limit" || kind === "stop_loss" ? side === "short" : side === "long";
-      expect(findTriggeredOrders([order], [p], [market("NEAR")], NOW)).toEqual([order]);
-      expect(findTriggeredOrders([order], [p], [{ ...market("NEAR"), price: 400_000_000n + (above ? 1n : -1n) }], NOW)).toEqual([order]);
-      expect(findTriggeredOrders([order], [p], [{ ...market("NEAR"), price: 400_000_000n + (above ? -1n : 1n) }], NOW)).toEqual([]);
+      expect(findTriggeredOrders([order], [p], [market("NEAR")])).toEqual([order]);
+      expect(findTriggeredOrders([order], [p], [{ ...market("NEAR"), price: 400_000_000n + (above ? 1n : -1n) }])).toEqual([order]);
+      expect(findTriggeredOrders([order], [p], [{ ...market("NEAR"), price: 400_000_000n + (above ? -1n : 1n) }])).toEqual([]);
     }
   });
 
-  it("does not spend gas on stale prices, unknown markets or orphan exits", () => {
+  it("uses stale observed triggers for contract-side pulls, but skips unknown markets and orphan exits", () => {
     const exit: Order = { id: 2, account_id: "trader.test", created_at_ms: NOW, request: { kind: "stop_loss", position_id: 99, trigger_price: 500_000_000n } };
-    expect(findTriggeredOrders([entry(1), exit], [], [market("NEAR", 120_001)], NOW)).toEqual([]);
-    expect(findTriggeredOrders([entry(1)], [], [], NOW)).toEqual([]);
-    expect(findTriggeredOrders([entry(1)], [], [{ ...market("NEAR"), price: 0n }], NOW)).toEqual([]);
-    expect(findTriggeredOrders([entry(1)], [], [market("NEAR", 120_000)], NOW).map((o) => o.id)).toEqual([1]);
+    expect(findTriggeredOrders([entry(1), exit], [], [market("NEAR", 120_001)])).toEqual([entry(1)]);
+    expect(findTriggeredOrders([entry(1)], [], [])).toEqual([]);
+    expect(findTriggeredOrders([entry(1)], [], [{ ...market("NEAR"), price: 0n }])).toEqual([]);
+    expect(findTriggeredOrders([entry(1)], [], [market("NEAR", 30_000)]).map((o) => o.id)).toEqual([1]);
+    expect(findTriggeredOrders([entry(1)], [], [market("NEAR", 30_001)])).toEqual([entry(1)]);
+  });
+
+  it("submits observed exit triggers regardless of age, without using fallback spread to invent triggers", () => {
+    const p = position(9, "NEAR", 99n * USD);
+    const exit: Order = { id: 2, account_id: p.account_id, created_at_ms: NOW,
+      request: { kind: "stop_loss", position_id: 9, trigger_price: 400_000_000n } };
+    for (const age of [120_001, 600_000]) {
+      expect(findTriggeredOrders([exit], [p], [market("NEAR", age)])).toEqual([exit]);
+    }
+    expect(findTriggeredOrders([exit], [p], [market("NEAR", 120_000)])).toEqual([exit]);
+    expect(findTriggeredOrders([exit], [p], [market("NEAR", 600_001)])).toEqual([exit]);
+    expect(findTriggeredOrders([exit], [p], [
+      { ...market("NEAR", 600_001), price: 400_000_001n },
+    ])).toEqual([]);
   });
 });
 
@@ -314,7 +420,9 @@ describe("keeper v2", () => {
   });
 
   it("isolates failed depth, funding, oracle, order and snapshot steps without suppressing liquidations", async () => {
+    let reads = 0;
     const chain = fakeChain({
+      markets: async () => [{ ...market("NEAR", reads++ === 0 ? PRICE_REFRESH_INTERVAL_MS : 10_000), oi_long: USD }],
       setDepth: async () => { throw new Error("depth failed"); },
       settleFunding: async () => { throw new Error("funding failed"); },
       refreshPrices: async () => { throw new Error("oracle receipt failed"); },
