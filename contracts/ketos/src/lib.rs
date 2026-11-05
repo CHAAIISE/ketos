@@ -18,6 +18,7 @@ pub mod orders;
 pub mod position;
 pub mod pull_prices;
 mod priced_actions;
+pub mod signed_prices;
 pub mod vault;
 pub mod worker_prices;
 
@@ -105,6 +106,7 @@ pub struct Ketos {
     last_price_request_ms: Option<u64>,
     price_deposits: LookupMap<AccountId, u128>,
     price_deposits_total: u128,
+    price_signer: Option<near_sdk::PublicKey>,
 }
 
 #[near]
@@ -151,6 +153,7 @@ impl Ketos {
             last_price_request_ms: None,
             price_deposits: LookupMap::new(StorageKey::PriceDeposits),
             price_deposits_total: 0,
+            price_signer: None,
         };
         for config in default_markets() {
             contract.register_market(config);
@@ -197,13 +200,18 @@ impl FungibleTokenReceiver for Ketos {
         match msg.as_str() {
             MSG_DEPOSIT_MARGIN => self.deposit_margin(&sender_id, amount.0),
             _ if msg.starts_with(MSG_DEPOSIT_VAULT) => {
-                let vault_id = match &msg[MSG_DEPOSIT_VAULT.len()..] {
-                    "core" => VaultId::Core,
-                    "long-tail" => VaultId::LongTail,
-                    _ => env::panic_str("ERR_UNKNOWN_VAULT"),
+                let (vault_id, signed_prices) = match &msg[MSG_DEPOSIT_VAULT.len()..] {
+                    "core" => (VaultId::Core, None),
+                    "long-tail" => (VaultId::LongTail, None),
+                    encoded => {
+                        let request: signed_prices::VaultDepositRequest =
+                            near_sdk::serde_json::from_str(encoded)
+                                .unwrap_or_else(|_| env::panic_str("ERR_UNKNOWN_VAULT"));
+                        (request.vault_id, request.signed_prices)
+                    }
                 };
                 require!(amount.0 >= vault::MIN_VAULT_DEPOSIT, "ERR_MIN_VAULT_DEPOSIT: 1 USDC");
-                if let Some(request) = self.pull_for_vault_deposit(sender_id.clone(), vault_id, amount) {
+                if let Some(request) = self.pull_for_vault_deposit(sender_id.clone(), vault_id, amount, signed_prices) {
                     return PromiseOrValue::Promise(request);
                 }
                 self.deposit_vault(vault_id, &sender_id, amount.0);

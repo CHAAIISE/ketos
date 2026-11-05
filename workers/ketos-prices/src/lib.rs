@@ -7,6 +7,9 @@ pub const MAX_ASSETS: usize = 12;
 pub const MAX_INPUT_BYTES: usize = 1024;
 pub const MAX_OUTPUT_BYTES: usize = 900;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+pub const PRICE_DOMAIN: &str = "ketos:prices:v1";
+pub const MAX_SIGNED_PAYLOAD_BYTES: usize = 3072;
+pub const MAX_SIGNED_OUTPUT_BYTES: usize = 4096;
 pub const MAX_SOURCE_AGE_MS: u64 = 120_000;
 pub const MAX_FUTURE_SKEW_MS: u64 = 5_000;
 
@@ -141,16 +144,54 @@ struct Input {
     assets: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
+enum CommandInput {
+    SignedPrices { assets: Vec<String> },
+    GetPublicKey {},
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireInput {
+    Unsigned(Input),
+    Command(CommandInput),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum Request {
+    Unsigned(Vec<Asset>),
+    SignedPrices(Vec<Asset>),
+    GetPublicKey,
+}
+
+pub fn parse_request(bytes: &[u8]) -> Result<Request> {
+    if bytes.len() > MAX_INPUT_BYTES {
+        return Err("input exceeds 1024 bytes");
+    }
+    match serde_json::from_slice(bytes).map_err(|_| "invalid input JSON")? {
+        WireInput::Unsigned(input) => validate_assets(input.assets).map(Request::Unsigned),
+        WireInput::Command(CommandInput::SignedPrices { assets }) => {
+            validate_assets(assets).map(Request::SignedPrices)
+        }
+        WireInput::Command(CommandInput::GetPublicKey {}) => Ok(Request::GetPublicKey),
+    }
+}
+
 pub fn parse_input(bytes: &[u8]) -> Result<Vec<Asset>> {
     if bytes.len() > MAX_INPUT_BYTES {
         return Err("input exceeds 1024 bytes");
     }
     let input: Input = serde_json::from_slice(bytes).map_err(|_| "invalid input JSON")?;
-    if input.assets.is_empty() || input.assets.len() > MAX_ASSETS {
+    validate_assets(input.assets)
+}
+
+fn validate_assets(symbols: Vec<String>) -> Result<Vec<Asset>> {
+    if symbols.is_empty() || symbols.len() > MAX_ASSETS {
         return Err("assets must contain between 1 and 12 symbols");
     }
-    let mut assets = Vec::with_capacity(input.assets.len());
-    for symbol in input.assets {
+    let mut assets = Vec::with_capacity(symbols.len());
+    for symbol in symbols {
         let asset = SUPPORTED_ASSETS
             .iter()
             .find(|asset| asset.symbol == symbol)
@@ -404,10 +445,274 @@ pub fn encode_output(output: &Output) -> Result<Vec<u8>> {
     Ok(encoded)
 }
 
+#[derive(Debug, Serialize)]
+struct SignedPrice<'a> {
+    price: &'a str,
+    publish_time: u64,
+    sources: &'a [Source],
+}
+
+#[derive(Serialize)]
+struct PricesPayload<'a> {
+    domain: &'static str,
+    prices: BTreeMap<&'static str, SignedPrice<'a>>,
+}
+
+/// Construct the only message this worker may sign. The timestamp is captured
+/// before collection and converted to seconds, never refreshed after HTTP I/O.
+pub fn encode_prices_payload(output: &Output) -> Result<String> {
+    if output.prices.len() > MAX_ASSETS {
+        return Err("signed prices exceed 12 assets");
+    }
+    let mut prices = BTreeMap::new();
+    for (&symbol, Price(price, sources)) in &output.prices {
+        if !SUPPORTED_ASSETS.iter().any(|asset| asset.symbol == symbol) {
+            return Err("unsupported signed asset");
+        }
+        let value = price.parse::<u128>().map_err(|_| "invalid signed price")?;
+        if value == 0 || price.bytes().any(|byte| !byte.is_ascii_digit()) {
+            return Err("invalid signed price");
+        }
+        if !(2..=3).contains(&sources.len())
+            || sources.iter().enumerate().any(|(i, source)| sources[..i].contains(source))
+        {
+            return Err("signed prices require distinct source quorum");
+        }
+        prices.insert(symbol, SignedPrice {
+            price,
+            publish_time: output.timestamp_ms / 1000,
+            sources,
+        });
+    }
+    let payload = serde_json::to_string(&PricesPayload { domain: PRICE_DOMAIN, prices })
+        .map_err(|_| "signed payload serialization failed")?;
+    if payload.len() > MAX_SIGNED_PAYLOAD_BYTES {
+        return Err("signed payload exceeds 3072 bytes");
+    }
+    Ok(payload)
+}
+
+#[derive(Debug, Serialize)]
+pub struct SignedPrices {
+    pub payload: String,
+    pub signature: String,
+    pub public_key: String,
+}
+
+pub fn encode_signed_output(envelope: &SignedPrices) -> Result<Vec<u8>> {
+    let encoded = serde_json::to_vec(envelope).map_err(|_| "signed output serialization failed")?;
+    if encoded.len() > MAX_SIGNED_OUTPUT_BYTES {
+        return Err("signed output exceeds 4096 bytes");
+    }
+    Ok(encoded)
+}
+
+// Actual signing is available only inside the WASI worker. Native compilation
+// enables it solely for deterministic test vectors, never for live prices.
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")))]
+mod signing {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use ed25519_dalek::{Signer, SigningKey};
+    use zeroize::Zeroizing;
+
+    pub struct ProtectedPriceSigner(SigningKey);
+
+    impl ProtectedPriceSigner {
+        /// OutLayer's ed25519_seed generation type is exactly 32 hex bytes.
+        /// Reject other encodings without ever including secret data in errors.
+        pub fn from_protected_seed(encoded: &str) -> Result<Self> {
+            if encoded.len() != 64 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err("invalid protected price seed");
+            }
+            let mut seed = Zeroizing::new([0u8; 32]);
+            for (i, byte) in seed.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&encoded[i * 2..i * 2 + 2], 16)
+                    .map_err(|_| "invalid protected price seed")?;
+            }
+            Ok(Self(SigningKey::from_bytes(&seed)))
+        }
+
+        pub fn public_key(&self) -> String {
+            format!("ed25519:{}", bs58::encode(self.0.verifying_key().as_bytes()).into_string())
+        }
+
+        pub fn sign_prices(&self, output: &Output) -> Result<SignedPrices> {
+            let payload = encode_prices_payload(output)?;
+            let signature = STANDARD.encode(self.0.sign(payload.as_bytes()).to_bytes());
+            Ok(SignedPrices { payload, signature, public_key: self.public_key() })
+        }
+    }
+}
+
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")))]
+pub use signing::ProtectedPriceSigner;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn signed_commands_are_bounded_and_never_accept_caller_payloads() {
+        assert_eq!(
+            parse_request(br#"{"assets":["ETH"]}"#),
+            Ok(Request::Unsigned(vec![asset("ETH")]))
+        );
+        assert_eq!(
+            parse_request(br#"{"command":"signed_prices","assets":["ETH","BTC"]}"#),
+            Ok(Request::SignedPrices(vec![asset("ETH"), asset("BTC")]))
+        );
+        assert_eq!(
+            parse_request(br#"{"command":"get_public_key"}"#),
+            Ok(Request::GetPublicKey)
+        );
+        for invalid in [
+            r#"{"command":"sign","payload":"arbitrary"}"#,
+            r#"{"command":"signed_prices","assets":["ETH"],"payload":"arbitrary"}"#,
+            r#"{"command":"signed_prices","assets":["ETH"],"publish_time":1}"#,
+            r#"{"command":"signed_prices","assets":[]}"#,
+            r#"{"command":"signed_prices","assets":["ETH","ETH"]}"#,
+            r#"{"command":"signed_prices","assets":["usdt"]}"#,
+            r#"{"command":"get_public_key","assets":["ETH"]}"#,
+            r#"{"command":"get_public_key","secret":"other"}"#,
+            r#"{"command":null,"assets":["ETH"]}"#,
+        ] {
+            assert!(parse_request(invalid.as_bytes()).is_err(), "{invalid}");
+        }
+        for count in [12, 13] {
+            let symbols: Vec<_> = SUPPORTED_ASSETS[..count].iter().map(|a| a.symbol).collect();
+            let input = serde_json::to_vec(&json!({
+                "command": "signed_prices", "assets": symbols,
+            })).unwrap();
+            assert_eq!(parse_request(&input).is_ok(), count == MAX_ASSETS);
+        }
+        let mut oversized = br#"{"command":"get_public_key"}"#.to_vec();
+        oversized.resize(MAX_INPUT_BYTES + 1, b' ');
+        assert_eq!(parse_request(&oversized), Err("input exceeds 1024 bytes"));
+    }
+
+    fn signed_fixture() -> Output {
+        Output {
+            timestamp_ms: 1_790_000_000_999,
+            prices: BTreeMap::from([
+                ("ETH", Price("12300000000".to_string(), vec![Source::Coinbase, Source::Kraken])),
+                ("BTC", Price("45600000000".to_string(), vec![Source::Kraken, Source::Binance])),
+            ]),
+        }
+    }
+
+    #[test]
+    fn signed_payload_is_exact_utf8_sorted_json_with_original_seconds_and_sources() {
+        assert_eq!(
+            encode_prices_payload(&signed_fixture()).unwrap(),
+            r#"{"domain":"ketos:prices:v1","prices":{"BTC":{"price":"45600000000","publish_time":1790000000,"sources":["kraken","binance"]},"ETH":{"price":"12300000000","publish_time":1790000000,"sources":["coinbase","kraken"]}}}"#
+        );
+        let output = Output { timestamp_ms: 1_790_000_000_999, prices: BTreeMap::new() };
+        assert_eq!(
+            encode_prices_payload(&output).unwrap(),
+            r#"{"domain":"ketos:prices:v1","prices":{}}"#
+        );
+    }
+
+    #[test]
+    fn signed_payload_rejects_invalid_prices_sources_and_symbols() {
+        for price in ["0", "-1", "+1", "1.2", "1e8", " 1", "340282366920938463463374607431768211456"] {
+            let mut output = signed_fixture();
+            output.prices.get_mut("ETH").unwrap().0 = price.to_string();
+            assert!(encode_prices_payload(&output).is_err(), "{price}");
+        }
+        for sources in [
+            vec![],
+            vec![Source::Coinbase],
+            vec![Source::Coinbase, Source::Coinbase],
+            vec![Source::Coinbase, Source::Kraken, Source::Binance, Source::Kraken],
+        ] {
+            let mut output = signed_fixture();
+            output.prices.get_mut("ETH").unwrap().1 = sources;
+            assert!(encode_prices_payload(&output).is_err());
+        }
+        let mut output = signed_fixture();
+        output.prices.insert("USDT", Price("1".to_string(), vec![Source::Coinbase, Source::Kraken]));
+        assert_eq!(encode_prices_payload(&output), Err("unsupported signed asset"));
+        output.prices = SUPPORTED_ASSETS[..13].iter().map(|asset| (
+            asset.symbol, Price("1".to_string(), vec![Source::Coinbase, Source::Kraken])
+        )).collect();
+        assert_eq!(encode_prices_payload(&output), Err("signed prices exceed 12 assets"));
+    }
+
+    #[test]
+    fn twelve_maximum_prices_and_three_sources_fit_signed_wire_bounds() {
+        let output = Output {
+            timestamp_ms: u64::MAX,
+            prices: SUPPORTED_ASSETS[..MAX_ASSETS].iter().map(|asset| (
+                asset.symbol,
+                Price(u128::MAX.to_string(), vec![Source::Coinbase, Source::Kraken, Source::Binance]),
+            )).collect(),
+        };
+        let payload = encode_prices_payload(&output).unwrap();
+        assert!(payload.len() <= MAX_SIGNED_PAYLOAD_BYTES);
+        let envelope = SignedPrices {
+            payload,
+            signature: "A".repeat(86) + "==",
+            public_key: "ed25519:".to_string() + &"1".repeat(44),
+        };
+        assert!(encode_signed_output(&envelope).unwrap().len() <= MAX_SIGNED_OUTPUT_BYTES);
+        let oversized = SignedPrices { payload: "x".repeat(MAX_SIGNED_OUTPUT_BYTES), ..envelope };
+        assert_eq!(encode_signed_output(&oversized), Err("signed output exceeds 4096 bytes"));
+    }
+
+    #[test]
+    fn deterministic_test_seed_signs_exact_payload_and_tampering_fails() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use ed25519_dalek::{Signature, VerifyingKey};
+
+        // Public RFC 8032 test vector, never a key used for live prices.
+        let signer = ProtectedPriceSigner::from_protected_seed(
+            "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        ).unwrap();
+        let expected_public = [
+            0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+            0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+            0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+            0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+        ];
+        let output = signed_fixture();
+        let envelope = signer.sign_prices(&output).unwrap();
+        let public_bytes = bs58::decode(envelope.public_key.strip_prefix("ed25519:").unwrap())
+            .into_vec().unwrap();
+        assert_eq!(public_bytes, expected_public);
+        assert_eq!(envelope.payload, encode_prices_payload(&output).unwrap());
+        let signature_bytes = STANDARD.decode(&envelope.signature).unwrap();
+        assert_eq!(signature_bytes.len(), 64);
+        assert_eq!(envelope.signature.len(), 88);
+        assert!(envelope.signature.ends_with("=="));
+        let signature = Signature::from_slice(&signature_bytes).unwrap();
+        let public = VerifyingKey::from_bytes(&expected_public).unwrap();
+        public.verify_strict(envelope.payload.as_bytes(), &signature).unwrap();
+        for tampered in [
+            envelope.payload.replace("ketos:prices:v1", "ketos:prices:v2"),
+            envelope.payload.replace("12300000000", "12300000001"),
+            envelope.payload.replace("1790000000", "1790000001"),
+            envelope.payload.replace("coinbase", "binance"),
+        ] {
+            assert!(public.verify_strict(tampered.as_bytes(), &signature).is_err());
+        }
+        assert_eq!(signer.sign_prices(&output).unwrap().signature, envelope.signature);
+        let encoded: serde_json::Value = serde_json::from_slice(&encode_signed_output(&envelope).unwrap()).unwrap();
+        assert_eq!(encoded.as_object().unwrap().len(), 3);
+        assert_eq!(encoded["payload"], envelope.payload);
+    }
+
+    #[test]
+    fn protected_seed_accepts_only_exact_hex32_without_echoing_input() {
+        for invalid in ["", "abc", &"0".repeat(63), &"0".repeat(65), &"z".repeat(64), &"é".repeat(32)] {
+            assert!(matches!(
+                ProtectedPriceSigner::from_protected_seed(invalid),
+                Err("invalid protected price seed")
+            ));
+        }
+    }
 
     fn asset(symbol: &str) -> Asset {
         *SUPPORTED_ASSETS

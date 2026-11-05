@@ -3,6 +3,8 @@ import { z } from "zod";
 import { sampleAsset } from "../intents/depth";
 import { getTokens } from "../intents/oneclick";
 import { nearConfig } from "../near/config";
+import { signedPricesArg, signedPricesFor } from "../near/signed-prices";
+import { workerSignedPrices } from "../near/signed-prices-server";
 import { orderExecutionSchema } from "../near/types";
 import { settleOutcome } from "../near/tx";
 import { KetosViews } from "../near/views";
@@ -10,7 +12,8 @@ import type { DepthSource, KeeperChain } from "./tick";
 
 /** The signer is restricted to the seven maintenance methods on the configured contract. */
 export async function keeperChain(privateKey: string): Promise<KeeperChain> {
-  const { rpcUrl, ketosContract, usdcContract } = nearConfig();
+  const config = nearConfig();
+  const { rpcUrl, ketosContract, usdcContract } = config;
   const views = new KetosViews(rpcUrl, ketosContract, usdcContract);
   const { keeper_id } = await views.config();
   const keeper = new Account(keeper_id, views.provider, KeyPairSigner.fromSecretKey(privateKey as KeyPairString));
@@ -50,11 +53,18 @@ export async function keeperChain(privateKey: string): Promise<KeeperChain> {
       (await call("set_depth", { market_id: market, samples, measured_at_ms: measuredAtMs }, 30)).tx,
     refreshPrices: async (marketIds) => (await call("refresh_prices", { market_ids: marketIds }, 300)).tx,
     executeOrders: async (ids) => {
-      const { tx, value } = await call("execute_orders", { ids }, 300);
+      const prices = await signedPricesFor(config, { kind: "orders", ids }, workerSignedPrices);
+      const { tx, value } = await call("execute_orders", { ids, ...signedPricesArg(prices) }, 300);
       return { tx, results: z.array(orderExecutionSchema).parse(value) };
     },
-    liquidate: async (positionId) => (await call("liquidate", { position_id: positionId }, 300)).tx,
-    liquidateCross: async (accountId) => (await call("liquidate_cross", { account_id: accountId }, 300)).tx,
+    liquidate: async (positionId) => {
+      const prices = await signedPricesFor(config, { kind: "position", positionId }, workerSignedPrices);
+      return (await call("liquidate", { position_id: positionId, ...signedPricesArg(prices) }, 300)).tx;
+    },
+    liquidateCross: async (accountId) => {
+      const prices = await signedPricesFor(config, { kind: "cross", accountId }, workerSignedPrices);
+      return (await call("liquidate_cross", { account_id: accountId, ...signedPricesArg(prices) }, 300)).tx;
+    },
     settleFunding: async (marketId) => (await call("settle_funding", { market_id: marketId }, 10)).tx,
     snapshotVaults: async () => (await call("snapshot_vaults", {}, 50)).tx,
   };

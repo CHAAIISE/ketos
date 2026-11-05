@@ -336,11 +336,11 @@ impl Ketos {
 #[near]
 impl Ketos {
     #[payable]
-    pub fn place_order(&mut self, request: OrderRequest) -> PromiseOrValue<Order> {
+    pub fn place_order(&mut self, request: OrderRequest, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<Order> {
         let account_id = env::predecessor_account_id();
         let ids = request.position_id().map_or_else(Vec::new, |id| self.position_price_market_ids(id));
         let action = crate::pull_prices::PullAction::PlaceOrder { account_id, request: request.clone() };
-        if let Some(promise) = self.pull_for_action(action, ids) {
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(self.place_order_now(request))
@@ -403,11 +403,11 @@ impl Ketos {
     }
 
     #[payable]
-    pub fn execute_orders(&mut self, ids: Vec<OrderId>) -> PromiseOrValue<Vec<OrderExecution>> {
+    pub fn execute_orders(&mut self, ids: Vec<OrderId>, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<Vec<OrderExecution>> {
         require!(ids.len() <= MAX_EXECUTE_ORDERS, "ERR_ORDER_BATCH_TOO_LARGE");
         let markets = self.orders_price_market_ids(&ids);
         let action = crate::pull_prices::PullAction::ExecuteOrders { executor: env::predecessor_account_id(), ids: ids.clone() };
-        if let Some(promise) = self.pull_for_action(action, markets) {
+        if let Some(promise) = self.pull_for_action(action, markets, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(self.execute_orders_now(ids))

@@ -247,6 +247,30 @@ async function main(): Promise<void> {
   await ensureAccount(ids.keeper, BALANCES.keeper, keeperState);
   await ensureContract(ids.usdc, artifacts.usdc, usdcState, { owner_id: parentId });
   await ensureContract(ids.ketos, artifacts.ketos, ketosState, config);
+  const workerManifest = JSON.parse(readFileSync(root("deployments/worker-testnet.json"), "utf8")) as {
+    price_signer?: string; price_signer_attestation_url?: string;
+  };
+  const priceSigner = workerManifest.price_signer;
+  if (!priceSigner?.startsWith("ed25519:") || !workerManifest.price_signer_attestation_url?.startsWith(
+    "https://testnet-api.outlayer.ai/attestations/",
+  )) {
+    throw new Error("Worker manifest needs an attested TEE price signer before deployment");
+  }
+  PublicKey.fromString(priceSigner);
+  const pinnedSigner = await view<string | null>(ids.ketos, "get_price_signer");
+  if (pinnedSigner && pinnedSigner !== priceSigner) {
+    throw new Error("Existing price signer differs from the attested worker; refusing rotation");
+  }
+  if (!pinnedSigner) {
+    await parent.signAndSendTransaction({
+      receiverId: ids.ketos,
+      actions: [actions.functionCall("set_price_signer", { public_key: priceSigner }, teraToGas("20"))],
+      waitUntil: "FINAL",
+    });
+    if (await view<string | null>(ids.ketos, "get_price_signer") !== priceSigner) {
+      throw new Error("Price signer pin was not confirmed");
+    }
+  }
   await validateKetos();
 
   async function ensureKeeperKey(): Promise<string> {

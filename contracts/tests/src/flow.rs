@@ -1578,6 +1578,31 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     assert!(view(&ketos, "get_positions", json!({ "account_id": pull_trader.id() })).await?
         .as_array().unwrap().is_empty());
 
+    // A signed batch bypasses the sleeping oracle without spending its deposit.
+    use base64::Engine as _;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    let feed_key = SigningKey::from_bytes(&[17; 32]);
+    let public_key = format!("ed25519:{}", bs58::encode(feed_key.verifying_key().as_bytes()).into_string());
+    let unauthorized = err(pull_trader.call(ketos.id(), "set_price_signer")
+        .args_json(json!({ "public_key": public_key })).transact().await);
+    assert!(unauthorized.contains("private"), "{unauthorized}");
+    ok(ketos.call("set_price_signer").args_json(json!({ "public_key": public_key })).transact().await?);
+    assert_eq!(view(&ketos, "get_price_signer", json!({})).await?, public_key);
+    let timestamp = now_ms(&worker).await? / 1_000;
+    let payload = json!({ "domain": "ketos:prices:v1", "prices": {
+        "NEAR": { "price": "420000000", "publish_time": timestamp, "sources": ["coinbase", "kraken"] },
+    }}).to_string();
+    let signature = base64::engine::general_purpose::STANDARD.encode(feed_key.sign(payload.as_bytes()).to_bytes());
+    let signed_open = pull_trader.call(ketos.id(), "open_position").args_json(json!({
+        "market_id": "NEAR", "side": "long", "margin": (25 * USD).to_string(), "leverage": 2,
+        "signed_prices": { "payload": payload, "signature": signature, "public_key": public_key },
+    })).gas(Gas::from_tgas(100)).transact().await?;
+    assert!(signed_open.receipt_failures().is_empty(), "{:?}", signed_open.receipt_failures());
+    let signed_position = ok(signed_open);
+    assert_eq!(signed_position["entry_price"], "420000000");
+    assert_eq!(signed_position["size"], (50 * USD).to_string());
+    assert_eq!(margin(&ketos, &pull_trader).await?, margin_before - 25 * USD);
+
     // The keeper key cannot reach anything beyond its seven methods.
     let open = err(bot
         .call(ketos.id(), "open_position")

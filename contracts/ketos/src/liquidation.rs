@@ -58,10 +58,10 @@ pub fn split_equity(equity: i128, size: u128) -> (u128, u128, u128) {
 #[near]
 impl Ketos {
     #[payable]
-    pub fn liquidate(&mut self, position_id: PositionId) -> PromiseOrValue<LiquidationRecord> {
+    pub fn liquidate(&mut self, position_id: PositionId, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<LiquidationRecord> {
         let ids = self.position_price_market_ids(position_id);
         let action = crate::pull_prices::PullAction::Liquidate { liquidator: env::predecessor_account_id(), position_id };
-        if let Some(promise) = self.pull_for_action(action, ids) {
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(self.liquidate_now(position_id))

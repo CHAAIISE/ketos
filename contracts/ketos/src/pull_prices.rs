@@ -89,7 +89,9 @@ impl Ketos {
         &mut self,
         action: PullAction,
         market_ids: Vec<MarketId>,
+        signed_prices: Option<crate::signed_prices::SignedPrices>,
     ) -> Option<Promise> {
+        self.apply_signed_prices(signed_prices.as_ref(), &market_ids);
         let requests = self.stale_action_markets(market_ids);
         let required = self.action_request_cost(requests.iter().map(|(id, _)| id));
         let caller = env::predecessor_account_id();
@@ -116,8 +118,10 @@ impl Ketos {
         account_id: AccountId,
         vault_id: VaultId,
         amount: U128,
+        signed_prices: Option<crate::signed_prices::SignedPrices>,
     ) -> Option<Promise> {
         let market_ids = self.vault_price_market_ids(vault_id);
+        self.apply_signed_prices(signed_prices.as_ref(), &market_ids);
         let requests = self.stale_action_markets(market_ids);
         let required = self.action_request_cost(requests.iter().map(|(id, _)| id));
         let credit = self.price_deposits.get(&account_id).copied().unwrap_or(0);
@@ -421,9 +425,9 @@ impl Ketos {
     }
     /// Funded single-market pull, also used to price a newly registered market.
     #[payable]
-    pub fn pull_market_price(&mut self, market_id: MarketId) -> PromiseOrValue<U128> {
+    pub fn pull_market_price(&mut self, market_id: MarketId, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<U128> {
         let action = PullAction::MarketPrice { market_id: market_id.clone() };
-        if let Some(promise) = self.pull_for_action(action, vec![market_id.clone()]) {
+        if let Some(promise) = self.pull_for_action(action, vec![market_id.clone()], signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(U128(

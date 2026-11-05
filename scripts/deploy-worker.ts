@@ -63,6 +63,15 @@ try {
     wasm_url: url,
     wasm_sha256: sha256,
     build_target: "wasm32-wasip2",
+    signed_prices: {
+      domain: "ketos:prices:v1",
+      commands: ["signed_prices", "get_public_key"],
+      // HTTPS uses the plural `secrets_ref`; keep unsigned requests secret-free.
+      secrets_ref: { profile: "price-signing", account_id: owner },
+      public_key_format: "ed25519:base58",
+      signature_format: "base64",
+      max_assets: 12,
+    },
   };
   writeFileSync(join(root, "deployments/worker-testnet.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   console.log(`Deployed ${manifest.project_id} at version ${sha256}`);

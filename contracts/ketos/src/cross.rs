@@ -356,10 +356,10 @@ impl Ketos {
     }
 
     #[payable]
-    pub fn liquidate_cross(&mut self, account_id: AccountId) -> PromiseOrValue<Vec<LiquidationRecord>> {
+    pub fn liquidate_cross(&mut self, account_id: AccountId, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<Vec<LiquidationRecord>> {
         let ids = self.cross_price_market_ids(&account_id);
         let action = crate::pull_prices::PullAction::LiquidateCross { liquidator: env::predecessor_account_id(), account_id: account_id.clone() };
-        if let Some(promise) = self.pull_for_action(action, ids) {
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(self.liquidate_cross_now(account_id))

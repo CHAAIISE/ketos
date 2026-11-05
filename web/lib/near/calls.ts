@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { NearConfig } from "./config";
 import type { NearTransaction } from "./tx";
+import { signedPricesArg, signedPricesFor, type PriceContracts } from "./signed-prices";
 import type { MarginMode, MarketId, PriceSource, Side, VaultId } from "./types";
 import { KetosViews } from "./views";
 
@@ -19,7 +20,6 @@ export const LISTING_FEE = 5_000_000n;
 export const depositVaultMsg = (vaultId: VaultId) => `deposit_vault:${vaultId}`;
 
 type Contracts = Pick<NearConfig, "ketosContract" | "usdcContract">;
-type PriceContracts = Contracts & Pick<NearConfig, "rpcUrl">;
 
 async function requestDeposit(c: PriceContracts, method: string, args: Record<string, unknown>): Promise<bigint> {
   const views = new KetosViews(c.rpcUrl, c.ketosContract, c.usdcContract);
@@ -97,6 +97,9 @@ export interface OpenPositionArgs {
 }
 
 export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, accountId: string): Promise<NearTransaction> {
+  const prices = await signedPricesFor(c, {
+    kind: "open", market: args.marketId, accountId, marginMode: args.marginMode ?? "isolated",
+  });
   return call(c.ketosContract, "open_position", {
     market_id: args.marketId,
     side: args.side,
@@ -104,30 +107,35 @@ export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, 
     leverage: args.leverage,
     brackets: bracketsArg(args.brackets),
     margin_mode: args.marginMode ?? "isolated",
+    ...signedPricesArg(prices),
   }, await requestDeposit(c, "get_open_price_request_deposit", {
     market: args.marketId, account_id: accountId, margin_mode: args.marginMode ?? "isolated",
   }), PULL_GAS);
 }
 
 export async function closePositionTx(c: PriceContracts, positionId: number): Promise<NearTransaction> {
-  return call(c.ketosContract, "close_position", { position_id: positionId },
-    await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
+  return call(c.ketosContract, "close_position", {
+    position_id: positionId, ...signedPricesArg(await signedPricesFor(c, { kind: "position", positionId })),
+  }, await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
 }
 
 /** Funds adapter batches for the order markets, including position-backed exits. */
 export async function executeOrdersTx(c: PriceContracts, ids: number[]): Promise<NearTransaction> {
-  return call(c.ketosContract, "execute_orders", { ids },
-    await requestDeposit(c, "get_orders_price_request_deposit", { ids }), PULL_GAS);
+  return call(c.ketosContract, "execute_orders", {
+    ids, ...signedPricesArg(await signedPricesFor(c, { kind: "orders", ids })),
+  }, await requestDeposit(c, "get_orders_price_request_deposit", { ids }), PULL_GAS);
 }
 
 export async function liquidateTx(c: PriceContracts, positionId: number): Promise<NearTransaction> {
-  return call(c.ketosContract, "liquidate", { position_id: positionId },
-    await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
+  return call(c.ketosContract, "liquidate", {
+    position_id: positionId, ...signedPricesArg(await signedPricesFor(c, { kind: "position", positionId })),
+  }, await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
 }
 
 export async function liquidateCrossTx(c: PriceContracts, accountId: string): Promise<NearTransaction> {
-  return call(c.ketosContract, "liquidate_cross", { account_id: accountId },
-    await requestDeposit(c, "get_cross_price_request_deposit", { account_id: accountId }), PULL_GAS);
+  return call(c.ketosContract, "liquidate_cross", {
+    account_id: accountId, ...signedPricesArg(await signedPricesFor(c, { kind: "cross", accountId })),
+  }, await requestDeposit(c, "get_cross_price_request_deposit", { account_id: accountId }), PULL_GAS);
 }
 
 /**
@@ -157,7 +165,9 @@ export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Pro
   const deposit = "positionId" in args
     ? await requestDeposit(c, "get_position_price_request_deposit", { position_id: args.positionId })
     : 0n;
-  return call(c.ketosContract, "place_order", { request }, deposit, "positionId" in args ? PULL_GAS : GAS);
+  const prices = "positionId" in args
+    ? await signedPricesFor(c, { kind: "position", positionId: args.positionId }) : null;
+  return call(c.ketosContract, "place_order", { request, ...signedPricesArg(prices) }, deposit, "positionId" in args ? PULL_GAS : GAS);
 }
 
 /** Cancels a pending order; reserved margin returns to free margin. */
@@ -183,7 +193,9 @@ export function switchToCrossTx(c: Contracts, positionId: number): NearTransacti
 /** Fund the maximum oracle cost first, then transfer USDC; observe each result in order. */
 export async function depositVaultTx(c: PriceContracts, vaultId: VaultId, amount: bigint): Promise<NearTransaction[]> {
   const deposit = await vaultPriceRequestDeposit(c, vaultId);
-  const transfer = transferCallTx(c, amount, depositVaultMsg(vaultId), PULL_GAS);
+  const prices = await signedPricesFor(c, { kind: "vault", vaultId });
+  const msg = prices ? `deposit_vault:${JSON.stringify({ vault_id: vaultId, signed_prices: prices })}` : depositVaultMsg(vaultId);
+  const transfer = transferCallTx(c, amount, msg, PULL_GAS);
   return deposit > 0n ? [fundPriceRequestsTx(c, deposit), transfer] : [transfer];
 }
 
@@ -198,8 +210,10 @@ export function withdrawPriceDepositTx(c: Contracts): NearTransaction {
 
 /** Burns `shares` vault shares for USDC at a freshly priced NAV. */
 export async function withdrawVaultTx(c: PriceContracts, vaultId: VaultId, shares: bigint): Promise<NearTransaction> {
-  return call(c.ketosContract, "withdraw_vault", { vault_id: vaultId, shares: shares.toString() },
-    (await vaultPriceRequestDeposit(c, vaultId)) + ONE_YOCTO, PULL_GAS);
+  return call(c.ketosContract, "withdraw_vault", {
+    vault_id: vaultId, shares: shares.toString(),
+    ...signedPricesArg(await signedPricesFor(c, { kind: "vault", vaultId })),
+  }, (await vaultPriceRequestDeposit(c, vaultId)) + ONE_YOCTO, PULL_GAS);
 }
 
 export interface ListMarketArgs {
@@ -216,15 +230,18 @@ export interface ListMarketArgs {
  * market stays closed ("measuring") until the keeper publishes its first depth sample. An
  * initial price request follows the observed successful listing, funded by its creator.
  */
-export function listMarketTx(c: Contracts, args: ListMarketArgs): NearTransaction[] {
+export async function listMarketTx(c: PriceContracts, args: ListMarketArgs): Promise<NearTransaction[]> {
   const request = {
     symbol: args.symbol,
     oracle_asset_id: args.oracleAssetId,
     intents_asset_id: args.intentsAssetId,
     price_source: args.priceSource,
   };
+  const prices = await signedPricesFor(c, { kind: "markets", markets: [args.symbol] });
   return [
     transferCallTx(c, LISTING_FEE, `${MSG_LIST_MARKET}${JSON.stringify(request)}`),
-    call(c.ketosContract, "pull_market_price", { market_id: args.symbol }, 20_000_000_000_000_000_000_000n, PULL_GAS),
+    call(c.ketosContract, "pull_market_price", {
+      market_id: args.symbol, ...signedPricesArg(prices),
+    }, 20_000_000_000_000_000_000_000n, PULL_GAS),
   ];
 }

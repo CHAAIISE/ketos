@@ -243,13 +243,13 @@ impl Ketos {
 #[near]
 impl Ketos {
     #[payable]
-    pub fn withdraw_vault(&mut self, vault_id: VaultId, shares: U128) -> Promise {
+    pub fn withdraw_vault(&mut self, vault_id: VaultId, shares: U128, signed_prices: Option<crate::signed_prices::SignedPrices>) -> Promise {
         require!(env::attached_deposit().as_yoctonear() >= 1, "ERR_ONE_YOCTO_REQUIRED");
         let action = crate::pull_prices::PullAction::WithdrawVault {
             account_id: env::predecessor_account_id(), vault_id, shares,
         };
         let ids = self.vault_price_market_ids(vault_id);
-        if let Some(promise) = self.pull_for_action(action, ids) {
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return promise;
         }
         self.withdraw_vault_for(env::predecessor_account_id(), vault_id, shares)

@@ -416,6 +416,7 @@ impl Ketos {
     pub fn open_position(
         &mut self, market_id: MarketId, side: Side, margin: U128, leverage: u32,
         brackets: Option<Brackets>, margin_mode: Option<MarginMode>,
+        signed_prices: Option<crate::signed_prices::SignedPrices>,
     ) -> PromiseOrValue<PositionView> {
         let account_id = env::predecessor_account_id();
         let ids = self.open_price_market_ids(&market_id, &account_id, margin_mode.unwrap_or_default());
@@ -423,20 +424,20 @@ impl Ketos {
             account_id, market_id: market_id.clone(), side, margin, leverage,
             brackets: brackets.clone(), margin_mode: margin_mode.unwrap_or_default(),
         };
-        if let Some(promise) = self.pull_for_action(action, ids) {
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(self.open_position_now(market_id, side, margin, leverage, brackets, margin_mode))
     }
 
     #[payable]
-    pub fn close_position(&mut self, position_id: PositionId) -> PromiseOrValue<U128> {
+    pub fn close_position(&mut self, position_id: PositionId, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<U128> {
         let position = self.positions.get(&position_id).unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
         let account_id = env::predecessor_account_id();
         require!(position.account_id == account_id, "ERR_NOT_OWNER");
         let ids = vec![position.market_id.clone()];
         let action = crate::pull_prices::PullAction::Close { account_id, position_id };
-        if let Some(promise) = self.pull_for_action(action, ids) {
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
         PromiseOrValue::Value(self.close_position_now(position_id))

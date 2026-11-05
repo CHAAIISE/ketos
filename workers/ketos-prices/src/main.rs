@@ -1,11 +1,13 @@
 #[cfg(all(target_arch = "wasm32", target_os = "wasi", target_env = "p2"))]
 mod worker {
     use ketos_prices::{
-        collect_prices, encode_output, parse_input, parse_source, usdt_to_usd, Asset, Output,
-        Source, MAX_RESPONSE_BYTES, USDT_USD,
+        collect_prices, encode_output, encode_signed_output, parse_request, parse_source,
+        usdt_to_usd, Asset, Output, ProtectedPriceSigner, Request, Source, MAX_RESPONSE_BYTES,
+        USDT_USD,
     };
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     use wasi_http_client::Client;
+    use zeroize::Zeroizing;
 
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     const REQUEST_BUDGET: Duration = Duration::from_secs(5);
@@ -81,9 +83,29 @@ mod worker {
         }
     }
 
+    fn price_signer() -> Result<ProtectedPriceSigner, String> {
+        // The keystore injects this TEE-generated profile value into WASI env.
+        // Never log the environment, seed, or a parse error containing its value.
+        let seed = Zeroizing::new(
+            std::env::var("PROTECTED_KETOS_PRICE_KEY")
+                .map_err(|_| "protected price signing secret unavailable".to_string())?,
+        );
+        ProtectedPriceSigner::from_protected_seed(&seed).map_err(str::to_string)
+    }
+
     pub fn run() -> Result<(), String> {
         let input = outlayer::env::input();
-        let assets = parse_input(&input).map_err(str::to_string)?;
+        let (assets, signer) = match parse_request(&input).map_err(str::to_string)? {
+            Request::Unsigned(assets) => (assets, None),
+            Request::SignedPrices(assets) => (assets, Some(price_signer()?)),
+            Request::GetPublicKey => {
+                let public_key = price_signer()?.public_key();
+                let output = serde_json::to_vec(&serde_json::json!({ "public_key": public_key }))
+                    .map_err(|_| "public key serialization failed".to_string())?;
+                outlayer::env::output(&output);
+                return Ok(());
+            }
+        };
         // Capture before every source/FX fetch, not when slow network calls finish.
         let timestamp_ms = now_ms()?;
         let execution_start = Instant::now();
@@ -106,10 +128,17 @@ mod worker {
                 }
             }
         });
-        let output = encode_output(&Output {
+        let prices = Output {
             timestamp_ms,
             prices,
-        })
+        };
+        let output = match signer {
+            Some(signer) => {
+                let envelope = signer.sign_prices(&prices).map_err(str::to_string)?;
+                encode_signed_output(&envelope)
+            }
+            None => encode_output(&prices),
+        }
         .map_err(str::to_string)?;
         outlayer::env::output(&output);
         Ok(())

@@ -20,6 +20,7 @@ mod listing;
 mod orders;
 mod oracle_policy;
 mod pull_prices;
+mod signed_prices;
 mod vaults;
 mod worker_prices;
 

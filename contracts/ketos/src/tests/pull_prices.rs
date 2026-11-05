@@ -30,7 +30,7 @@ fn cache_boundary_opens_immediately_then_requires_a_pull_without_locking_margin(
     let mut ketos = trading_setup();
     let cost = ketos.get_price_request_deposit("NEAR".into()).0;
     funded_context("alice.test", T0_MS + 15_000, cost);
-    let PromiseOrValue::Value(p) = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None)
+    let PromiseOrValue::Value(p) = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None, None)
         else { panic!("15-second cache is usable"); };
     assert_eq!((p.entry_price.0, p.size.0), (P4, 100 * USD));
     let refunded: u128 = get_created_receipts().into_iter().filter(|r| r.receiver_id == id("alice.test"))
@@ -38,7 +38,7 @@ fn cache_boundary_opens_immediately_then_requires_a_pull_without_locking_margin(
     assert_eq!(refunded, cost);
     let before = margin(&ketos, "alice.test");
     funded_context("alice.test", T0_MS + 15_001, cost);
-    assert!(matches!(ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None), PromiseOrValue::Promise(_)));
+    assert!(matches!(ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None, None), PromiseOrValue::Promise(_)));
     assert_eq!(margin(&ketos, "alice.test"), before);
     assert_eq!(ketos.get_positions(id("alice.test")).len(), 1);
 }
@@ -109,7 +109,7 @@ fn another_users_prepaid_oracle_credit_cannot_fund_keeper_spending() {
         .account_balance(NearToken::from_yoctonear(credit + locked))
         .prepaid_gas(Gas::from_tgas(300)).build());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        drop(ketos.open_position("NEAR".into(), Side::Long, U128(USD), 1, None, None));
+        drop(ketos.open_position("NEAR".into(), Side::Long, U128(USD), 1, None, None, None));
     }));
     assert!(result.is_err());
     assert_eq!(ketos.get_price_deposit(id("alice.test")).0, credit);

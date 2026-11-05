@@ -306,9 +306,7 @@ impl Market {
     }
 }
 
-/// Initial registry; new markets use the same configuration and risk machinery.
-pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
-    [
+pub(crate) const TEE_MARKETS: [(&str, &str, &str, VaultId); 7] = [
         ("BTC", "nbtc.bridge.near", "btc.omft.near", VaultId::Core),
         ("ETH", "aurora", "eth.omft.near", VaultId::Core),
         ("NEAR", "wrap.near", "wrap.near", VaultId::Core),
@@ -321,7 +319,11 @@ pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
             VaultId::LongTail,
         ),
         ("RHEA", "token.rhealab.near", "token.rhealab.near", VaultId::LongTail),
-    ]
+];
+
+/// Initial registry; new markets use the same configuration and risk machinery.
+pub fn default_markets() -> impl Iterator<Item = MarketConfig> {
+    TEE_MARKETS
     .into_iter()
     .map(|(symbol, oracle_asset_id, intents_asset_id, vault_id)| MarketConfig {
         symbol: symbol.into(),
