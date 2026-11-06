@@ -23,8 +23,8 @@ async function singlePrimary(page: Page) {
 
 async function capture(page: Page, name: string) {
   const phase = process.env.UX_CAPTURE_PHASE;
-  if (phase !== "avant" && phase !== "apres") return;
-  const dir = join(__dirname, "../../.hack/design/self");
+  const dir = process.env.UX_CAPTURE_DIR;
+  if (!dir || (phase !== "avant" && phase !== "apres")) return;
   await mkdir(dir, { recursive: true });
   await page.screenshot({ path: join(dir, `ux-v3-${name}-${phase}.png`), fullPage: true });
 }

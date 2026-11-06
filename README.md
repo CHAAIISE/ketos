@@ -160,7 +160,7 @@ Prefix that JSON with `open:`. This commits 50 USDC plus two execution rewards a
 
 Pending oracle funds are not credited as spendable USDC margin. Price failures and admission refusals return the full unused USDC through the token resolver; rejected wallet-funded resting entries return their margin and all unused rewards by token transfer. `close_position(position_id, to_wallet?, signed_prices?)` and `cancel_order(order_id, to_wallet?)` default to wallet settlement. Explicit `to_wallet: false` retains proceeds in free margin. Only funds released by that action are sent, including unused bracket rewards; cross settlement cash remains committed until the last cross leg closes. Failed outgoing token transfers restore the released amount to withdrawable margin. Successful wallet entries and exits are recorded as actual collateral transfers in account history.
 
-The current [browser ticket](web/components/trade/order-ticket.tsx) uses this wallet-funded API by default, including oracle funding in the same token transaction. It also allows existing free margin as an explicit funding source; wallet and free margin cannot be combined within one order. [The browser regression](web/e2e/wallet-trading.spec.ts) checks one wallet nonce increment per entry, no free-margin deposit, TP/SL reservations, wallet refunds and optional retention on Ketos. This frontend cutover is not deployed to the hosted app yet. A [live 5-USDC wallet entry](https://testnet.nearblocks.io/txns/623JM31hEiD944Jmu8q3bo2XBp4c97qm9imxcT6131oh) and [wallet settlement](https://testnet.nearblocks.io/txns/4F4dMxk4GGwoCFhyXDK6LubumgDHRDzy1KHMwbBD5GMC) previously exercised the migrated contract; these are project test-account transactions, not external-user activity.
+The current [browser ticket](web/components/trade/order-ticket.tsx) uses this wallet-funded API by default, including oracle funding in the same token transaction. It also allows existing free margin as an explicit funding source; wallet and free margin cannot be combined within one order. [The browser regression](web/e2e/wallet-trading.spec.ts) checks one wallet nonce increment per entry, no free-margin deposit, TP/SL reservations, wallet refunds and optional retention on Ketos. This frontend cutover was deployed on November 6, 2026; hosted inspection covered disconnected screens and unsent previews, not retail-wallet signing. A [live 5-USDC wallet entry](https://testnet.nearblocks.io/txns/623JM31hEiD944Jmu8q3bo2XBp4c97qm9imxcT6131oh) and [wallet settlement](https://testnet.nearblocks.io/txns/4F4dMxk4GGwoCFhyXDK6LubumgDHRDzy1KHMwbBD5GMC) previously exercised the migrated contract; these are project test-account transactions, not external-user activity.
 
 ### Markets, vaults and account records
 
@@ -326,6 +326,8 @@ This spends testnet funds and paid worker calls. Keep `NEAR_PRIVATE_KEY`, `KEEPE
 
 Every broadcast is checkpointed with its public transaction hash. Confirmed steps are not replayed on rerun; an uncertain or failed broadcast stops the session for reconciliation rather than sending twice. A bounded observation window waits for a genuinely profitable close after entry/exit fees, borrow and funding. No gain is fabricated if prices do not move enough. A liquidation is submitted by the restricted keeper only when a real position becomes eligible; otherwise the evidence records that none was eligible. Existing positions and pending orders remain onchain after the command exits.
 
+The resumable checkpoint is `out/demo-session.json` (ignored). Preserve it together with the original local trader keys; deleting it discards the transaction-replay guard. Deployment preflight and preservation reports are written separately under `out/deployments/`.
+
 **Price availability:** Long-tail LP deposits require fresh supported prices for every market in the vault. AURORA/RHEA are retired through a private upgrade operation that refuses nonzero open interest or outstanding positions/orders and preserves balances, LP shares and histories; fresh deployments exclude them. The session still requires both LP holdings and a genuinely profitable close. Missing prices cause refunds or an explicit failure, never a relaxed freshness threshold or a substituted price.
 
 ### Keep maintenance running
@@ -363,7 +365,11 @@ On November 6, 2026, all eight smoke cases passed against the hosted V3 frontend
 
 The local journey labels all 12 scenes separately. It checks vault-backed refusal without losing margin and keeps the cap recovery action usable. The [wallet scenario](web/e2e/wallet-trading.spec.ts) waits for the stored mark to become close-only, then proves a one-transaction entry refreshes it; it also checks visible keeper reservations against actual wallet debits, cancellation refunds and wallet payouts.
 
+Optional UX screenshots require both `UX_CAPTURE_PHASE=avant` or `apres` and an explicit `UX_CAPTURE_DIR`. Keep captures outside version control.
+
 The [CI workflow](.github/workflows/ci.yml) runs frontend typecheck, lint, Vitest and production build on Node 24, plus the native contract-workspace and worker tests on Rust stable. Sandbox integration and hosted smoke are the separate commands above. The repository is licensed under [MIT](LICENSE).
+
+Verified November 6, 2026: typecheck, lint and production/WASM builds passed; 463 Vitest cases, 299 contract unit tests, three sandbox integration cases, all 12 local browser cases and all eight hosted smoke cases passed. The hosted run followed real maintenance and a paid fresh UNI observation; it is not a continuous-availability guarantee. The history scan found no secrets.
 
 ### Public read APIs
 

@@ -282,9 +282,9 @@ async function main(): Promise<void> {
     accounts: {}, views: [], share_holders: [], transactions: [],
     target_hashes: { ketos: artifacts.ketos.hash, usdc: artifacts.usdc.hash },
   };
-  const auditPath = root(`.hack/audit/t53-deployment-${block.header.height}-${Date.now()}.json`);
+  const auditPath = root(`out/deployments/deployment-${block.header.height}-${Date.now()}.json`);
   function saveAudit(): void {
-    mkdirSync(root(".hack/audit"), { recursive: true });
+    mkdirSync(root("out/deployments"), { recursive: true });
     writeFileSync(auditPath, `${JSON.stringify(audit, (_key, value: unknown) =>
       typeof value === "bigint" ? value.toString() : value, 2)}\n`, { mode: 0o600 });
   }

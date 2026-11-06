@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   const views = new KetosViews(config.rpcUrl, config.ketosContract, config.usdcContract);
   const burner = new Account(nearAccountId(), views.provider, requireEnv("NEAR_PRIVATE_KEY") as KeyPairString);
   const keeper = new Account(deployment.keeper, views.provider, requireEnv("KEEPER_PRIVATE_KEY") as KeyPairString);
-  const reportPath = root(".hack/audit/demo-session.json");
+  const reportPath = root("out/demo-session.json");
   const report: Report = existsSync(reportPath) ? reportSchema.parse(JSON.parse(readFileSync(reportPath, "utf8"))) : {
     network: "testnet", contract: config.ketosContract, started_at: new Date().toISOString(),
     accounts: [], steps: [], measurements: [], observations: [],
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   assert.equal(report.network, "testnet");
   assert.equal(report.contract, config.ketosContract);
   function save(): void {
-    mkdirSync(root(".hack/audit"), { recursive: true });
+    mkdirSync(root("out"), { recursive: true });
     writeFileSync(reportPath, `${JSON.stringify(report, (_key, v: unknown) => typeof v === "bigint" ? v.toString() : v, 2)}\n`, { mode: 0o600 });
   }
   // Never replay an ambiguous broadcast: reconcile its public transaction before resuming.
@@ -355,7 +355,7 @@ async function main(): Promise<void> {
   } while (Date.now() <= deadline);
   if (!report.liquidation) report.observations.push({ status: "not_eligible", reason: "No naturally liquidatable demo position observed; prices were never modified." });
   await verifySession();
-  console.log(`Session complete: ${report.steps.filter((step) => step.status === "confirmed").length} confirmed transactions. Evidence: .hack/audit/demo-session.json`);
+  console.log(`Session complete: ${report.steps.filter((step) => step.status === "confirmed").length} confirmed transactions. Evidence: out/demo-session.json`);
 }
 
 main().catch((error: unknown) => {
