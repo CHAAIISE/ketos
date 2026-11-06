@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Market } from "@/lib/near/types";
+import type { Market } from "../near/types";
 import { USDC_NEAR_ASSET_ID, type OneClickToken } from "./oneclick";
 
 /** Same ticker rule as `list_market` in the contract. */

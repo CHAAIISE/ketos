@@ -10,7 +10,7 @@ The full transaction journey is reproducible with `pnpm --dir web exec playwrigh
 
 **Video:** the 12-scene recording is not yet published; there is no public video URL. The local journey above is executable now.
 
-The hosted app shows current onchain state, not a seeded trading session. Markets can be closed, histories empty and the leaderboard unpopulated. Filling a ticket is a preview, not an executed trade. The app never overrides safety checks to reproduce a screenshot.
+Activity on the hosted app comes from our own test accounts, not independent users. The [real session script](scripts/demo-session.ts) funds three dedicated accounts and sends actual transactions to the deployed contracts: [ETH long with TP/SL](https://testnet.nearblocks.io/txns/7HepDCWwveH4efesbfJHmmvvqzPMhZSzyLZywXZWA67g), [XRP short](https://testnet.nearblocks.io/txns/B4UPb5LE6QkiPB4xdDWC61fJi1HqFEDvdNH5YUofiW5T) and [BTC limit order](https://testnet.nearblocks.io/txns/8tzC4MotZofkphL5Tu7nUNHZ6NFjwbD8yFY6QujS4Us9). Markets can still close and orders can remain unfilled. The app never overrides safety checks to reproduce a screenshot.
 
 ### Try without a wallet
 
@@ -248,6 +248,20 @@ bash scripts/deploy-testnet.sh --faucet
 
 The [provisioner](scripts/deploy-faucet.ts) privately generates `FAUCET_PRIVATE_KEY`, saves it to root/web `.env.local`, creates `faucet.ketos.testnet` with 3 NEAR and preserves every existing token balance and cooldown through an atomic code/state migration. It rejects unknown layouts or mismatched keys and keeps the burner's 2-NEAR reserve. A healthy rerun sends no transaction. Only this dedicated faucet key belongs on the server; funding and contract-deployment keys stay local.
 
+### Run a real testnet session
+
+[`pnpm demo:session`](scripts/demo-session.ts) uses three dedicated subaccounts of `ketos-dev.testnet`. It creates each with 1 NEAR from the burner, claims faucet USDC and deposits margin, opens an ETH long with TP/SL and XRP/ETH shorts, places a BTC sell limit above the current price, attempts LP deposits into both vaults and lists UNI or a supported reserve asset only after a real $10,000 exit quote qualifies.
+
+```bash
+pnpm demo:session --wait-seconds=1800
+pnpm demo:session --verify
+```
+
+This spends testnet funds and paid worker calls. Keep `NEAR_PRIVATE_KEY`, `KEEPER_PRIVATE_KEY` and `OUTLAYER_PAYMENT_KEY` local. The script generates `DEMO_TRADER_KEYS` only in the ignored root `.env.local` with mode 0600; never upload these trader keys to Vercel. It refuses existing accounts with unknown ownership and preserves the burner's 2-NEAR reserve.
+
+Every broadcast is checkpointed with its public transaction hash. Confirmed steps are not replayed on rerun; an uncertain or failed broadcast stops the session for reconciliation rather than sending twice. A bounded observation window waits for a genuinely profitable close after entry/exit fees, borrow and funding. No gain is fabricated if prices do not move enough. A liquidation is submitted by the restricted keeper only when a real position becomes eligible; otherwise the evidence records that none was eligible. Existing positions and pending orders remain onchain after the command exits.
+
+**Current live prerequisite:** Long-tail LP deposits cannot complete while AURORA/RHEA lack fresh supported prices. Their configured venue set does not produce a valid two-source signed batch, and the production oracle's observed 300-second recency bound fails the action policy. The command preserves confirmed actions, records full token refunds from failed oracle pulls, and fails final verification if either LP holding is missing. It never drops these assets, weakens freshness or substitutes a price to finish the session.
 
 ### Keep maintenance running
 

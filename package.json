@@ -13,7 +13,8 @@
     "contracts:build": "bash scripts/build-contracts.sh",
     "contracts:test": "pnpm contracts:build && cd contracts && cargo test --workspace && cargo test --manifest-path tests/Cargo.toml",
     "depth:sample": "tsx scripts/depth-sample.ts",
-    "keeper": "tsx scripts/keeper.ts"
+    "keeper": "tsx scripts/keeper.ts",
+    "demo:session": "tsx scripts/demo-session.ts"
   },
   "packageManager": "pnpm@12.16.1",
   "devDependencies": {
