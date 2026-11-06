@@ -14,7 +14,7 @@ import {
 } from "lightweight-charts";
 import { useCandles } from "@/hooks/use-candles";
 import { formatUtc } from "@/components/landing/live-time";
-import { PRICE_DECIMALS } from "@/lib/near/format";
+import { formatPrice, PRICE_DECIMALS } from "@/lib/near/format";
 import type { Market } from "@/lib/near/types";
 import { CANDLE_SOURCE, type CandleInterval } from "@/lib/prices/candles";
 import { cn } from "@/lib/utils";
@@ -72,6 +72,7 @@ export function PriceChart({ market, className }: { market: Market; className?: 
       crosshair: { vertLine: { color: "#7A7A7A" }, horzLine: { color: "#7A7A7A" } },
     });
     const candleSeries = chart.addSeries(CandlestickSeries, {
+      title: "Spot",
       upColor: UP,
       downColor: DOWN,
       borderUpColor: UP,
@@ -96,7 +97,12 @@ export function PriceChart({ market, className }: { market: Market; className?: 
   useEffect(() => {
     const h = handles.current;
     const data = candles.data?.candles;
-    if (!h || !data) return;
+    if (!h) return;
+    if (!data) {
+      h.candles.setData([]);
+      h.volume.setData([]);
+      return;
+    }
     const last = data.at(-1)?.close ?? 1;
     const precision = precisionFor(last);
     h.candles.applyOptions({ priceFormat: { type: "price", precision, minMove: 10 ** -precision } });
@@ -140,10 +146,19 @@ export function PriceChart({ market, className }: { market: Market; className?: 
   }, [oraclePrice]);
 
   const last = candles.data?.candles.at(-1);
+  const spotPrice = last
+    ? last.close.toLocaleString("en-US", { minimumFractionDigits: precisionFor(last.close), maximumFractionDigits: precisionFor(last.close) })
+    : null;
+  const spotAvailability = candles.isError
+    ? candles.data ? "last available data; refresh unavailable" : "data unavailable"
+    : candles.isPending ? "loading" : last ? "data available" : "no candles available";
+  const markSummary = oraclePrice === null
+    ? "Mark unavailable"
+    : `Stored oracle Mark ${formatPrice(market.price)}${market.price_timestamp_ms ? `, observed ${formatUtc(market.price_timestamp_ms, true)}` : ", observation time unavailable"}`;
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border px-3 text-label">
+      <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-1 text-label">
         <div role="group" aria-label="Interval" className="flex items-center gap-1">
           {INTERVALS.map((i) => (
             <button
@@ -173,24 +188,30 @@ export function PriceChart({ market, className }: { market: Market; className?: 
             </span>
           </span>
         ) : null}
-        <span className="ml-auto truncate text-tertiary" data-testid="chart-source">
-          Prices: {CANDLE_SOURCE}
-          <span className="hidden sm:inline">
-            {" "}
-            {market.id}-USD spot{candles.data ? ` · ${formatUtc(candles.data.fetchedAtMs, true)}` : ""}
-          </span>
+        <span className="ml-auto text-tertiary" data-testid="chart-source">
+          Spot ({CANDLE_SOURCE})
         </span>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-3 py-1.5 text-label tabular-nums">
+        <span className="text-muted-foreground">Spot ({CANDLE_SOURCE}) <span className="text-foreground">{spotPrice === null ? "—" : `$${spotPrice}`}</span></span>
+        <span className="text-warning" title={markSummary}>Mark {oraclePrice === null ? "—" : formatPrice(market.price)} <span className="text-tertiary">(stored oracle)</span></span>
       </div>
       <div className="relative min-h-0 flex-1">
         <div
           ref={container}
           role="img"
-          aria-label={`${market.id}-USD ${interval} candles from ${CANDLE_SOURCE}, with the oracle mark price line`}
+          aria-label={`${market.id}-USD ${interval} spot candles from ${CANDLE_SOURCE}. ${spotPrice === null ? "Last spot unavailable" : `Last spot close $${spotPrice}`}; ${spotAvailability}${candles.data ? `, fetched ${formatUtc(candles.data.fetchedAtMs, true)}` : ""}. ${markSummary}. Spot and Mark are different price sources; volume bars show spot volume.`}
           className="absolute inset-0"
         />
-        {candles.isError && !candles.data ? (
-          <p role="alert" className="absolute inset-x-0 top-1/2 text-center text-ui text-tertiary">
-            {CANDLE_SOURCE} candles are unavailable right now: {candles.error.message}
+        {!last ? (
+          <p role="status" className="absolute inset-x-0 top-1/2 px-3 text-center text-ui text-muted-foreground">
+            {candles.isError
+              ? `${CANDLE_SOURCE} spot candles are unavailable right now: ${candles.error.message}`
+              : candles.isPending ? `Loading ${CANDLE_SOURCE} spot candles…` : `No ${CANDLE_SOURCE} spot candles available.`}
+          </p>
+        ) : candles.isError ? (
+          <p role="status" className="absolute inset-x-0 top-2 px-3 text-label text-warning">
+            Spot refresh unavailable. Showing the last fetched candles.
           </p>
         ) : null}
       </div>

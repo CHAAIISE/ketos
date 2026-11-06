@@ -30,7 +30,7 @@ export function ErrorState({
 }) {
   return (
     <div
-      role="alert"
+      role="status"
       className={cn(
         "flex flex-col gap-3 rounded-lg border border-destructive/50 bg-card p-4 text-ui sm:flex-row sm:items-center",
         className,

@@ -76,14 +76,13 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
 
   await test.step("1. landing: live liquidity across the registry, live stats, one way into the app", async () => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("sized by real liquidity");
-    await expect(page.getByLabel("Measured exit liquidity on NEAR Intents")).toBeVisible();
-    await expect(page.getByText(/measured \d{2}:\d{2}/).first()).toBeVisible();
+    await expect(page.locator("#liquidity").getByRole("img", { name: /Price impact by sell size/ })).toBeVisible();
+    await expect(page.locator("#liquidity figcaption")).toContainText(/\d{2}:\d{2} UTC/);
     await expect(page.getByText("Markets open", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("Open interest", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("Vault TVL", { exact: false }).first()).toBeVisible();
     await expect(page.getByTestId("landing-volume-24h")).toBeVisible();
-    await expectSinglePrimary(page, /Launch app/);
+    await expect(page.locator("[data-primary]:visible")).toHaveCount(1);
   });
 
   await test.step("2. trade: connect, fund 1,000 USDC, deposit 500 USDC of margin", async () => {
@@ -425,7 +424,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(volume).toContainText(/[4-9] trades|\d{2,} trades/);
     await expect(page.getByTestId("landing-vault-core")).toContainText("TVL");
     await expect(page.getByTestId("landing-vault-long-tail")).toBeVisible();
-    await expectSinglePrimary(page, /Launch app/);
+    await expect(page.locator("[data-primary]:visible")).toHaveCount(1);
     expect(pageErrors).toEqual([]);
   });
 });

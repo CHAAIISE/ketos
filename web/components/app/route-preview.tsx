@@ -90,7 +90,7 @@ function QuoteResult({ preview, nowMs }: { preview: Extract<RoutePreview, { stat
  * Read-only preview of bringing ETH (Base), SOL or BTC in as USDC on NEAR through NEAR Intents. It
  * never asks for a deposit address; margin on this app is funded from NEAR.
  */
-export function RoutePreviewForm({ onUseNear }: { onUseNear: () => void }) {
+export function RoutePreviewForm({ onUseNear }: { onUseNear?: () => void }) {
   const inputId = useId();
   const nowMs = useNow();
   const [asset, setAsset] = useState<RouteAsset>("SOL");
@@ -124,26 +124,30 @@ export function RoutePreviewForm({ onUseNear }: { onUseNear: () => void }) {
   });
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1.5">
-        <span className="text-label text-tertiary">From</span>
-        <div role="radiogroup" aria-label="Origin asset" className="grid grid-cols-3 gap-1">
+    <div className="flex min-w-0 flex-col gap-3">
+      <fieldset className="flex min-w-0 flex-col gap-1.5">
+        <legend className="mb-1.5 text-label text-tertiary">From</legend>
+        <div className="grid grid-cols-3 gap-1">
           {ROUTE_ASSET_KEYS.map((key) => (
-            <button
+            <label
               key={key}
-              type="button"
-              role="radio"
-              aria-checked={key === asset}
               data-testid={`route-asset-${key}`}
-              onClick={() => setAsset(key)}
-              className="flex flex-col items-start justify-center rounded-md border border-border px-3 py-2 text-ui text-muted-foreground transition-colors outline-none hover:border-tertiary/40 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-checked:border-foreground aria-checked:text-foreground"
+              className="relative flex min-w-0 cursor-pointer flex-col items-start justify-center rounded-md border border-border px-3 py-2 text-ui text-muted-foreground transition-colors hover:border-tertiary/40 hover:text-foreground has-checked:border-foreground has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring"
             >
+              <input
+                type="radio"
+                name={`${inputId}-origin`}
+                value={key}
+                checked={key === asset}
+                onChange={() => setAsset(key)}
+                className="sr-only"
+              />
               <span className="font-medium">{ROUTE_ASSETS[key].symbol}</span>
               <span className="text-label text-tertiary">{ROUTE_ASSETS[key].chain}</span>
-            </button>
+            </label>
           ))}
         </div>
-      </div>
+      </fieldset>
 
       <Field>
         <FieldLabel htmlFor={inputId}>Amount ({origin.symbol})</FieldLabel>
@@ -160,14 +164,14 @@ export function RoutePreviewForm({ onUseNear }: { onUseNear: () => void }) {
         {error ? <FieldMessage tone="error">{error}</FieldMessage> : null}
       </Field>
 
-      <section aria-live="polite" className="flex flex-col gap-2 rounded-md border border-border px-3 py-3">
+      <section role="status" aria-live="polite" aria-busy={Boolean(requested && (settling || preview.isPending))} className="flex min-w-0 flex-col gap-2 rounded-md border border-border px-3 py-3">
         <h3 className="text-label text-tertiary">Route preview · settles on NEAR mainnet via NEAR Intents</h3>
         {!requested ? (
           <p className="text-ui text-muted-foreground">
             Enter an amount of {origin.symbol} on {origin.chain} to see the USDC on NEAR it would become.
           </p>
         ) : settling || preview.isPending ? (
-          <Skeleton className="h-36 w-full" />
+          <><span className="sr-only">Requesting a live route quote…</span><Skeleton className="h-36 w-full" /></>
         ) : preview.isError ? (
           <ErrorState title="Route quote unavailable. Retry in a moment." error={preview.error} onRetry={() => void preview.refetch()} />
         ) : preview.data.status === "no_liquidity" ? (
@@ -180,11 +184,30 @@ export function RoutePreviewForm({ onUseNear }: { onUseNear: () => void }) {
       </section>
 
       <p className="text-label text-tertiary">
-        Preview only: nothing is deposited from here. Margin on this app comes from the Fund button, then a deposit from NEAR.
+        Preview only: nothing is deposited and no wallet is needed. Trading funds stay on NEAR; this route does not fund your Ketos account.
       </p>
-      <Button type="button" className="w-full" onClick={onUseNear}>
-        Deposit from NEAR
-      </Button>
+      {onUseNear ? (
+        <Button type="button" variant="secondary" className="w-full" onClick={onUseNear}>
+          Deposit from NEAR
+        </Button>
+      ) : null}
     </div>
+  );
+}
+
+export function PublicRoutePreview() {
+  const titleId = useId();
+  return (
+    <section aria-labelledby={titleId} data-testid="public-route-preview" className="grid min-w-0 gap-6 rounded-lg border border-border bg-card p-4 md:grid-cols-2 md:gap-12 md:p-8">
+      <div className="flex flex-col items-start gap-3">
+        <p className="text-eyebrow text-tertiary uppercase">Try it without a wallet</p>
+        <h2 id={titleId} className="font-display text-heading">From another chain</h2>
+        <p className="max-w-reading text-ui text-muted-foreground">
+          See what ETH on Base, SOL or BTC could become in USDC on NEAR. Enter an amount for a live NEAR Intents 1Click route, its cost and estimated time.
+        </p>
+        <p className="text-label text-tertiary">Read-only route preview. No connection, signature or transfer.</p>
+      </div>
+      <RoutePreviewForm />
+    </section>
   );
 }

@@ -11,7 +11,7 @@ import { useAllOpenPositions, useDepth, useLiquidations } from "@/hooks/use-keto
 import { MAX_EXIT_IMPACT_BPS } from "@/lib/intents/depth";
 import { formatPrice, usd0 } from "@/lib/near/format";
 import { formatExitCapacity, marketLimitLabel } from "@/lib/near/market-status";
-import type { Market, Side } from "@/lib/near/types";
+import type { DepthRecord, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { OiBar } from "./oi-bar";
 
@@ -24,6 +24,67 @@ type Tab = (typeof TABS)[number]["id"];
 /** Oracle price moved down by the measured impact: the average price a sell of that size got. */
 function exitPrice(price: bigint, impactBps: number): bigint {
   return (price * BigInt(10_000 - Math.round(impactBps))) / 10_000n;
+}
+
+/** Same log-size / impact axes as the full measured curve, kept compact for the terminal. */
+function MiniImpactCurve({ record, marketId }: { record: DepthRecord; marketId: string }) {
+  const samples = [...record.samples].sort((a, b) => a.size_usd - b.size_usd);
+  const firstSize = samples[0]?.size_usd;
+  const lastSize = samples.at(-1)?.size_usd;
+  if (!firstSize || !lastSize) {
+    return <p role="status" className="border-t border-border px-3 py-3 text-label text-muted-foreground">No impact samples available.</p>;
+  }
+  const yMax = Math.ceil(Math.max(150, ...samples.map((sample) => sample.impact_bps ?? 0)) / 50) * 50;
+  const logSpan = Math.log10(lastSize) - Math.log10(firstSize) || 1;
+  const x = (size: number) => 36 + ((Math.log10(size) - Math.log10(firstSize)) / logSpan) * 188;
+  const y = (impact: number) => 104 - (impact / yMax) * 80;
+  // A missing quote breaks the line: it is not a zero-impact observation.
+  const path = samples.map((sample, index) => {
+    if (sample.impact_bps === null) return "";
+    const command = index > 0 && samples[index - 1].impact_bps !== null ? "L" : "M";
+    return `${command}${x(sample.size_usd)},${y(sample.impact_bps)}`;
+  }).join(" ");
+  const unquoted = samples.some((sample) => sample.impact_bps === null);
+
+  return (
+    <figure className="mt-auto shrink-0 border-t border-border px-3 py-2" data-testid="mini-impact-curve">
+      <figcaption className="flex justify-between gap-2 text-label text-muted-foreground">
+        <span>Measured impact</span>
+        {unquoted ? <span className="text-destructive">× No quote</span> : null}
+      </figcaption>
+      <svg
+        viewBox="0 0 240 144"
+        role="img"
+        aria-label={`${marketId} measured sell impact by USD size on a logarithmic axis. Dashed line: ${MAX_EXIT_IMPACT_BPS} basis-point threshold. ${samples.length} samples${unquoted ? "; crosses indicate unavailable quotes, not impact values" : ""}.`}
+        className="mx-auto w-full max-w-72 text-label tabular-nums"
+      >
+        <text x="0" y="13" className="fill-tertiary">Impact (bps)</text>
+        {[0, yMax].map((tick) => (
+          <g key={tick}>
+            <line x1="36" x2="224" y1={y(tick)} y2={y(tick)} className="stroke-border" />
+            <text x="30" y={y(tick)} dy="0.35em" textAnchor="end" className="fill-tertiary">{tick}</text>
+          </g>
+        ))}
+        <line x1="36" x2="36" y1="24" y2="104" className="stroke-border" />
+        <line x1="36" x2="224" y1={y(MAX_EXIT_IMPACT_BPS)} y2={y(MAX_EXIT_IMPACT_BPS)} strokeDasharray="4 4" className="stroke-accent" />
+        <text x="224" y={y(MAX_EXIT_IMPACT_BPS) - 5} textAnchor="end" className="fill-accent">{MAX_EXIT_IMPACT_BPS} bps</text>
+        <path d={path} fill="none" strokeWidth="1.5" className="stroke-foreground" />
+        {samples.map((sample) => sample.impact_bps === null ? (
+          <g key={sample.size_usd} className="stroke-destructive" strokeWidth="1.5">
+            <path d={`M${x(sample.size_usd) - 3},21 l6,6 m0,-6 l-6,6`} />
+            <title>{formatSizeUsd(sample.size_usd)}: no quote</title>
+          </g>
+        ) : (
+          <circle key={sample.size_usd} cx={x(sample.size_usd)} cy={y(sample.impact_bps)} r="2" className={sample.impact_bps > MAX_EXIT_IMPACT_BPS ? "fill-accent" : "fill-foreground"}>
+            <title>{formatSizeUsd(sample.size_usd)}: {sample.impact_bps} bps</title>
+          </circle>
+        ))}
+        <text x="36" y="121" className="fill-tertiary">{formatSizeUsd(firstSize)}</text>
+        {lastSize !== firstSize ? <text x="224" y="121" textAnchor="end" className="fill-tertiary">{formatSizeUsd(lastSize)}</text> : null}
+        <text x="130" y="140" textAnchor="middle" className="fill-tertiary">Sell size (USD, log)</text>
+      </svg>
+    </figure>
+  );
 }
 
 function ExitLadder({ market }: { market: Market }) {
@@ -57,7 +118,7 @@ function ExitLadder({ market }: { market: Market }) {
         </span>
         <span>NEAR Intents</span>
       </div>
-      <div role="table" aria-label={`${market.id} exit liquidity by sell size`} className="text-label tabular-nums">
+      <div role="table" aria-label={`${market.id} exit liquidity by sell size`} className="min-h-0 overflow-y-auto text-label tabular-nums">
         <div role="row" className="grid h-6 grid-cols-3 items-center px-3 text-tertiary">
           <span role="columnheader">
             <Term hint="Oracle price lowered by the measured impact: the average price a sell of this size would get.">
@@ -111,7 +172,8 @@ function ExitLadder({ market }: { market: Market }) {
           </div>
         ) : null}
       </div>
-      <div className="mt-auto flex flex-col gap-2 border-t border-border px-3 py-2.5">
+      <MiniImpactCurve record={record} marketId={market.id} />
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border px-3 py-2.5">
         <p className="text-label text-muted-foreground">
           Effective cap {usd0(market.effective_max_oi_per_side)} · {marketLimitLabel(market)}
         </p>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ConnectButton } from "@/components/app/connect-button";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
@@ -43,6 +43,7 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
   const queryClient = useQueryClient();
   const { track } = useTxToast();
   const [picked, setPicked] = useState<string | null>(null);
+  const assetGroupId = useId();
 
   // The server list is cached for a minute; hide anything the live registry already has.
   const taken = new Set(markets.flatMap((m) => [m.id, m.oracle_asset_id, m.intents_asset_id]));
@@ -108,27 +109,31 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
           </EmptyState>
         ) : (
           <>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-label text-tertiary">Asset</span>
-              <div role="radiogroup" aria-label="Asset to list" className="flex flex-col gap-1">
+            <fieldset className="min-w-0">
+              <legend className="mb-1.5 text-label text-tertiary">Asset</legend>
+              <div className="flex flex-col gap-1">
                 {assets.map((a) => (
-                  <button
+                  <label
                     key={a.symbol}
-                    type="button"
-                    role="radio"
-                    aria-checked={a.symbol === asset.symbol}
                     data-testid={`listable-${a.symbol}`}
-                    onClick={() => setPicked(a.symbol)}
-                    className="flex h-row items-center justify-between gap-3 rounded-md border border-border px-3 text-ui text-muted-foreground transition-colors outline-none hover:border-tertiary/40 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-checked:border-foreground aria-checked:text-foreground"
+                    className="relative flex h-row cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 text-ui text-muted-foreground transition-colors hover:border-tertiary/40 hover:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring has-checked:border-foreground has-checked:text-foreground"
                   >
+                    <input
+                      type="radio"
+                      name={assetGroupId}
+                      checked={a.symbol === asset.symbol}
+                      value={a.symbol}
+                      onChange={() => setPicked(a.symbol)}
+                      className="sr-only"
+                    />
                     <span className="font-medium">{a.symbol}</span>
                     <span className="text-label text-tertiary tabular-nums">
                       ≈ {a.referencePriceUsd.toLocaleString("en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 6 })}
                     </span>
-                  </button>
+                  </label>
                 ))}
               </div>
-            </div>
+            </fieldset>
 
             <div className="flex flex-col gap-2">
               <Row label="Market">{marketName(asset.symbol)}</Row>

@@ -75,7 +75,7 @@ function Body() {
   if (vaults.isError) {
     return (
       <div
-        role="alert"
+        role="status"
         className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4 text-sm md:flex-row md:items-center md:justify-between"
       >
         <span className="text-foreground">
@@ -100,7 +100,7 @@ function Body() {
 export function VaultsSection() {
   return (
     <section id="vaults" aria-labelledby="vaults-title" className="scroll-mt-8">
-      <Container className="grid gap-12 md:grid-cols-12">
+      <Container className="grid max-w-landing gap-8 md:grid-cols-12 md:px-12">
         <div className="order-2 min-w-0 md:order-1 md:col-span-7">
           <Body />
         </div>
@@ -110,9 +110,8 @@ export function VaultsSection() {
             Two pools, two risk profiles.
           </h2>
           <p className="text-body text-muted-foreground">
-            LPs take the other side of every trade and earn trading fees, borrow fees, funding and liquidation
-            penalties. A long-tail blow-up stays in the Long-tail vault: each pool only backs its own markets, and
-            withdrawals stop at the amount reserved for open positions.
+            Provide USDC and earn fees as the counterparty to traders. Core and Long-tail back separate
+            markets. Vault deposits carry loss risk; withdrawals are limited by capital reserved for open positions.
           </p>
           <Link
             href="/vaults"

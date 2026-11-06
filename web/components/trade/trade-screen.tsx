@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ErrorState, Skeleton } from "@/components/app/states";
+import { PublicRoutePreview } from "@/components/app/route-preview";
 import { OnboardingSteps } from "@/components/ui/onboarding-steps";
 import { useAccountId } from "@/hooks/near-provider";
 import { useAccount, useMarkets, usePositions } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
+import { formatPrice } from "@/lib/near/format";
 import type { MarketId } from "@/lib/near/types";
 import { AccountPanel } from "./account-panel";
 import { ExitLiquidityBook } from "./exit-liquidity-book";
@@ -17,18 +19,18 @@ import { PriceChart } from "./price-chart";
 // Desktop: market bar, chart and exit-liquidity ladder side by side, account tabs below, order
 // panel down the right edge. Phones stack bar, chart, order panel, ladder, then account tabs.
 const GRID =
-  "grid flex-1 gap-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_17rem_19rem] lg:grid-rows-[auto_minmax(28rem,1fr)_13rem] xl:grid-cols-[minmax(0,1fr)_19rem_20rem]";
+  "grid flex-1 gap-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_17rem_19rem] xl:grid-cols-[minmax(0,1fr)_19rem_20rem]";
 const AREA = {
   bar: "lg:col-span-2 lg:col-start-1 lg:row-start-1",
-  chart: "h-[22rem] lg:h-auto lg:col-start-1 lg:row-start-2",
-  book: "order-4 h-[26rem] lg:order-none lg:h-auto lg:col-start-2 lg:row-start-2",
+  chart: "h-[26rem] lg:h-auto lg:col-start-1 lg:row-start-2",
+  book: "order-4 min-h-[36rem] lg:order-none lg:min-h-0 lg:col-start-2 lg:row-start-2",
   order: "order-3 lg:order-none lg:col-start-3 lg:row-span-3 lg:row-start-1",
-  account: "order-5 min-h-60 lg:order-none lg:min-h-0 lg:col-span-2 lg:col-start-1 lg:row-start-3",
+  account: "order-5 lg:order-none lg:min-h-0 lg:col-span-2 lg:col-start-1 lg:row-start-3",
 };
 
 function TradeSkeleton() {
   return (
-    <div aria-busy className={GRID}>
+    <div aria-busy className={`${GRID} lg:grid-rows-[auto_minmax(32rem,1fr)_8rem]`}>
       <Skeleton className={`h-14 rounded-md ${AREA.bar}`} />
       <Skeleton className={`rounded-md ${AREA.chart}`} />
       <Skeleton className={`rounded-md ${AREA.book}`} />
@@ -65,6 +67,12 @@ export function TradeScreen() {
   const openPositions = positions.data?.length ?? 0;
   const step = tradeStep(accountId, account.data, openPositions);
   const market = markets.data?.find((m) => m.id === marketId) ?? markets.data?.[0];
+  const titleMarket = market?.id ?? marketId;
+  const markPrice = market?.price;
+
+  useEffect(() => {
+    document.title = `${titleMarket}-USD · Mark ${markPrice !== undefined && markPrice > 0n ? formatPrice(markPrice) : "unavailable"} — Ketos`;
+  }, [titleMarket, markPrice]);
 
   return (
     <>
@@ -79,7 +87,7 @@ export function TradeScreen() {
           onRetry={() => void markets.refetch()}
         />
       ) : (
-        <div className={GRID}>
+        <div className={`${GRID} ${openPositions === 0 ? "lg:grid-rows-[auto_minmax(32rem,1fr)_8rem]" : "lg:grid-rows-[auto_minmax(32rem,1fr)_13rem]"}`}>
           <MarketHeader markets={markets.data} market={market} onSelect={setMarketId} className={AREA.bar} />
           <section aria-label="Price chart" className={`flex min-h-0 min-w-0 flex-col rounded-md border border-border bg-card ${AREA.chart}`}>
             <div className="flex h-9 shrink-0 items-stretch border-b border-border">
@@ -91,9 +99,10 @@ export function TradeScreen() {
           </section>
           <ExitLiquidityBook market={market} className={AREA.book} />
           <OrderTicket key={market.id} market={market} step={step} account={account.data} className={AREA.order} />
-          <AccountPanel className={AREA.account} />
+          <AccountPanel className={`${AREA.account} ${openPositions === 0 ? "min-h-32" : "min-h-60"}`} />
         </div>
       )}
+      <PublicRoutePreview />
     </>
   );
 }

@@ -54,8 +54,16 @@ export function MarginModeControl({ mode, onChange }: { mode: MarginMode; onChan
               type="button"
               role="radio"
               aria-checked={draft === m.id}
+              tabIndex={draft === m.id ? 0 : -1}
               data-testid={`margin-mode-${m.id}`}
               onClick={() => setDraft(m.id)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === "Home" ? "isolated" : event.key === "End" ? "cross" : m.id === "isolated" ? "cross" : "isolated";
+                setDraft(next);
+                event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-testid="margin-mode-${next}"]`)?.focus();
+              }}
               className={cn(
                 "flex flex-col gap-1 rounded-md border border-border p-3 text-left transition-colors hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring",
                 draft === m.id && "border-foreground hover:border-foreground",
@@ -205,7 +213,7 @@ function BracketField({
         />
       </div>
       {parsed.error ? (
-        <FieldMessage tone="error">{parsed.error}</FieldMessage>
+        <FieldMessage tone="error" role="status">{parsed.error}</FieldMessage>
       ) : pnl !== null ? (
         <p className="text-label text-tertiary tabular-nums">
           {kind === "take_profit" ? "Estimated gain" : "Estimated loss"} before fees:{" "}

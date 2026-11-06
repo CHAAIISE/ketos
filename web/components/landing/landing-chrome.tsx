@@ -1,71 +1,44 @@
 import Link from "next/link";
 import { Logo } from "@/components/logo";
+import { buttonVariants } from "@/components/ui/button";
 import { Container } from "@/components/ui/page-shell";
 import { networkName } from "@/lib/near/config";
 
-const linkClass =
-  "rounded-sm text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
-
+const linkClass = "rounded-sm text-label text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:text-ui";
 const navLinks = [
   { href: "/#markets", label: "Markets" },
+  { href: "/#vaults", label: "Earn" },
   { href: "/#how-it-works", label: "How it works" },
-  { href: "/#vaults", label: "Vaults" },
   { href: "/#risk", label: "Risk" },
-] as const;
-
-const footerLinks = [
-  { href: "/trade", label: "Trade" },
-  { href: "/markets", label: "Markets" },
-  { href: "/vaults", label: "Vaults" },
-  { href: "/leaderboard", label: "Leaderboard" },
-  { href: "/risk", label: "Risk" },
-  { href: "/#how-it-works", label: "How it works" },
 ] as const;
 
 export function LandingNav() {
   return (
-    <header>
-      <Container className="flex h-16 items-center justify-between gap-6">
-        <Link href="/" className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-          <Logo height={16} />
+    <header className="border-b border-border">
+      <Container className="flex min-h-16 max-w-landing flex-wrap items-center justify-between gap-x-4 gap-y-3 py-4 md:flex-nowrap md:px-12">
+        <Link href="/" aria-label="Ketos home" className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+          <Logo height={20} />
         </Link>
-        <nav aria-label="Site" className="flex items-center gap-5 md:gap-8">
-          {navLinks.map((link) => (
-            <Link key={link.href} href={link.href} className={linkClass}>
-              {link.label}
-            </Link>
-          ))}
+        <nav aria-label="Site" className="order-3 flex w-full items-center justify-between gap-3 md:order-none md:ml-auto md:w-auto md:justify-start md:gap-8">
+          {navLinks.map((link) => <Link key={link.href} href={link.href} className={linkClass}>{link.label}</Link>)}
         </nav>
+        <Link href="/trade" className={buttonVariants({ size: "sm", className: "rounded-full md:ml-4" })}>Trade</Link>
       </Container>
     </header>
   );
 }
 
-const FADE_ID = "ketos-footer-fade";
-
 export function LandingFooter() {
   return (
-    <footer className="overflow-hidden border-t border-border">
-      <Container className="flex flex-col gap-6 pt-16 md:flex-row md:items-center md:justify-between">
+    <footer className="border-t border-border">
+      <Container className="flex max-w-landing flex-col gap-6 py-8 md:flex-row md:items-center md:justify-between md:px-12">
         <nav aria-label="Footer" className="flex flex-wrap gap-x-6 gap-y-3">
-          {footerLinks.map((link) => (
-            <Link key={link.href} href={link.href} className={linkClass}>
-              {link.label}
-            </Link>
-          ))}
+          <Link href="/trade" className={linkClass}>Trade</Link>
+          <Link href="/markets" className={linkClass}>Markets</Link>
+          <Link href="/vaults" className={linkClass}>Earn</Link>
+          <Link href="/risk" className={linkClass}>Risk</Link>
         </nav>
         <p className="text-label text-tertiary">Built at NEAR HACKATHON · {networkName()}</p>
-      </Container>
-      <Container className="pt-16">
-        <svg aria-hidden width="0" height="0" className="absolute">
-          <defs>
-            <linearGradient id={FADE_ID} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" style={{ stopColor: "var(--foreground)", stopOpacity: 0.25 }} />
-              <stop offset="1" style={{ stopColor: "var(--foreground)", stopOpacity: 0 }} />
-            </linearGradient>
-          </defs>
-        </svg>
-        <Logo aria-hidden role="presentation" fill={`url(#${FADE_ID})`} className="-mb-[4%] h-auto w-full" />
       </Container>
     </footer>
   );

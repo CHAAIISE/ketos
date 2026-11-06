@@ -12,11 +12,21 @@ The full transaction journey is reproducible with `pnpm --dir web exec playwrigh
 
 The hosted app shows current onchain state, not a seeded trading session. Markets can be closed, histories empty and the leaderboard unpopulated. Filling a ticket is a preview, not an executed trade. The app never overrides safety checks to reproduce a screenshot.
 
+### Try without a wallet
+
+The current frontend source exposes **From another chain** on the landing page and below `/trade`, before connecting. This redesign is not deployed to the hosted frontend yet; use the [frontend-only quickstart](#run-locally) to inspect it locally.
+
+1. Enter **1 SOL**, **0.1 ETH on Base**, or **0.01 BTC** in the public route card.
+2. Read the live 1Click quote: USDC on NEAR, route cost, estimated time and quote timestamp. Unavailable liquidity or a failed request is shown explicitly.
+3. Change the origin asset with the arrow keys or select another amount. No connection, signature, deposit address or transfer is requested.
+
+This is a read-only mainnet route preview, not a way to fund the testnet trading account. The landing also shows four onchain markets and a selectable impact-versus-size curve with a 100 bps threshold. Measured liquidity, ramp-limited admission and vault-backed effective caps are distinct; timestamps identify old observations.
+
 ### Try it — 12 steps
 
 Steps 1–9 and 11–12 can be explored on the hosted app. You need an existing NEAR testnet wallet, fresh prices and an open market. The current build's **Fund** action needs no NEAR or wallet signature: it sponsors USDC and, when needed, gas. The hosted frontend still uses its earlier wallet-signed funding flow until its next deployment. The local journey also drives the controlled price moves in steps 5 and 10 and supplies extra test collateral for the cap-refusal scene.
 
-1. **Open the landing page** — see measured capacity, open/listed markets, total open interest, vault TVL and 24-hour volume, with observation times. Click **Launch app**.
+1. **Open the landing page** — see measured capacity, open/listed markets, total open interest, vault TVL and 24-hour volume, with observation times. Use the main trading action to enter the app.
 2. **Connect, Fund, Deposit** — connect a testnet wallet, request **1,000 USDC** from the hourly faucet, then deposit **500 USDC** as margin. In the gasless build, Fund also sends **0.5 NEAR** when your available balance is below **0.1 NEAR**; you do not need NEAR to start. See the onboarding checklist advance and Available to Trade update. In the Deposit dialog, **From another chain** previews an ETH (Base), SOL or BTC route; it does not transfer funds.
 3. **Open Markets and search ETH** — see price, spot 24-hour change where available, funding per hour, open interest/cap, leverage and vault. Click its row to open ETH-USD. If it is Measuring or Closed, wait for a qualifying measurement or choose an open market; a keeper tick does not guarantee liquidity.
 4. **Open an ETH long at 5× with TP/SL** — when the live leverage limit permits, enter a 500 USDC position size (100 USDC margin), add take-profit and stop-loss prices, then sign. See the position, PnL and liquidation price; the two exits appear in **Open Orders**. Local prices start at 2,292.595, with targets 2,750 and 2,000.

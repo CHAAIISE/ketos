@@ -96,7 +96,7 @@ export function ImpactChart({ record }: { record: DepthRecord }) {
               />
               <text
                 x={x(capacity) + (x(capacity) > PAD.left + innerW * 0.5 ? -6 : 6)}
-                y={PAD.top + innerH - 8}
+                y={PAD.top + 18}
                 textAnchor={x(capacity) > PAD.left + innerW * 0.5 ? "end" : "start"}
                 className="fill-foreground"
               >

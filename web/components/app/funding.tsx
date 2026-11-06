@@ -234,21 +234,28 @@ type DepositSource = (typeof DEPOSIT_SOURCES)[number]["id"];
 
 function DepositSourceToggle({ value, onChange }: { value: DepositSource; onChange: (source: DepositSource) => void }) {
   return (
-    <div role="radiogroup" aria-label="Deposit from" className="grid grid-cols-2 rounded-md bg-muted p-0.5">
-      {DEPOSIT_SOURCES.map((source) => (
-        <button
-          key={source.id}
-          type="button"
-          role="radio"
-          aria-checked={value === source.id}
-          data-testid={`deposit-source-${source.id}`}
-          onClick={() => onChange(source.id)}
-          className="h-8 rounded-sm text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-checked:bg-background aria-checked:text-foreground"
-        >
-          {source.label}
-        </button>
-      ))}
-    </div>
+    <fieldset className="min-w-0">
+      <legend className="sr-only">Deposit from</legend>
+      <div className="grid grid-cols-2 rounded-md bg-muted p-0.5">
+        {DEPOSIT_SOURCES.map((source) => (
+          <label
+            key={source.id}
+            data-testid={`deposit-source-${source.id}`}
+            className="relative flex h-8 cursor-pointer items-center justify-center rounded-sm text-ui text-muted-foreground transition-colors hover:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring has-checked:bg-background has-checked:text-foreground"
+          >
+            <input
+              type="radio"
+              name="deposit-source"
+              checked={value === source.id}
+              value={source.id}
+              onChange={() => onChange(source.id)}
+              className="sr-only"
+            />
+            {source.label}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -257,7 +264,7 @@ function FundingBody({ mode, onDone }: { mode: FundingMode; onDone: () => void }
   const [source, setSource] = useState<DepositSource>("near");
   if (!account.data) {
     return account.isError ? (
-      <p role="alert" className="text-ui text-destructive">
+      <p role="status" className="text-ui text-destructive">
         Your balances could not be read. Close this and try again.
       </p>
     ) : (

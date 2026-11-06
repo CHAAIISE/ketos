@@ -67,16 +67,3 @@ export function formatAge(ms: number, nowMs: number): string {
   if (hours < 48) return `${hours} h ago`;
   return `${Math.floor(hours / 24)} days ago`;
 }
-
-/** True on viewports at least 768 px wide; desktop layout while prerendering. */
-export function useIsDesktop(): boolean {
-  return useSyncExternalStore(
-    (listener) => {
-      const query = window.matchMedia("(min-width: 768px)");
-      query.addEventListener("change", listener);
-      return () => query.removeEventListener("change", listener);
-    },
-    () => window.matchMedia("(min-width: 768px)").matches,
-    () => true,
-  );
-}

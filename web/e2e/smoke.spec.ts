@@ -14,9 +14,11 @@ test.describe("deployment", { tag: "@smoke" }, () => {
   test("landing explains the product and leads into the app", async ({ page }) => {
     await page.goto("/");
     await expect(page).toHaveTitle(/^Ketos — /);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("sized by real liquidity");
     await expect(page.getByTestId("landing-volume-24h")).toBeVisible();
-    await expect(page.locator("[data-primary]:visible")).toHaveText(/Launch app/);
+    const primary = page.locator("[data-primary]:visible");
+    await expect(primary).toHaveCount(1);
+    await primary.click();
+    await expect(page).toHaveURL(/\/trade$/);
   });
 
   test("markets lists the whole registry with live caps", async ({ page }) => {
@@ -31,6 +33,8 @@ test.describe("deployment", { tag: "@smoke" }, () => {
   });
 
   test("trade shows the live price and exit-liquidity cap", async ({ page }) => {
+    await page.goto("/markets");
+    const marketsTitle = await page.title();
     await page.goto("/trade");
     await expect(page.getByTestId("mark-price")).toHaveText(/\$\d/);
     await expect(page.getByTestId("max-oi")).toHaveText(/^\$[\d,]+$/);
@@ -40,6 +44,11 @@ test.describe("deployment", { tag: "@smoke" }, () => {
     for (const id of ["BTC", "ETH", "NEAR", "ZEC", "SOL"]) {
       await expect(page.getByTestId(`market-tab-${id}`)).toBeVisible();
     }
+    await page.getByTestId("market-tab-ETH").click();
+    await expect(page).toHaveTitle(/^ETH-USD.*\$/);
+    await expect.poll(() => page.title()).toContain(await page.getByTestId("mark-price").innerText());
+    await page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: "Markets", exact: true }).click();
+    await expect(page).toHaveTitle(marketsTitle);
   });
 
   test("vaults shows Core and Long-tail with their NAV", async ({ page }) => {

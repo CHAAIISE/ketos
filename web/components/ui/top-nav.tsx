@@ -39,7 +39,7 @@ function TopNav({
       </Link>
       <nav
         aria-label="App"
-        className="order-last -mx-3 flex h-9 w-[calc(100%+1.5rem)] min-w-0 items-center gap-0.5 overflow-x-auto border-t border-border px-1.5 [scrollbar-width:none] md:order-none md:mx-0 md:h-auto md:w-auto md:gap-2 md:border-t-0 md:px-0"
+        className="order-last -mx-3 flex w-[calc(100%+1.5rem)] min-w-0 flex-wrap items-center gap-0.5 border-t border-border px-1.5 py-1 md:order-none md:mx-0 md:w-auto md:flex-nowrap md:gap-2 md:border-t-0 md:px-0 md:py-0"
       >
         {appLinks.map((link) => {
           const active = pathname === link.href || pathname.startsWith(`${link.href}/`)

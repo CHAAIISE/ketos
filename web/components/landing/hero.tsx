@@ -1,35 +1,27 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { Logo } from "@/components/logo";
 import { buttonVariants } from "@/components/ui/button";
 import { Container } from "@/components/ui/page-shell";
-import { ExitLiquidity } from "./exit-liquidity";
 
 export function Hero() {
   return (
     <section aria-labelledby="hero-title">
-      <Container className="grid gap-16 pt-12 md:grid-cols-12 md:items-center md:gap-12 md:pt-20">
-        <div className="flex flex-col items-start gap-8 md:col-span-5">
-          <Logo height={72} className="hidden md:block" />
-          <Logo height={48} className="md:hidden" />
-          <div className="flex flex-col gap-5">
-            <h1 id="hero-title" className="font-display text-title text-foreground">
-              Perps on NEAR, sized by real liquidity.
-            </h1>
-            <p className="max-w-md text-body text-muted-foreground">
-              Traders take leverage against an LP vault. New positions are limited by the latest{" "}
-              <span className="text-foreground">NEAR Intents</span> quotes within{" "}
-              <span className="text-foreground">1% price impact</span>, vault capital and protocol caps.
-              Old measurements pause entries; trading actions fetch a fresh price when needed.
-            </p>
+      <Container className="max-w-landing py-12 md:px-landing-gutter md:py-landing-hero">
+        <div className="flex flex-col items-start gap-6">
+          <h1 id="hero-title" className="font-display text-display-sm text-foreground md:text-display">
+            Perps on NEAR.<br />Sized by real liquidity.
+          </h1>
+          <p className="max-w-reading text-body text-muted-foreground">
+            Trade with leverage. Every market is capped by measured exit liquidity and vault capital.
+          </p>
+          <div className="flex flex-wrap items-center gap-6">
+            <Link href="/trade" data-primary className={buttonVariants({ size: "pill" })}>
+              Start trading <ArrowRight aria-hidden />
+            </Link>
+            <Link href="#how-it-works" className="rounded-sm text-ui text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+              How it works
+            </Link>
           </div>
-          <Link href="/trade" data-primary className={buttonVariants({ size: "pill", className: "mt-4" })}>
-            Launch app
-            <ArrowRight aria-hidden />
-          </Link>
-        </div>
-        <div className="min-w-0 md:col-span-7">
-          <ExitLiquidity />
         </div>
       </Container>
     </section>

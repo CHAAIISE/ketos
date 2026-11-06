@@ -49,8 +49,16 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (side: Side) => 
           type="button"
           role="radio"
           aria-checked={side === s}
+          tabIndex={side === s ? 0 : -1}
           data-testid={`side-${s}`}
           onClick={() => onChange(s)}
+          onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === "Home" ? "long" : event.key === "End" ? "short" : s === "long" ? "short" : "long";
+            onChange(next);
+            event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-testid="side-${next}"]`)?.focus();
+          }}
           className={cn(
             "h-8 rounded-[5px] text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
             side === s && s === "long" && "bg-success text-success-foreground hover:text-success-foreground",
@@ -387,7 +395,7 @@ export function OrderTicket({
               }}
             />
             {triggerError ? (
-              <FieldMessage tone="error">{triggerError}</FieldMessage>
+              <FieldMessage tone="error" role="status">{triggerError}</FieldMessage>
             ) : firesNow ? (
               <p className="text-label text-warning">
                 The oracle price {formatPrice(market.price)} is already past this price: the keeper fills it on its next run.
@@ -434,7 +442,7 @@ export function OrderTicket({
             ))}
           </div>
         </div>
-        {sizeError ? <FieldMessage tone="error">{sizeError}</FieldMessage> : null}
+        {sizeError ? <FieldMessage tone="error" role="status">{sizeError}</FieldMessage> : null}
 
         <BracketFields
           enabled={bracketsOn}
@@ -461,23 +469,23 @@ export function OrderTicket({
 
       {action}
       {step !== null && step !== "trade" ? (
-        <p data-testid="step-hint" className="text-label text-muted-foreground">
+        <p role="status" data-testid="step-hint" className="text-label text-muted-foreground">
           {STEP_HINT[step]}
         </p>
       ) : null}
       {!isMarket || bracketsOn ? keeperNote : null}
 
       {!status.open ? (
-        <FieldMessage tone="error">
+        <FieldMessage tone="error" role="status">
           <span id="entry-unavailable" data-testid="entry-unavailable">{status.label}: order entry is disabled. Choose another market or wait for capacity to recover. Existing positions can still be closed.</span>
         </FieldMessage>
       ) : !displayStatus.open ? (
-        <p data-testid="close-only-notice" className="text-label text-warning">
+        <p role="status" data-testid="close-only-notice" className="text-label text-warning">
           Close-only at the stored price. Submitting an order fetches a fresh price; entry requires a price no older than 30 seconds.
         </p>
       ) : null}
       {refusal ? (
-        <div role="alert" data-testid="order-error" className="flex flex-col gap-2 rounded-md border border-destructive/50 p-3">
+        <div role="status" data-testid="order-error" className="flex flex-col gap-2 rounded-md border border-destructive/50 p-3">
           <p className="text-ui text-destructive">{refusal.message}</p>
           {capUsdc !== undefined && capUsdc > 0n ? (
             <Button variant="outline" size="sm" className="w-fit" onClick={() => applyMaxSize(capUsdc)}>
@@ -487,7 +495,7 @@ export function OrderTicket({
         </div>
       ) : null}
       {preview.exceedsCap && preview.size > 0n ? (
-        <p className="text-label text-warning">
+        <p role="status" className="text-label text-warning">
           This size exceeds the effective cap ({marketLimitLabel(market).toLowerCase()}); the contract will refuse it
           {isMarket ? "." : " unless capacity recovers before execution."}
         </p>

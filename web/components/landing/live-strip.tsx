@@ -98,7 +98,7 @@ export function LiveStrip() {
           label={LABELS[4]}
           hint={list ? `latest of ${list.length} markets${measuredAt ? ` · ${formatAge(measuredAt, nowMs)}` : ""}` : "measurement time unavailable"}
         >
-          <span className={cn(stale && "text-warning")}>{measuredAt ? formatUtc(measuredAt) : "—"}</span>
+          <span className={cn(stale && "text-warning")}>{measuredAt ? `${formatUtc(measuredAt)}${stale ? " · stale" : ""}` : "—"}</span>
         </Cell>
       </dl>
       <div className="flex flex-col gap-2 text-label text-tertiary">

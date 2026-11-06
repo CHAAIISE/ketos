@@ -121,6 +121,14 @@ function ConnectMenu() {
                 ))
               )}
             </div>
+            <a
+              href="https://near-faucet.io/"
+              target="_blank"
+              rel="noreferrer"
+              className="border-t border-border px-4 py-3 text-label text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            >
+              Need a NEAR account? Get one free
+            </a>
             {error ? (
               <p role="alert" className="border-t border-border px-4 py-2.5 text-label text-destructive">
                 {error}

@@ -229,6 +229,7 @@ export function MarketsTable({
                         className="rounded-sm font-medium whitespace-nowrap text-foreground outline-none focus-visible:outline-2 focus-visible:outline-ring"
                       >
                         {marketName(m.id)}
+                        <span aria-hidden className={cn("ml-1.5 inline-block size-1.5 rounded-pill align-middle sm:hidden", marketDisplayStatus(m, nowMs).open ? "bg-success" : "bg-warning")} />
                       </Link>
                       <StatusCell market={m} nowMs={nowMs} />
                     </span>
