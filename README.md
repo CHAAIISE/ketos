@@ -31,7 +31,7 @@ Reproduce with `pnpm depth:sample --fixture`; inspect the dated JSON, not just t
 
 The full transaction journey is reproducible with `pnpm --dir web exec playwright test`. It deploys a local NEAR sandbox, connects a test wallet and runs [12 demo steps](web/e2e/demo.spec.ts), including keeper fills and liquidation. Prices are mocked locally; new depth measurements still use real, read-only mainnet quotes and need internet access.
 
-**Video:** the 12-scene recording is not yet published; there is no public video URL. The local journey above is executable now.
+**Video:** the current interface was recorded through all 12 local-chain scenes on November 6, 2026, including a wallet-funded ETH entry, BTC limit fill, cap refusal, 25-USDC UNI listing, LP deposit, stop loss, liquidation and withdrawal. Narration and final assembly are pending; there is no public video URL. Mock prices and seeded test collateral are disclosed in the script; the recording is not hosted-user activity.
 
 Activity on the hosted app comes from our own test accounts, not independent users. The [real session script](scripts/demo-session.ts) funds three dedicated accounts and sends actual transactions to the deployed contracts: [ETH long with TP/SL](https://testnet.nearblocks.io/txns/7HepDCWwveH4efesbfJHmmvvqzPMhZSzyLZywXZWA67g), [XRP short](https://testnet.nearblocks.io/txns/B4UPb5LE6QkiPB4xdDWC61fJi1HqFEDvdNH5YUofiW5T) and [BTC limit order](https://testnet.nearblocks.io/txns/8tzC4MotZofkphL5Tu7nUNHZ6NFjwbD8yFY6QujS4Us9). Markets can still close and orders can remain unfilled. The app never overrides safety checks to reproduce a screenshot.
 
