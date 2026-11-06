@@ -7,4 +7,4 @@ if ! build_log="$(pnpm contracts:build 2>&1)"; then
   echo "$build_log" >&2
   exit 1
 fi
-exec pnpm exec tsx scripts/deploy-testnet.ts
+exec pnpm exec tsx scripts/deploy-testnet.ts "$@"

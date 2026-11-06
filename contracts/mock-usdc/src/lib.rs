@@ -18,8 +18,15 @@ use near_sdk::{
     PanicOnDefault, Promise, PromiseOrValue,
 };
 
+#[cfg(test)]
+mod sponsored_tests;
+
 pub const FAUCET_AMOUNT: u128 = 1_000_000_000;
 pub const FAUCET_COOLDOWN_NS: u64 = 3_600 * 1_000_000_000;
+pub const FAUCET_GAS_GRANT: u128 = 500_000_000_000_000_000_000_000;
+pub const FAUCET_DAILY_GAS_LIMIT: u128 = 20_000_000_000_000_000_000_000_000;
+const DAY_NS: u64 = 86_400 * 1_000_000_000;
+const FAUCET_IP_LIMIT: usize = 5;
 
 const GAS_FOR_TRANSFER_FUNDING: Gas = Gas::from_tgas(10);
 const GAS_FOR_FUNDED_CALLBACK: Gas = Gas::from_tgas(15);
@@ -33,6 +40,7 @@ const ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
 enum StorageKey {
     Accounts,
     FaucetClaims,
+    FaucetIpClaims,
 }
 
 #[near(contract_state)]
@@ -41,32 +49,119 @@ pub struct MockUsdc {
     owner_id: AccountId,
     token: FungibleToken,
     last_claim_ns: LookupMap<AccountId, u64>,
+    faucet_id: AccountId,
+    ip_claims_ns: LookupMap<String, Vec<u64>>,
+    gas_day: u64,
+    gas_spent: u128,
+}
+
+// Exact pre-sponsored-faucet root. Collection handles retain their original prefixes.
+#[derive(near_sdk::borsh::BorshDeserialize, near_sdk::borsh::BorshSerialize)]
+#[borsh(crate = "near_sdk::borsh")]
+struct LegacyMockUsdc {
+    owner_id: AccountId,
+    token: FungibleToken,
+    last_claim_ns: LookupMap<AccountId, u64>,
+}
+
+#[near(serializers = [json])]
+pub struct FaucetConfig {
+    pub faucet_id: AccountId,
+    pub gas_day: u64,
+    pub gas_spent: U128,
 }
 
 #[near]
 impl MockUsdc {
     #[init]
-    pub fn new(owner_id: AccountId) -> Self {
+    pub fn new(owner_id: AccountId, faucet_id: Option<AccountId>) -> Self {
+        let faucet_id = faucet_id.unwrap_or_else(|| {
+            format!("faucet.{owner_id}").parse().expect("Invalid default faucet account")
+        });
         Self {
             owner_id,
             token: FungibleToken::new(StorageKey::Accounts),
             last_claim_ns: LookupMap::new(StorageKey::FaucetClaims),
+            faucet_id,
+            ip_claims_ns: LookupMap::new(StorageKey::FaucetIpClaims),
+            gas_day: env::block_timestamp() / DAY_NS,
+            gas_spent: 0,
+        }
+    }
+
+    #[init(ignore_state)]
+    #[private]
+    pub fn migrate_faucet(faucet_id: AccountId) -> Self {
+        require!(env::predecessor_account_id() == env::current_account_id(), "ERR_PRIVATE");
+        let bytes = env::storage_read(b"STATE").expect("ERR_MISSING_STATE");
+        // from_slice rejects trailing bytes, including an already migrated root.
+        let old: LegacyMockUsdc = near_sdk::borsh::from_slice(&bytes)
+            .expect("ERR_NOT_LEGACY_FAUCET_STATE");
+        Self {
+            owner_id: old.owner_id,
+            token: old.token,
+            last_claim_ns: old.last_claim_ns,
+            faucet_id,
+            ip_claims_ns: LookupMap::new(StorageKey::FaucetIpClaims),
+            gas_day: env::block_timestamp() / DAY_NS,
+            gas_spent: 0,
         }
     }
 
     pub fn faucet(&mut self) -> U128 {
         let account_id = env::predecessor_account_id();
         let now = env::block_timestamp();
-        if let Some(last) = self.last_claim_ns.get(&account_id) {
-            let next = last.saturating_add(FAUCET_COOLDOWN_NS);
-            if now < next {
-                let wait_s = (next - now).div_ceil(1_000_000_000);
-                env::panic_str(&format!("ERR_FAUCET_COOLDOWN: retry in {wait_s}s"));
-            }
-        }
+        self.assert_recipient_available(&account_id, now);
         self.last_claim_ns.insert(account_id.clone(), now);
         self.internal_mint(&account_id, FAUCET_AMOUNT, "faucet");
         U128(FAUCET_AMOUNT)
+    }
+
+    #[payable]
+    pub fn faucet_for(&mut self, account_id: AccountId, ip_hash: String) -> U128 {
+        require!(env::predecessor_account_id() == self.faucet_id, "ERR_NOT_FAUCET");
+        let deposit = env::attached_deposit().as_yoctonear();
+        require!(deposit == 0 || deposit == FAUCET_GAS_GRANT, "ERR_FAUCET_DEPOSIT");
+        require!(
+            ip_hash.len() == 64 && ip_hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "ERR_FAUCET_IP_HASH"
+        );
+        let now = env::block_timestamp();
+        self.assert_recipient_available(&account_id, now);
+        if let Some(claims) = self.ip_claims_ns.get(&ip_hash) {
+            let first_live = claims.partition_point(|timestamp| {
+                timestamp.saturating_add(FAUCET_COOLDOWN_NS) <= now
+            });
+            if claims.len() - first_live >= FAUCET_IP_LIMIT {
+                let wait_s = (claims[first_live].saturating_add(FAUCET_COOLDOWN_NS) - now).div_ceil(1_000_000_000);
+                env::panic_str(&format!("ERR_FAUCET_IP_LIMIT: retry in {wait_s}s"));
+            }
+        }
+        let day = now / DAY_NS;
+        let spent = if self.gas_day == day { self.gas_spent } else { 0 };
+        require!(spent + deposit <= FAUCET_DAILY_GAS_LIMIT, "ERR_FAUCET_GAS_LIMIT");
+
+        let claims = self.ip_claims_ns.entry(ip_hash)
+            .or_insert_with(|| Vec::with_capacity(FAUCET_IP_LIMIT));
+        claims.retain(|timestamp| timestamp.saturating_add(FAUCET_COOLDOWN_NS) > now);
+        claims.push(now);
+        self.last_claim_ns.insert(account_id.clone(), now);
+        self.gas_day = day;
+        self.gas_spent = spent + deposit;
+        self.internal_mint(&account_id, FAUCET_AMOUNT, "sponsored faucet");
+        if deposit > 0 {
+            // Charge the daily budget even if a later transfer fails; no refund loophole.
+            Promise::new(account_id).transfer(NearToken::from_yoctonear(deposit)).detach();
+        }
+        U128(FAUCET_AMOUNT)
+    }
+
+    pub fn faucet_config(&self) -> FaucetConfig {
+        FaucetConfig {
+            faucet_id: self.faucet_id.clone(),
+            gas_day: self.gas_day,
+            gas_spent: U128(self.gas_spent),
+        }
     }
 
     pub fn mint(&mut self, account_id: AccountId, amount: U128) {
@@ -116,6 +211,16 @@ impl MockUsdc {
 }
 
 impl MockUsdc {
+    fn assert_recipient_available(&self, account_id: &AccountId, now: u64) {
+        if let Some(last) = self.last_claim_ns.get(account_id) {
+            let next = last.saturating_add(FAUCET_COOLDOWN_NS);
+            if now < next {
+                let wait_s = (next - now).div_ceil(1_000_000_000);
+                env::panic_str(&format!("ERR_FAUCET_COOLDOWN: retry in {wait_s}s"));
+            }
+        }
+    }
+
     // Storage for auto-registered accounts is paid from the contract balance:
     // this is a testnet token, frictionless onboarding matters more than cost.
     fn internal_mint(&mut self, account_id: &AccountId, amount: u128, memo: &str) {
@@ -290,7 +395,7 @@ mod tests {
 
     fn setup() -> MockUsdc {
         ctx("owner.testnet", 1_000, 0);
-        MockUsdc::new(acc("owner.testnet"))
+        MockUsdc::new(acc("owner.testnet"), None)
     }
 
     fn transfer_setup() -> MockUsdc {

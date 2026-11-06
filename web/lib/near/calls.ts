@@ -46,11 +46,6 @@ function call(
   return { receiverId, actions: [{ methodName, args, gas, deposit }] };
 }
 
-/** Claims 1,000 tUSDC (once per hour); registers the account on the token if needed. */
-export function faucetTx(c: Contracts): NearTransaction {
-  return call(c.usdcContract, "faucet", {});
-}
-
 function transferCallTx(c: Contracts, amount: bigint, msg: string, gas = GAS): NearTransaction {
   return call(
     c.usdcContract,

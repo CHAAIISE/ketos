@@ -27,7 +27,7 @@ const PERCENT_MARKS = [0, 25, 50, 75, 100];
 /** One line under the ticket's main action telling a new user what it does for them. */
 const STEP_HINT: Record<Exclude<TradeStep, "trade">, string> = {
   connect: "Connect a NEAR wallet to start. Markets stay readable without one.",
-  fund: "You need USDC to trade. It's free: 1,000 USDC once an hour.",
+  fund: "Get 1,000 USDC once an hour, plus gas if needed. No NEAR or wallet signature required to fund.",
   deposit: "Move USDC from your wallet into your margin account to back positions.",
 };
 

@@ -45,11 +45,12 @@ export function FundButton({
       {...(prominent ? { "data-primary": "" } : {})}
       className={className}
       disabled={faucet.isPending || coolingDown}
-      title={coolingDown ? "The faucet gives 1,000 USDC once an hour" : "Get 1,000 USDC in your wallet"}
+      title={coolingDown ? "The faucet gives 1,000 USDC once an hour" : "Get 1,000 USDC, plus gas if needed. No wallet signature."}
       onClick={() =>
         track(() => faucet.mutateAsync(), {
           pending: "Claiming 1,000 USDC…",
           success: "1,000 USDC added to your wallet",
+          successDescription: (result) => result.gasTxHash ? "0.5 NEAR for gas included. No wallet signature needed." : "No wallet signature needed.",
         })
       }
     >

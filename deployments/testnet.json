@@ -10,8 +10,9 @@
   "schema_version": 3,
   "code_hashes": {
     "ketos": "AC5uXAisnAVgNgeFje6ApouADDzBRcKjcpcA2C9R32mG",
-    "usdc": "Haq6T2sMW2K58F3sGen8zEKJMpBiW5tHo14w39nZUSFr"
+    "usdc": "ADPNqMYYidWEZhTahEomwdczWt3ukp58fa7Svx2dt9fW"
   },
   "price_signer": "ed25519:3XbNrUzS7TFJbDn94weVDnJNubGSTkEYUdqu4f67JGDD",
-  "price_signer_attestation_url": "https://testnet-api.outlayer.ai/attestations/by-call/1a689502-67f1-4c9c-91e3-696d47fd1a62"
+  "price_signer_attestation_url": "https://testnet-api.outlayer.ai/attestations/by-call/1a689502-67f1-4c9c-91e3-696d47fd1a62",
+  "faucet": "faucet.ketos.testnet"
 }

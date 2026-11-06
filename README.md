@@ -14,10 +14,10 @@ The hosted app shows current onchain state, not a seeded trading session. Market
 
 ### Try it — 12 steps
 
-Steps 1–9 and 11–12 can be explored on the hosted app. Trading needs a NEAR testnet wallet with gas, fresh prices and an open market. The local journey also drives the controlled price moves in steps 5 and 10 and supplies extra test collateral for the cap-refusal scene.
+Steps 1–9 and 11–12 can be explored on the hosted app. You need an existing NEAR testnet wallet, fresh prices and an open market. The current build's **Fund** action needs no NEAR or wallet signature: it sponsors USDC and, when needed, gas. The hosted frontend still uses its earlier wallet-signed funding flow until its next deployment. The local journey also drives the controlled price moves in steps 5 and 10 and supplies extra test collateral for the cap-refusal scene.
 
 1. **Open the landing page** — see measured capacity, open/listed markets, total open interest, vault TVL and 24-hour volume, with observation times. Click **Launch app**.
-2. **Connect, Fund, Deposit** — connect a testnet wallet, claim **1,000 USDC** from the hourly faucet, then deposit **500 USDC** as margin. See the onboarding checklist advance and Available to Trade update. In the Deposit dialog, **From another chain** previews an ETH (Base), SOL or BTC route; it does not transfer funds.
+2. **Connect, Fund, Deposit** — connect a testnet wallet, request **1,000 USDC** from the hourly faucet, then deposit **500 USDC** as margin. In the gasless build, Fund also sends **0.5 NEAR** when your available balance is below **0.1 NEAR**; you do not need NEAR to start. See the onboarding checklist advance and Available to Trade update. In the Deposit dialog, **From another chain** previews an ETH (Base), SOL or BTC route; it does not transfer funds.
 3. **Open Markets and search ETH** — see price, spot 24-hour change where available, funding per hour, open interest/cap, leverage and vault. Click its row to open ETH-USD. If it is Measuring or Closed, wait for a qualifying measurement or choose an open market; a keeper tick does not guarantee liquidity.
 4. **Open an ETH long at 5× with TP/SL** — when the live leverage limit permits, enter a 500 USDC position size (100 USDC margin), add take-profit and stop-loss prices, then sign. See the position, PnL and liquidation price; the two exits appear in **Open Orders**. Local prices start at 2,292.595, with targets 2,750 and 2,000.
 5. **Place a BTC Limit short above the current mark** — see reserved collateral and a resting order. A sell limit below the mark would already be triggered. The local journey places it at 78,000, moves the mock price to 78,200, then observes the keeper fill in **Trade History**. Execution uses the current oracle price, not a guaranteed limit price.
@@ -186,6 +186,7 @@ Trading fees, borrow fees and liquidation penalties accrue to the LP capital tak
 | TEE oracle | [price-oracle.testnet](https://testnet.nearblocks.io/address/price-oracle.testnet) |
 | Worker execution host | [outlayer.testnet](https://testnet.nearblocks.io/address/outlayer.testnet) |
 | Keeper signer | [keeper.ketos.testnet](https://testnet.nearblocks.io/address/keeper.ketos.testnet) |
+| Funding sponsor | [faucet.ketos.testnet](https://testnet.nearblocks.io/address/faucet.ketos.testnet) |
 
 Addresses are in [the deployment manifest](deployments/testnet.json); the worker project and pinned hash are in [its manifest](deployments/worker-testnet.json). A [November 4, 2026 refresh](https://testnet.nearblocks.io/txns/GWHGRdf2MezJJRmW9N2xKziHyGdt2ZAhU2AUuQfFXxos) returned 16 fresh prices after both adapters completed. This is a past execution, not an uptime claim.
 
@@ -213,7 +214,24 @@ NEXT_PUBLIC_KETOS_CONTRACT=ketos.testnet
 NEXT_PUBLIC_USDC_CONTRACT=usdc.ketos.testnet
 ```
 
-Run `pnpm --dir web dev` and open `http://localhost:3000`. Wallet actions need testnet NEAR for gas. Local maintenance additionally needs `KEEPER_PRIVATE_KEY` in the root `.env.local`, authorized on the configured contract; never copy someone else's key. `ONECLICK_JWT` is optional. `pnpm keeper --once` runs one tick; `pnpm keeper` repeats at most once a minute. `pnpm depth:sample` only measures and saves a dated JSON under `scripts/out/`; it does not publish depth or trade.
+Run `pnpm --dir web dev` and open `http://localhost:3000`. With the funding sponsor configured, Fund needs neither existing NEAR nor a wallet signature; subsequent trading actions still spend gas. Local funding needs server-only `FAUCET_PRIVATE_KEY` in `web/.env.local`. Local maintenance additionally needs `KEEPER_PRIVATE_KEY`, authorized on the configured contract; never copy someone else's key. `ONECLICK_JWT` is optional. `pnpm keeper --once` runs one tick; `pnpm keeper` repeats at most once a minute. `pnpm depth:sample` only measures and saves a dated JSON under `scripts/out/`; it does not publish depth or trade.
+
+### Gasless funding
+
+[`POST /api/faucet`](web/app/api/faucet/route.ts) accepts `{"accountId":"your-account.testnet"}`. The dedicated sponsor pays for [`faucet_for`](contracts/mock-usdc/src/lib.rs), which registers the token account, mints 1,000 test USDC and optionally transfers 0.5 NEAR in the same transaction. The response contains `usdc_tx` and, for a gas grant, `gas_tx` with that same hash. A [zero-NEAR test account received both assets](https://testnet.nearblocks.io/txns/A5vnjvHreovzKKu5vrtcZi5vbBhaGi3hVq7bxqd4NL7U); this is project-funded test activity, not an external user.
+
+The token enforces one claim per recipient per hour, shared with the wallet-paid faucet, five sponsored claims per IP per sliding hour, and at most 20 NEAR of gas grants per UTC day. Only a secret-keyed IP hash is published. IP accounting requires trusted ingress headers; Vercel uses its overwritten header, while other hosting needs an equivalent proxy. Changing the sponsor key changes IP buckets, not recipient cooldowns or the global gas budget. Requests without an IP share one bucket. The server refuses funding when the sponsor has less than 2 NEAR available. These limits do not prevent Sybil abuse; the dedicated full-access key must never hold production funds.
+
+The server sends once, waits for final receipts and does not retry an uncertain transaction. Cooldown/quota responses are HTTP 429 with `Retry-After`; an unavailable sponsor returns 503. A failed gas receipt after a successful mint is reported explicitly with its transaction hash, not as a complete success. Attempted gas grants still consume the daily budget if a later transfer fails. No response is cached.
+
+Provision or upgrade just the funding token and sponsor, without redeploying the exchange:
+
+```bash
+bash scripts/deploy-testnet.sh --faucet
+```
+
+The [provisioner](scripts/deploy-faucet.ts) privately generates `FAUCET_PRIVATE_KEY`, saves it to root/web `.env.local`, creates `faucet.ketos.testnet` with 3 NEAR and preserves every existing token balance and cooldown through an atomic code/state migration. It rejects unknown layouts or mismatched keys and keeps the burner's 2-NEAR reserve. A healthy rerun sends no transaction. Only this dedicated faucet key belongs on the server; funding and contract-deployment keys stay local.
+
 
 ### Keep maintenance running
 
@@ -265,7 +283,7 @@ These API/configuration changes are verified locally; they do not redeploy the h
 
 ### Deployment and worker
 
-[`scripts/deploy-testnet.sh`](scripts/deploy-testnet.sh) uses the dedicated testnet keys described in `.env.example`. Before any transaction it pins a final-block code/state/key snapshot, checks configuration and LP ownership, and rejects unknown code hashes. Only the reviewed V2 hash can upgrade through atomic `deploy_contract` plus private [`migrate`](contracts/ketos/src/migration.rs); missing or duplicate LP holders revert the entire batch. The compatible faucet-token upgrade changes code only. Preserved vaults are never reseeded, existing orders receive no retroactive executor charge, and every LP claim plus unchanged storage and token balances are compared after migration. The [offline migration regression](contracts/tests/src/migration_flow.rs) exercises the public V2 snapshot and rollback. A fresh setup requires at least 10 NEAR for its bootstrap preflight; upgrades budget only code growth, migration storage and operating reserves. An unchanged completed rerun makes no deployment or seed transaction. Full-access funding/deployment keys stay local.
+[`scripts/deploy-testnet.sh`](scripts/deploy-testnet.sh) uses the dedicated testnet keys described in `.env.example`. Before any transaction it pins a final-block code/state/key snapshot, checks configuration and LP ownership, and rejects unknown code hashes. Only the reviewed V2 hash can upgrade through atomic `deploy_contract` plus private [`migrate`](contracts/ketos/src/migration.rs); missing or duplicate LP holders revert the entire batch. The token's sponsored-faucet upgrade uses its own private `migrate_faucet`, preserving the legacy root fields and token records without reinitializing. Preserved vaults are never reseeded, existing orders receive no retroactive executor charge, and every LP claim plus unchanged storage and token balances are compared after migration. The [offline migration regression](contracts/tests/src/migration_flow.rs) exercises the public V2 snapshot and rollback. A fresh setup requires at least 10 NEAR for its bootstrap preflight; upgrades budget only code growth, migration storage and operating reserves. An unchanged completed rerun makes no deployment or seed transaction. Full-access funding/deployment keys stay local.
 
 The [multisource worker](workers/ketos-prices/) builds with `cargo build --manifest-path workers/ketos-prices/Cargo.toml --target wasm32-wasip2 --release --locked`; `bash scripts/deploy-worker.sh` deploys it using `outlayer-cli`. Onchain requests pin its WASM hash; a changed binary requires a reviewed contract deployment. Direct HTTPS calls use a server-only `OUTLAYER_PAYMENT_KEY`, not a deployment key; the contract's onchain requests instead pay NEAR from its balance.
 
@@ -273,7 +291,7 @@ The price-signing secret is `PROTECTED_KETOS_PRICE_KEY`, generated by the keysto
 
 After a worker rebuild, independently verify its key-returning execution and update the manifest evidence before deploying the trading contract. Move the protected profile's build lock only after reviewing the new binary; do not regenerate the secret. The contract deployment pins the attested key once and refuses a different existing key. TEE origin does not establish market truth: source quality, agreement and observation-age checks remain separate assumptions.
 
-The existing Vercel project uses `web/` as Root Directory. Deploy from the repository root with `vercel deploy --prod --yes`. Configure only the four public settings above and server-only maintenance/quote/payment credentials as needed. Never upload `NEAR_PRIVATE_KEY`, `KETOS_PRIVATE_KEY` or E2E signer settings.
+The existing Vercel project uses `web/` as Root Directory. Deploy from the repository root with `vercel deploy --prod --yes`. Configure only the four public settings above and server-only `FAUCET_PRIVATE_KEY` plus maintenance/quote/payment credentials as needed. The dedicated faucet key is a server secret; it is not a contract-deployment key. Never upload `NEAR_PRIVATE_KEY`, `KETOS_PRIVATE_KEY` or E2E signer settings. Updating an environment variable alone does not redeploy the hosted frontend.
 
 ## Limitations
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Account, JsonRpcProvider, KeyPair, PublicKey, actions, nearToYocto, teraToGas } from "near-api-js";
 import type { AccessKeyList, KeyPairString } from "near-api-js";
 import { loadEnv, nearAccountId, optionalEnv, requireEnv } from "./lib/env.ts";
+import { deployFaucet } from "./deploy-faucet.ts";
 
 const ORACLE_ID = "price-oracle.testnet";
 const OUTLAYER_ID = "outlayer.testnet";
@@ -24,6 +25,7 @@ const STORAGE_PRICE_PER_BYTE = 10n ** 19n;
 const EMPTY_CODE_HASH = "11111111111111111111111111111111";
 const LEGACY_KETOS_HASH = "FbrFuxkZHjKJEsUoorjrXe8vAdPi949EL6Dq3kRgaKq8";
 const LEGACY_USDC_HASH = "44Vnm1rH3LDCgMF4ZMA9Wunz2VwSwYvTL6igshLgJsvR";
+const PREVIOUS_USDC_HASH = "Haq6T2sMW2K58F3sGen8zEKJMpBiW5tHo14w39nZUSFr";
 const CORE_MARKETS = ["BTC", "ETH", "NEAR", "SOL"];
 const TEE_MARKETS = [...CORE_MARKETS, "ZEC", "AURORA", "RHEA"];
 const WORKER_MARKETS = ["DOGE", "XRP", "LTC", "ADA", "SUI", "TRX", "BNB", "AVAX", "LINK"];
@@ -157,7 +159,7 @@ async function main(): Promise<void> {
     return value;
   }
 
-  async function inspectContract(accountId: string, targetHash: string, legacyHash: string): Promise<ContractState> {
+  async function inspectContract(accountId: string, targetHash: string, legacyHash: string, previousHash?: string): Promise<ContractState> {
     const account = await viewAccount(accountId);
     if (!account) {
       audit.accounts[accountId] = null;
@@ -180,10 +182,10 @@ async function main(): Promise<void> {
     const hash = base58(createHash("sha256").update(bytes).digest());
     if (bytes.length > 0 && hash !== account.code_hash) throw new Error(`${accountId}: code hash does not match snapshot`);
     const initialized = raw.values.some((entry) => Buffer.from(entry.key, "base64").equals(Buffer.from("STATE")));
-    if (![EMPTY_CODE_HASH, targetHash, legacyHash].includes(account.code_hash) ||
+    if (![EMPTY_CODE_HASH, targetHash, legacyHash, previousHash].includes(account.code_hash) ||
         (!initialized && raw.values.length > 0) ||
         (initialized && account.code_hash === EMPTY_CODE_HASH) ||
-        (!initialized && account.code_hash === legacyHash)) {
+        (!initialized && (account.code_hash === legacyHash || account.code_hash === previousHash))) {
       throw new Error(`${accountId}: unknown code/state layout; refusing deployment`);
     }
     return { account, initialized, raw, codeBytes: bytes.length };
@@ -242,12 +244,12 @@ async function main(): Promise<void> {
   }
 
   // Pin all compatibility, LP ownership, signer, token and key checks before ANY transaction.
-  if (artifacts.ketos.hash === LEGACY_KETOS_HASH || artifacts.usdc.hash === LEGACY_USDC_HASH) {
+  if (artifacts.ketos.hash === LEGACY_KETOS_HASH || [LEGACY_USDC_HASH, PREVIOUS_USDC_HASH].includes(artifacts.usdc.hash)) {
     throw new Error("Build the V3 Ketos and compatible mock-usdc artifacts before deployment");
   }
   const ketosState = await inspectContract(ids.ketos, artifacts.ketos.hash, LEGACY_KETOS_HASH);
   if (!ketosState.account) throw new Error(`${ids.ketos}: create the dedicated testnet account and set KETOS_PRIVATE_KEY first`);
-  const usdcState = await inspectContract(ids.usdc, artifacts.usdc.hash, LEGACY_USDC_HASH);
+  const usdcState = await inspectContract(ids.usdc, artifacts.usdc.hash, LEGACY_USDC_HASH, PREVIOUS_USDC_HASH);
   const keeperState = await viewAccount(ids.keeper);
   if (keeperState && keeperState.code_hash !== EMPTY_CODE_HASH) {
     throw new Error(`${ids.keeper}: unexpected contract code on the restricted keeper account`);
@@ -283,6 +285,10 @@ async function main(): Promise<void> {
     if (owner !== parentId) throw new Error(`${ids.usdc}: incompatible token owner; expected ${parentId}`);
     const metadata = await view<{ decimals: number; symbol: string }>(ids.usdc, "ft_metadata");
     if (metadata.decimals !== 6 || metadata.symbol !== "tUSDC") throw new Error("Incompatible testnet USDC metadata");
+    if (usdcState.account?.code_hash === artifacts.usdc.hash) {
+      const faucet = await view<{ faucet_id: string }>(ids.usdc, "faucet_config");
+      if (faucet.faucet_id !== `faucet.${parentId}`) throw new Error("Token has an incompatible immutable faucet account");
+    }
     tokenSupplyBefore = await view<string>(ids.usdc, "ft_total_supply");
     tokenCustodyBefore = await view<string>(ids.usdc, "ft_balance_of", { account_id: ids.ketos });
     await view<string>(ids.usdc, "ft_balance_of", { account_id: seedAccountId });
@@ -422,12 +428,17 @@ async function main(): Promise<void> {
       if (state.account?.code_hash !== LEGACY_KETOS_HASH) throw new Error("Only the pinned V2 Ketos schema can migrate");
       // Private migration runs as a self-call in the SAME action batch as deploy. Failure rolls both back.
       pending.push(actions.functionCall("migrate", { share_holders: audit.share_holders }, teraToGas("250")));
+    } else if (accountId === ids.usdc && changed) {
+      if (![LEGACY_USDC_HASH, PREVIOUS_USDC_HASH].includes(state.account?.code_hash ?? "")) {
+        throw new Error("Only a pinned previous mock-usdc layout can migrate");
+      }
+      pending.push(actions.functionCall("migrate_faucet", { faucet_id: `faucet.${parentId}` }, teraToGas("100")));
     }
     if (pending.length === 0) {
       console.log(`${accountId}: initialized code up to date`);
       return;
     }
-    // An initialized token receives code only: its compatible root is retained, never reinitialized.
+    // Initialized roots are migrated atomically, never reinitialized.
     const outcome = await signer(accountId).signAndSendTransaction({
       receiverId: accountId, actions: pending, waitUntil: "FINAL",
     });
@@ -451,7 +462,7 @@ async function main(): Promise<void> {
     audit.transactions.push({ kind: "token_storage_top_up", account_id: ids.usdc, amount: tokenTopUp.toString(), outcome });
     saveAudit();
   }
-  await ensureContract(ids.usdc, artifacts.usdc, usdcState, { owner_id: parentId });
+  await ensureContract(ids.usdc, artifacts.usdc, usdcState, { owner_id: parentId, faucet_id: `faucet.${parentId}` });
   await ensureContract(ids.ketos, artifacts.ketos, ketosState, config);
   const pinnedSigner = await view<string | null>(ids.ketos, "get_price_signer");
   if (pinnedSigner && pinnedSigner !== priceSigner) {
@@ -626,6 +637,15 @@ async function main(): Promise<void> {
       const beforeEntries = new Map(state.raw.values.map((entry) => [entry.key, entry.value]));
       const afterEntries = new Map(raw.values.map((entry) => [entry.key, entry.value]));
       const excluded = new Set<string>();
+      if (accountId === ids.usdc && tokenUpgraded) {
+        const stateKey = Buffer.from("STATE").toString("base64");
+        const previousRoot = Buffer.from(beforeEntries.get(stateKey) ?? "", "base64");
+        const currentRoot = Buffer.from(afterEntries.get(stateKey) ?? "", "base64");
+        if (!currentRoot.subarray(0, previousRoot.length).equals(previousRoot)) {
+          failures.push(`${accountId}: legacy token root fields, supply or collection handles changed`);
+        }
+        excluded.add(stateKey);
+      }
       if (accountId === ids.ketos) {
         excluded.add(Buffer.from("STATE").toString("base64"));
         for (const entry of state.raw.values) {
@@ -719,7 +739,7 @@ async function main(): Promise<void> {
 
   const deployment = {
     network: "testnet", owner: fundingAccountId, ketos: ids.ketos, usdc: ids.usdc,
-    oracle: ORACLE_ID, outlayer: OUTLAYER_ID, keeper: ids.keeper, rpc: rpcUrl,
+    oracle: ORACLE_ID, outlayer: OUTLAYER_ID, keeper: ids.keeper, faucet: `faucet.${parentId}`, rpc: rpcUrl,
     schema_version: 3, code_hashes: { ketos: finalKetos.code_hash, usdc: finalUsdc.code_hash },
     price_signer: priceSigner, price_signer_attestation_url: workerManifest.price_signer_attestation_url,
   };
@@ -738,10 +758,10 @@ async function main(): Promise<void> {
   console.log(`\n${ids.ketos}: ${markets.length} V3 markets, two verified vault seeds and attested price signer; deployment manifest and local env files updated`);
 }
 
-void main().catch((error: unknown) => {
+void (process.argv.includes("--faucet") ? deployFaucet() : main()).catch((error: unknown) => {
   // SDK/RPC errors can contain transaction context; never emit raw errors or stacks containing credentials.
   let message = error instanceof Error ? error.message : "Deployment failed";
-  for (const name of ["KETOS_PRIVATE_KEY", "NEAR_PRIVATE_KEY", "KEEPER_PRIVATE_KEY", "OUTLAYER_PAYMENT_KEY", "ONECLICK_JWT", "NEAR_RPC_URL"]) {
+  for (const name of ["FAUCET_PRIVATE_KEY", "KETOS_PRIVATE_KEY", "NEAR_PRIVATE_KEY", "KEEPER_PRIVATE_KEY", "OUTLAYER_PAYMENT_KEY", "ONECLICK_JWT", "NEAR_RPC_URL"]) {
     const value = optionalEnv(name);
     if (value) message = message.replaceAll(value, "[REDACTED]");
   }

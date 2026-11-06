@@ -127,11 +127,12 @@ async function seed(rpcUrl) {
   const rootAccount = new Account(DEFAULT_ACCOUNT_ID, provider, DEFAULT_PRIVATE_KEY);
   const rootPublicKey = KeyPair.fromString(DEFAULT_PRIVATE_KEY).getPublicKey();
   const id = (name) => `${name}.${DEFAULT_ACCOUNT_ID}`;
-  const ids = { usdc: id("usdc"), oracle: id("oracle"), ketos: id("ketos"), lp: id("lp"), keeper: id("keeper"), trader: id("trader") };
+  const ids = { usdc: id("usdc"), oracle: id("oracle"), ketos: id("ketos"), lp: id("lp"), keeper: id("keeper"), trader: id("trader"), faucet: id("faucet") };
   // Contract and helper accounts share the root key; the trader gets its own key for the browser signer.
   const as = (accountId) => new Account(accountId, provider, DEFAULT_PRIVATE_KEY);
   const traderKey = KeyPair.fromRandom("ed25519");
   const keeperKey = KeyPair.fromRandom("ed25519");
+  const faucetKey = KeyPair.fromRandom("ed25519");
 
   const create = (accountId, near, publicKey = rootPublicKey) =>
     rootAccount.createAccount({ newAccountId: accountId, publicKey, nearToTransfer: nearToYocto(near) });
@@ -177,7 +178,8 @@ async function seed(rpcUrl) {
   };
   const view = (contractId, method, args = {}) => provider.callFunction({ contractId, method, args });
 
-  await deploy(ids.usdc, 10, "mock_usdc", { owner_id: DEFAULT_ACCOUNT_ID });
+  await create(ids.faucet, 30, faucetKey.getPublicKey());
+  await deploy(ids.usdc, 10, "mock_usdc", { owner_id: DEFAULT_ACCOUNT_ID, faucet_id: ids.faucet });
   await deploy(ids.oracle, 10, "mock_oracle", { owner_id: DEFAULT_ACCOUNT_ID });
   await create(ids.keeper, 10);
   // 20 NEAR: the keeper tick refuses to run below 2 NEAR on the Ketos contract.
@@ -255,6 +257,8 @@ async function seed(rpcUrl) {
     NEXT_PUBLIC_E2E_SIGNER: `${ids.trader}:${traderKey.toString()}`,
     // Server side: the keeper route signs with the sandbox keeper's function-call key.
     KEEPER_PRIVATE_KEY: keeperKey.toString(),
+    FAUCET_ACCOUNT_ID: ids.faucet,
+    FAUCET_PRIVATE_KEY: faucetKey.toString(),
     // Test helpers: the mock oracle owner moves prices during the liquidation scene.
     E2E_ORACLE_CONTRACT: ids.oracle,
     E2E_ROOT_SIGNER: `${DEFAULT_ACCOUNT_ID}:${DEFAULT_PRIVATE_KEY}`,

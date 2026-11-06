@@ -113,10 +113,40 @@ async fn migrates_captured_v2_state_atomically_without_losing_claims() -> Result
     assert!(external.to_lowercase().contains("private"), "{external}");
     assert_eq!(ketos.view_state().await?, original);
 
-    // The token upgrade has a compatible root layout and must not reinitialize or mint.
-    token.as_account().deploy(&wasm("mock_usdc")).await?.into_result()?;
-    assert_token_accounting(&token, &fixture["token"]["views"]).await?;
+    let token_wasm = wasm("mock_usdc");
+    let token_previous_code = worker.view_account(token.id()).await?.contract_state;
+    let _ = err(token.batch().deploy(&token_wasm).call(
+        Function::new("migrate_faucet").args_json(json!({ "faucet_id": "Invalid..near" })),
+    ).transact().await);
+    assert_eq!(worker.view_account(token.id()).await?.contract_state, token_previous_code);
     assert_eq!(token.view_state().await?, token_original);
+    token.as_account().deploy(&token_wasm).await?.into_result()?;
+    let faucet_id = "faucet.ketos.testnet";
+    let external = err(outsider.call(token.id(), "migrate_faucet")
+        .args_json(json!({ "faucet_id": faucet_id }))
+        .gas(Gas::from_tgas(100)).transact().await);
+    assert!(external.to_lowercase().contains("private"), "{external}");
+    assert_eq!(token.view_state().await?, token_original);
+    ok(token.batch().deploy(&token_wasm).call(
+        Function::new("migrate_faucet").args_json(json!({ "faucet_id": faucet_id }))
+            .gas(Gas::from_tgas(100)),
+    ).transact().await?);
+    assert_token_accounting(&token, &fixture["token"]["views"]).await?;
+    let token_migrated = token.view_state().await?;
+    assert_eq!(token_migrated.len(), token_original.len());
+    for (key, value) in &token_original {
+        if key == b"STATE" {
+            assert!(token_migrated[key].starts_with(value), "legacy token root fields changed");
+        } else {
+            assert_eq!(token_migrated.get(key), Some(value), "token balance or cooldown lost");
+        }
+    }
+    assert_eq!(view(&token, "faucet_config", json!({})).await?["faucet_id"], faucet_id);
+    let _ = err(token.batch().deploy(&token_wasm).call(
+        Function::new("migrate_faucet").args_json(json!({ "faucet_id": "attacker.testnet" }))
+            .gas(Gas::from_tgas(100)),
+    ).transact().await);
+    assert_eq!(token.view_state().await?, token_migrated);
 
     let before_ms = now_ms(&worker).await?;
     ok(ketos.batch().deploy(&new_wasm).call(migration(holders.clone())).transact().await?);
@@ -204,7 +234,7 @@ async fn migrates_captured_v2_state_atomically_without_losing_claims() -> Result
         }
     }
     assert_token_accounting(&token, &fixture["token"]["views"]).await?;
-    assert_eq!(token.view_state().await?, token_original);
+    assert_eq!(token.view_state().await?, token_migrated);
     let migrated_code = worker.view_account(ketos.id()).await?.contract_state;
     let _ = err(ketos.batch().deploy(&new_wasm).call(migration(holders)).transact().await);
     assert_eq!(ketos.view_state().await?, migrated);

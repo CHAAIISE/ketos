@@ -1,13 +1,13 @@
 "use client";
 
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { z } from "zod";
 import {
   addCrossMarginTx,
   cancelOrderTx,
   closePositionTx,
   depositMarginTx,
   depositVaultTx,
-  faucetTx,
   listMarketTx,
   openPositionTx,
   placeOrderTx,
@@ -121,12 +121,55 @@ const vaultKeys = (accountId: string | null): QueryKey[] => [
   ketosKeys.vaultAccounts(),
 ];
 
-/** Claims 1,000 tUSDC; `amount` is the minted amount in USDC units. */
+const faucetResponse = z.object({
+  usdc_tx: z.string().min(1),
+  gas_tx: z.string().min(1).optional(),
+});
+
+/** Funds the connected account without asking the wallet to sign or pay gas. */
 export function useFaucet() {
-  return useTxMutation<void, TxReceipt & { amount: bigint | null }>({
-    build: (config) => faucetTx(config),
-    parse: (result) => ({ txHash: result.txHash, amount: toAmount(result.value) }),
-    invalidate: (accountId) => [ketosKeys.account(accountId)],
+  const { wallet } = useNear();
+  const queryClient = useQueryClient();
+  return useMutation<TxReceipt & { gasTxHash?: string }, NearActionError, void>({
+    retry: false,
+    mutationFn: async () => {
+      const accountId = wallet?.accountId;
+      if (!accountId) {
+        throw new NearActionError({ code: "NOT_SIGNED_IN", message: "Connect a wallet first." });
+      }
+      let response: Response;
+      try {
+        response = await fetch("/api/faucet", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ accountId }),
+        });
+      } catch {
+        throw new NearActionError({
+          code: "FAUCET_UNCONFIRMED",
+          message: "Funding could not be confirmed. Check your wallet balance before trying again.",
+        });
+      }
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const error = z.object({ error: z.string() }).safeParse(body);
+        const retryAfter = Number(response.headers.get("retry-after"));
+        throw new NearActionError({
+          code: "FAUCET_REQUEST_FAILED",
+          message: error.success ? error.data.error : "Funding is unavailable. Check your wallet balance before trying again.",
+          ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryInSeconds: retryAfter } : {}),
+        });
+      }
+      const result = faucetResponse.safeParse(body);
+      if (!result.success) {
+        throw new NearActionError({
+          code: "FAUCET_UNCONFIRMED",
+          message: "Funding could not be confirmed. Check your wallet balance before trying again.",
+        });
+      }
+      return { txHash: result.data.usdc_tx, gasTxHash: result.data.gas_tx };
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ketosKeys.account(wallet?.accountId ?? null) }),
   });
 }
 
