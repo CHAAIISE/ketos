@@ -51,6 +51,14 @@ test("wallet trading: one confirmation, no margin deposit, wallet payouts and or
   expect(unused).toBeGreaterThanOrEqual(0n);
   expect(unused).toBeLessThanOrEqual(2n);
   await page.locator("#order-size").fill("100");
+  await expect(ticket.getByText("Keeper budget", { exact: true }).locator("..").locator("..").locator("dd")).toHaveText("$0.20");
+  const cached = (await views.markets()).find((market) => market.id === "ETH")!;
+  await expect.poll(async () => (await views.markets()).find((market) => market.id === "ETH")!.close_only, {
+    timeout: 60_000,
+    message: "The stored oracle mark becomes close-only after 30 seconds",
+  }).toBe(true);
+  await expect(page.getByTestId("close-only-notice")).toBeVisible();
+  await expect(page.getByTestId("open-position")).toBeEnabled();
   const nonceBefore = await walletNonce();
   await page.getByTestId("open-position").click();
   await expect(page.getByTestId("tx-toast").filter({ hasText: "Long ETH 2× opened" })).toBeVisible();
@@ -61,6 +69,10 @@ test("wallet trading: one confirmation, no margin deposit, wallet payouts and or
   expect((await views.account(trader))?.margin).toBe(0n);
   expect(walletBefore - await views.usdcBalance(trader)).toBe(50_200_000n);
   expect(await views.orders(trader)).toHaveLength(2);
+  const refreshed = (await views.markets()).find((market) => market.id === "ETH")!;
+  expect(refreshed.price_timestamp_ms).toBeGreaterThan(cached.price_timestamp_ms);
+  expect(refreshed.close_only).toBe(false);
+  await expect(page.getByTestId("close-only-notice")).toBeHidden();
 
   const walletAtClose = await views.usdcBalance(trader);
   await page.getByTestId(`position-${position.id}`).getByRole("button", { name: "Close", exact: true }).click();
@@ -75,6 +87,7 @@ test("wallet trading: one confirmation, no margin deposit, wallet payouts and or
   await page.locator("#order-trigger").fill("1000");
   await page.locator("#order-size").fill("100");
   const walletBeforeLimit = await views.usdcBalance(trader);
+  await expect(ticket.getByText("Keeper budget", { exact: true }).locator("..").locator("..").locator("dd")).toHaveText("$0.10");
   const nonceBeforeLimit = await walletNonce();
   await page.getByTestId("open-position").click();
   await expect(page.getByTestId("tx-toast").filter({ hasText: /Limit long ETH placed/ })).toBeVisible();

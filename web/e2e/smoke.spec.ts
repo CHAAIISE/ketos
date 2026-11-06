@@ -1,4 +1,18 @@
-import { expect, test } from "@playwright/test";
+import { expect, test as base } from "@playwright/test";
+import { formatUsdc } from "../lib/near/format";
+import { routePreviewSchema } from "../lib/intents/route-preview";
+
+const test = base.extend<{ browserErrors: void }>({
+  browserErrors: [async ({ page }, use) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
+    await use();
+    expect(errors, "No uncaught exceptions or console errors").toEqual([]);
+  }, { auto: true }],
+});
 
 // Read-only checks that run against any deployment: `BASE_URL=… playwright test --grep @smoke`.
 
@@ -9,6 +23,15 @@ test.describe("deployment", { tag: "@smoke" }, () => {
       status: 200, contentType: "application/json", headers: { "Retry-After": "60" },
       body: JSON.stringify({ ok: true, state: "throttled" }),
     }));
+  });
+
+  test("markets admit entries on first load after scheduled maintenance", async ({ page }) => {
+    await page.goto("/markets");
+    const statuses = page.locator('[data-testid^="market-status-"]');
+    await expect(statuses.first()).toBeVisible();
+    const open = (await statuses.allTextContents()).filter((status) => status === "Open").length;
+    expect(open, "Run scheduled maintenance before smoke; stored marks must be fresh on first load").toBeGreaterThan(0);
+    await expect(page.getByTestId("markets-count").locator("..")).toContainText(`· ${open} open`);
   });
 
   test("landing explains the product and leads into the app", async ({ page }) => {
@@ -49,6 +72,25 @@ test.describe("deployment", { tag: "@smoke" }, () => {
     await expect.poll(() => page.title()).toContain(await page.getByTestId("mark-price").innerText());
     await page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: "Propose a market", exact: true }).click();
     await expect(page).toHaveTitle(marketsTitle);
+  });
+
+  test("route preview returns a live quote without connecting a wallet", async ({ page }) => {
+    await page.goto("/trade");
+    await expect(page.getByTestId("wallet-account")).toHaveCount(0);
+    const preview = page.getByTestId("public-route-preview");
+    const response = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/route-preview" && url.searchParams.get("asset") === "SOL" && response.ok();
+    });
+    await preview.getByLabel("Amount (SOL)").fill("1");
+    const quote = routePreviewSchema.parse(await (await response).json());
+    expect(quote.status).toBe("ok");
+    if (quote.status !== "ok") throw new Error("The live SOL route has no liquidity");
+    expect(BigInt(quote.amountOut)).toBeGreaterThan(0n);
+    expect(Date.now() - quote.quotedAtMs).toBeLessThan(60_000);
+    await expect(preview.getByTestId("route-preview-quote")).toContainText(`${formatUsdc(BigInt(quote.amountOut))} USDC`);
+    await expect(page.getByRole("dialog", { name: "Connect a wallet" })).toHaveCount(0);
+    await expect(page.getByTestId("wallet-account")).toHaveCount(0);
   });
 
   test("vaults shows Core and Long-tail with their NAV", async ({ page }) => {

@@ -292,7 +292,9 @@ cargo test --manifest-path workers/ketos-prices/Cargo.toml --locked
 BASE_URL=https://ketos-three.vercel.app pnpm --dir web exec playwright test --grep @smoke
 ```
 
-The six hosted smoke cases are read-only: they block browser keeper calls. Normal app browsing can trigger maintenance. To check it separately, `POST /api/keeper/tick` returns transaction hashes, measurements and step failures; HTTP 200 with `state: "throttled"` means its gate is active.
+The eight hosted smoke cases are read-only: they block browser keeper calls and fail on uncaught exceptions or console errors. Run scheduled maintenance before the suite: its first market load must contain at least one fresh, open market, with the displayed count matching the rows. The wallet-free route case requests a real SOL → USDC quote without connecting or signing. Normal app browsing can trigger maintenance. To check it separately, `POST /api/keeper/tick` returns transaction hashes, measurements and step failures; HTTP 200 with `state: "throttled"` means its gate is active.
+
+The local journey labels all 12 scenes separately. It checks vault-backed refusal without losing margin and keeps the cap recovery action usable. The [wallet scenario](web/e2e/wallet-trading.spec.ts) waits for the stored mark to become close-only, then proves a one-transaction entry refreshes it; it also checks visible keeper reservations against actual wallet debits, cancellation refunds and wallet payouts.
 
 The [CI workflow](.github/workflows/ci.yml) runs frontend typecheck, lint, Vitest and production build on Node 24, plus the native contract-workspace and worker tests on Rust stable. Sandbox integration and hosted smoke are the separate commands above. The repository is licensed under [MIT](LICENSE).
 

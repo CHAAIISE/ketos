@@ -196,6 +196,9 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await ticket.getByLabel("Order funding source").selectOption("margin");
 
     await ticket.locator('input[name="order-size"]').fill(String((margin / USDC) * BigInt(leverage)));
+    const effectiveMarket = (await sandboxViews().markets()).find((entry) => entry.id === "ZEC")!;
+    expect(effectiveMarket.vault_backed_cap_usd).toBeLessThanOrEqual(effectiveMarket.max_oi_per_side);
+    await expect(ticket.getByRole("status").filter({ hasText: /vault-limited/i })).toBeVisible();
     await expectSinglePrimary(page, /^Short$/);
     const accountBeforeRefusal = await sandboxViews().account(trader);
     await page.locator("[data-primary]:visible").click();
