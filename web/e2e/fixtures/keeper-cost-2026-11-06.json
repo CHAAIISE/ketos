@@ -1,0 +1,133 @@
+{
+  "source": "NEAR testnet transaction status RPC; tokens_burnt includes transaction and all receipt outcomes",
+  "tick_started_at": "2026-11-06T07:59:58.917Z",
+  "duration_ms": 110799,
+  "exclusions": [
+    "adapter deposit transfers/refunds",
+    "storage staking",
+    "paid HTTPS worker calls",
+    "hosting"
+  ],
+  "transactions": [
+    {
+      "hash": "BCJgb4xtAfcWeJBV9uiqgTL1Vj5HUhWAeqkdjuq7UJw8",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3767511884934",
+      "tokens_burnt": "354432932243400000000"
+    },
+    {
+      "hash": "kD9FhGbj6D131vSz7PCePyC9oFDLBnfDb2J1vumgo1j",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3768460403747",
+      "tokens_burnt": "354527784124700000000"
+    },
+    {
+      "hash": "4JfmfrrEdMdE93jDLQfXZDCUakNmj6unN7RJBUS82AP8",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3617956684629",
+      "tokens_burnt": "339477412212900000000"
+    },
+    {
+      "hash": "7Vfg6QiBHwQyk9yGyZ2SgifRKrNqhwcybYVuMEwffMNk",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3641927136174",
+      "tokens_burnt": "341874457367400000000"
+    },
+    {
+      "hash": "6CFDnMM4mG8z3QzaCpjn6vWFUSy5vjFqvq1WYXHhs67L",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3652596180875",
+      "tokens_burnt": "342941361837500000000"
+    },
+    {
+      "hash": "GYNcReiKbbDawXKEc3g1wkRqyFHGMhiADYhdEwvthfbh",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3238945886565",
+      "tokens_burnt": "301576332406500000000"
+    },
+    {
+      "hash": "3fPjwtEe4tfSAHiFLwBso7e5rsVg3JVJ8RqKuDpVUQ6r",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3501611021876",
+      "tokens_burnt": "327842845937600000000"
+    },
+    {
+      "hash": "8fMGUUgCDrjym1T4B9M1jiLvsTSmwXf5QJrZy4gRjYg7",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3608318072469",
+      "tokens_burnt": "338513550996900000000"
+    },
+    {
+      "hash": "8hHUQg2pEAMDoyoNJSzm3qZH6yzioZFhze5hzdbBmEnr",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3687934426578",
+      "tokens_burnt": "346475186407800000000"
+    },
+    {
+      "hash": "59PwJjLmKHKFgGhFxeM9ApoazzudSskHBCBFDQ2qUPpN",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3549663832591",
+      "tokens_burnt": "332648127009100000000"
+    },
+    {
+      "hash": "6gw9LaGqr7PGX1Ys4ByScoHKRk8TNzsiKo4UE63DXy6a",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3508541539675",
+      "tokens_burnt": "328535897717500000000"
+    },
+    {
+      "hash": "8gUAPANtpTB23hCRbkwGnArUPetLb6CQox9ySa9yhct1",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3498280726616",
+      "tokens_burnt": "327509816411600000000"
+    },
+    {
+      "hash": "2UExyCBfetZSZpmprLhhLXUtDAHd2Ayefu3VT5xFnQPN",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3581639634708",
+      "tokens_burnt": "335845707220800000000"
+    },
+    {
+      "hash": "EKKkwNT5zaeSzzpLvmaguYBJsguvxpy8d2oWtpZ9rSqz",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3588074007013",
+      "tokens_burnt": "336489144451300000000"
+    },
+    {
+      "hash": "7rqokXU5GWSpmoYK1t8ymmtCgqTFLSbSCFp5SeKmeXsj",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "set_depth",
+      "gas_burnt": "3566833805654",
+      "tokens_burnt": "334365124315400000000"
+    },
+    {
+      "hash": "ATznbG2CNrzgXiyQP5Q1totrAg4zW6SsKXhRfr8d1nhG",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "refresh_prices",
+      "gas_burnt": "28316288238407",
+      "tokens_burnt": "2653082773840700000000"
+    },
+    {
+      "hash": "D3jnA6uj4Azqfgi7M5nCc2CpanT1QQ98WKusbNNqRfW",
+      "signer_id": "keeper.ketos.testnet",
+      "method": "snapshot_vaults",
+      "gas_burnt": "6716906186032",
+      "tokens_burnt": "649372362353200000000"
+    }
+  ],
+  "total_tokens_burnt": "8345510816854300000000"
+}

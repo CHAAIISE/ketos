@@ -2,6 +2,29 @@
 
 Ketos is a native perps exchange on NEAR testnet, built for Unstoppable DeFi. Two LP vaults take the other side of trades. Each market's open-interest limit and maximum leverage come from measured exit liquidity on [NEAR Intents](web/lib/intents/oneclick.ts), rather than a listing committee. Margin, orders, funding and settlement live in [one Rust contract](contracts/ketos/src/lib.rs).
 
+**Trust model:** permissionless listing, price refresh, order execution and liquidation; trusted depth reports from one keeper; upgradeable code controlled by the testnet deployer. The contract checks the reported curve, freshness and capital limits, not the authenticity of solver quotes. Prices depend on authenticated oracle callbacks or the pinned enclave signing key. No administrator freeze/seizure method is implemented, but upgrades can change that code.
+
+## The problem
+
+A vault can inherit more exposure than the underlying market can absorb. In March 2025, Hyperliquid's HLP temporarily showed about $13.5M of unrealized losses during the JELLY squeeze before forced settlement ([CoinDesk](https://www.coindesk.com/markets/2025/03/26/hyperliquid-delists-jellyjelly-after-vault-squeezed-in-usd13m-tussle)). In September 2022, a reference-market manipulation extracted about $565,000 from GMX's AVAX market at GLP holders' expense ([Cointelegraph](https://cointelegraph.com/news/decentralized-exchange-gmx-suffers-565k-price-manipulation-exploit)). An oracle price alone does not establish executable depth.
+
+Why measure [NEAR Intents](web/lib/intents/depth.ts)? Its solvers quote asset sales into USDC on NEAR, giving a reproducible indication of how much exposure could be unwound through that route. **Assumption, not verified by the contract:** solver hedges overlap the venues behind the oracle, so quoted exit size is a useful proxy for the market behind the price. Solvers can use different venues, inventories or incentives. These quotes neither measure the exact cost of manipulating an oracle venue nor reserve liquidity; Ketos executes no hedge. Vault capital is therefore a separate, binding constraint.
+
+### Two dated depth observations
+
+Both measurements sell into USDC on NEAR with `dry: true`, net of the configured 20 bps partner fee. The older [November 3 fixture](web/e2e/fixtures/depth-2026-11-03.json) starts at **17:05:47 UTC**; the new [November 6 fixture](web/e2e/fixtures/depth-2026-11-06.json) starts at **08:09:34 UTC**. Each sweep spans multiple requests, not an atomic market snapshot.
+
+| Asset | Nov 3: measured capacity | Nov 3: first failing size | Nov 6: measured capacity | Nov 6: first failing size | Nov 6: net impact at capacity |
+|---|---:|---|---:|---|---:|
+| BTC | $100,000 | $250,000: no quote | $1,000,000 | $2,500,000: no quote | 24 bps |
+| ETH | $100,000 | $250,000: no quote | $1,000,000 | $2,500,000: no quote | 92 bps |
+| NEAR | $100,000 | $250,000: no quote | $500,000 | $1,000,000: no quote | 18 bps |
+| ZEC | $100,000 | $250,000: no quote | $1,000,000 | $2,500,000: no quote | 76 bps |
+
+In both snapshots every cutoff was a missing quote, not impact above 1%. Capacity here is the last contiguous acceptable ticket, not proof of a hard market boundary. The new sampler retries unavailable sizes once and publishes a nondecreasing impact envelope; the historical fixture retains its original observations. Net impact floors at zero after subtracting the fee, so zero is not a promise of costless execution.
+
+Reproduce with `pnpm depth:sample --fixture`; inspect the dated JSON, not just the CLI's derived leverage/open columns. Those columns describe raw depth tiers and the default hard cap, **not** vault backing, admission ramping, the Long-tail 5× ceiling or price freshness. This command submits no transaction and does not update deployed limits. `/risk` shows the separately published onchain curves.
+
 ## Demo
 
 **Live app: https://ketos-three.vercel.app** — testnet contracts, faucet USDC, no real-money trading.
@@ -11,6 +34,21 @@ The full transaction journey is reproducible with `pnpm --dir web exec playwrigh
 **Video:** the 12-scene recording is not yet published; there is no public video URL. The local journey above is executable now.
 
 Activity on the hosted app comes from our own test accounts, not independent users. The [real session script](scripts/demo-session.ts) funds three dedicated accounts and sends actual transactions to the deployed contracts: [ETH long with TP/SL](https://testnet.nearblocks.io/txns/7HepDCWwveH4efesbfJHmmvvqzPMhZSzyLZywXZWA67g), [XRP short](https://testnet.nearblocks.io/txns/B4UPb5LE6QkiPB4xdDWC61fJi1HqFEDvdNH5YUofiW5T) and [BTC limit order](https://testnet.nearblocks.io/txns/8tzC4MotZofkphL5Tu7nUNHZ6NFjwbD8yFY6QujS4Us9). Markets can still close and orders can remain unfilled. The app never overrides safety checks to reproduce a screenshot.
+
+The completed November 6 session also includes a [200-USDC Core deposit](https://testnet.nearblocks.io/txns/DfsmzQ38ymR7eZCoofMYHW5Fh74Cobh21HPFE7bd77Wj), [200-USDC Long-tail deposit](https://testnet.nearblocks.io/txns/6XEUWkU6KNhi6MuXxgJXyn4drasQRimDuaw5GhjVGHUN), [25-USDC UNI listing](https://testnet.nearblocks.io/txns/3yyouKdx2SZhi4KCeQ2srYBE3jdNUd4Mrbyq9BHzdnnR) and [XRP close](https://testnet.nearblocks.io/txns/f5Hj3vGQMFwzrz12JgNaitTh797wd7yL2hvN6miomXx). That close returned 111.687594 USDC against 100 USDC committed: **11.687594 USDC net gain** after recorded entry/exit fees, borrow and funding. This is our test activity, not customer traction or an LP return. No real-price liquidation was eligible during the session.
+
+### Try it on the hosted app (5 minutes)
+
+No wallet is needed for steps 1–2 or 5–6. To sign, use an existing **NEAR testnet** account in a wallet offered by **Connect → Connect a wallet**; the connector filters for testnet support. The automated signing journey is verified with the local sandbox signer, not a manually tested retail wallet, so no wallet brand is claimed here. If you need an account or sponsor funding is unavailable, use the [NEAR testnet faucet](https://near-faucet.io/); never send real funds.
+
+1. Open **https://ketos-three.vercel.app → Start trading** — see market limits and timestamps beside the order ticket. A Close-only mark is expected when its observation is older than 30 seconds; it is not an invitation to ignore freshness.
+2. Open **Propose a market** (the `/markets` registry) — compare **measured**, **effective** and **Vault-limited** caps. Select ETH or another supported market with at least $10,000 admission capacity. A keeper tick cannot guarantee an Open badge: surveillance refreshes only active feeds.
+3. **Connect → Fund** — see 1,000 USDC from the hourly faucet. Funding is sponsored without a signature and adds 0.5 NEAR when available gas is below 0.1 NEAR. The sponsor can refuse when its budget is exhausted; trading still needs gas.
+4. Enter **Market → Long → 2× → Amount 20 USDC** — inspect 10 USDC margin plus the displayed fees, then sign once. No Deposit step is needed. The action obtains a fresh signed observation or pulls the price; observe the position and transaction result, or an explicit source/freshness failure. A pre-click Open badge is not required for the pull path, but depth and capital must qualify. Close the position when finished; released collateral returns to the wallet by default.
+5. Open **Risk → ETH → −50%** — inspect liquidatable exposure and estimated bad debt on actual positions. The read-only calculation does not change prices or send an order.
+6. Return to the public **From another chain** card — enter **1 SOL** and read the dated USDC quote, cost and estimated time. This preview does not fund testnet trading.
+
+Limit fills, an onchain oversized-order refusal, a new listing and controlled liquidation are exercised in the local journey below. They are not guaranteed five-minute hosted outcomes.
 
 ### Try without a wallet
 
@@ -22,9 +60,9 @@ The hosted app exposes **From another chain** on the landing page and below `/tr
 
 This is a read-only mainnet route preview, not a way to fund the testnet trading account. The landing also shows four onchain markets and a selectable impact-versus-size curve with a 100 bps threshold. Measured liquidity, ramp-limited admission and vault-backed effective caps are distinct; timestamps identify old observations.
 
-### Try it — 12 steps
+### Reproduce the full local journey — 12 steps
 
-Steps 1–9 and 11–12 can be explored on the hosted app. You need an existing NEAR testnet wallet, fresh prices and an open market. **Fund** needs no NEAR or wallet signature: it sponsors USDC and, when needed, gas. The local journey also drives the controlled price moves in steps 5 and 10 and supplies extra test collateral for the cap-refusal scene.
+Run `pnpm --dir web exec playwright test` after the [local setup](#run-locally). This journey uses mock prices, a sandbox wallet and extra test collateral, while depth requests remain real. The same screens can be inspected on the hosted app, but its real prices, existing listings and hourly faucet cannot force these outcomes.
 
 1. **Open the landing page** — see measured capacity, open/listed markets, total open interest, vault TVL and 24-hour volume, with observation times. Use the main trading action to enter the app.
 2. **Connect → Fund → Trade** — connect a testnet wallet and request **1,000 USDC** from the hourly faucet. Fund also sends **0.5 NEAR** when your available balance is below **0.1 NEAR**; no NEAR or wallet signature is needed to fund. Trade directly from the wallet, without a margin-deposit step. Deposit/Withdraw remain in the account menu for advanced use.
@@ -39,20 +77,6 @@ Steps 1–9 and 11–12 can be explored on the hosted app. You need an existing 
 11. **Open Portfolio** — inspect equity, realized/unrealized PnL, positions, orders, trade/funding history and confirmed collateral transfers. Switch the BTC position from Isolated to Cross after the risk confirmation, then close. Released collateral returns to the wallet unless **Keep on Ketos** is checked; advanced Withdraw retrieves any remaining free margin. Cross cash still backs surviving legs and is released only after the last leg closes. Conversion to Cross cannot be reversed.
 12. **Open Leaderboard** — see the trading account highlighted with all-time realized PnL, ROI, volume and executed trades. Sort by volume, then return home to see the trades reflected in 24-hour volume. With no executed trades, the live leaderboard correctly stays empty.
 
-## The problem
-
-A vault can inherit more exposure than the underlying market can absorb. In March 2025, Hyperliquid's HLP temporarily showed about $13.5M of unrealized losses during the JELLY squeeze before forced settlement ([CoinDesk](https://www.coindesk.com/markets/2025/03/26/hyperliquid-delists-jellyjelly-after-vault-squeezed-in-usd13m-tussle)). In September 2022, a reference-market manipulation extracted about $565,000 from GMX's AVAX market at GLP holders' expense ([Cointelegraph](https://cointelegraph.com/news/decentralized-exchange-gmx-suffers-565k-price-manipulation-exploit)). An oracle price alone does not establish executable depth.
-
-Here is the [recorded 1Click measurement](web/e2e/fixtures/depth-2026-11-03.json) from **November 3, 2026, 17:05:47 UTC**: selling into USDC on NEAR, `dry: true`, impact net of the recorded 20 bps partner fee.
-
-| Asset | $1,000 | $10,000 | $50,000 | $100,000 | $250,000 | $500,000 | $1,000,000 |
-|---|---|---|---|---|---|---|---|
-| BTC | 20 bps | 20 bps | 20 bps | 20 bps | No quote | No quote | No quote |
-| ETH | 19 bps | 19 bps | 20 bps | 20 bps | No quote | No quote | No quote |
-| NEAR | 25 bps | 25 bps | 28 bps | 31 bps | No quote | No quote | No quote |
-| ZEC | 15 bps | 34 bps | 25 bps | 26 bps | No quote | No quote | No quote |
-
-This observation supported $100,000 of exit capacity per asset **at that time**, not a permanent ceiling or today's liquidity. Missing smaller quotes can also coexist with larger successful quotes; Ketos stops at the first gap rather than jumping over it. Re-measure with `pnpm depth:sample` and inspect current curves on `/risk`.
 
 ## How it works
 
@@ -178,13 +202,48 @@ Unstoppable DeFi here means [permissionless listing](contracts/ketos/src/listing
 
 ## What's new
 
-- Market sizing is a contract calculation from an observable exit curve, with enforcement both at entry and delayed-order execution.
-- Permissionless listings enter a measuring state rather than inheriting an arbitrary trading allowance.
-- Two independent counterparties, cross-aware liquidation and a read-only stress view make the link between market exposure and LP risk inspectable in one app.
+### Compared with existing venues
 
-## Business model
+Vault counterparties and risk caps are not new. [GMX](https://docs.gmx.io/docs/providing-liquidity/) configures per-market/per-side open-interest limits and reserves. [Hyperliquid HLP](https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/vaults/protocol-vaults) makes markets and backstops liquidations; it is not simply a passive counterparty to every trade. [Jupiter JLP](https://docs.jup.ag/user-docs/earn/jlp) backs its supported markets and earns fees against trader PnL. Ketos does not claim to invent those models.
 
-Trading fees, borrow fees and liquidation penalties accrue to the LP capital taking counterparty risk; listing fees go to Long-tail. Funding transfers between trader sides, with the unmatched amount going to the vault. There is no separate protocol treasury fee or revenue claim. Fee APR is backward-looking and can include assessed cross claims; it is neither cash yield nor a forecast.
+The obvious NEAR alternative is [near.com perps](https://perps.near.com/): its FAQ identifies a direct Hyperliquid integration and a dedicated trading account there. Derivatives positions and venue fees therefore belong to Hyperliquid's execution system, not a native NEAR counterparty vault. Ketos keeps collateral, settlement and LP fees in one NEAR contract. That is a different location and risk model, not evidence of better execution or deeper liquidity.
+
+Three differences are checkable in this repository:
+
+- **Measured admission:** [depth rules](contracts/ketos/src/depth.rs) compute an allowance from dated exit quotes, with slow increases and immediate reductions, bounded again by [LP capital](contracts/ketos/src/vault.rs). Hard caps and capital multipliers remain configured policy; the limit is not parameter-free.
+- **Permissionless but constrained listing:** [listing](contracts/ketos/src/listing.rs) costs 25 USDC, binds the price identity to the measured token route and starts Measuring. Supported sources and at least $10,000 of depth are prerequisites, not a promise to support arbitrary assets.
+- **Inspectable NEAR counterparty risk:** separate Core/Long-tail balances, cross-aware liquidation and a [read-only stress model](web/components/risk/stress.ts) expose how positions affect LPs. No automatic hedge or crash-proof payout is claimed.
+
+### What changed after review
+
+- Entry limits now account for vault-wide capital; NAV excludes uncollectible losses/claims and withdrawals retain the required backing.
+- Depth increases ramp conservatively, listing identities are bound to routes, and unsupported AURORA/RHEA markets were retired without resetting balances or histories.
+- Actions obtain fresh, action-scoped prices or verified enclave-signed batches; callers fund oracle requests, and voluntary exits have an explicit adverse-price fallback after a failed pull.
+- Fees include measured impact; triggered orders reserve a separately visible executor reward. Wallet collateral can open a position in one transaction, with wallet payouts by default.
+- Public APIs have bounded caches/quotas, funding has a dedicated sponsor, and scheduled maintenance is available but must be enabled and funded. The [state-preserving upgrade](https://testnet.nearblocks.io/txns/EqAL97j3GTLXJM9Z9TrmKie3gmm632r7YQ7fRqTdFUTh) and session links above provide deployed evidence, not just source changes.
+
+## Business model and running costs
+
+| Flow | Current rule | Recipient |
+|---|---|---|
+| Open / close | 0.1% of notional each, plus interpolated measured impact | Assigned LP vault |
+| Borrow | 0.001% + 0.009% × utilization per hour | Assigned LP vault |
+| Funding | Up to ±0.05% per hour | Opposite trader side; unmatched balance to its vault |
+| Liquidation | Up to 1% of notional, plus up to 0.2% executor reward, limited by remaining equity | Vault / liquidator respectively |
+| Listing | Exactly 25 USDC | Long-tail |
+| Trigger execution | 0.05% of notional, minimum 0.1 USDC, reserved per order | Successful executor; unused reservation refunded |
+
+These rules are implemented in [positions](contracts/ketos/src/position.rs), [funding](contracts/ketos/src/funding.rs), [liquidation](contracts/ketos/src/liquidation.rs), [listing](contracts/ketos/src/listing.rs) and [orders](contracts/ketos/src/orders.rs). LPs also absorb net trader gains/losses. There is **no protocol treasury fee** and no automatic conversion of LP revenue into an operating budget. Fee APR is backward-looking, can include assessed cross claims and is neither cash yield nor a forecast.
+
+Who pays for operations:
+
+- **Trader/LP actions:** the caller funds only the required adapters when the 15-second cache or signed batch cannot satisfy the action. The [quote](contracts/ketos/src/pull_prices.rs) reserves 0.02 NEAR per TEE request plus 0.02 NEAR per batch of up to 12 worker assets; surplus is refunded. These are attached adapter deposits, not a measured permanent charge: refunds and execution fees depend on the adapter. Valid signed execution consumes no onchain oracle deposit, but gas remains payable.
+- **Server signed-price calls:** the project pays through `OUTLAYER_PAYMENT_KEY`. Its offchain USDC charges, API/hosting costs and faucet sponsorship are separate from onchain gas. A browser transaction's oracle-deposit refund does not make the offchain request free.
+- **Maintenance:** the keeper pays transaction gas. Its zero-deposit `refresh_prices` can use unreserved contract NEAR for adapter deposits, never traders' prepaid oracle credits. [Surveillance](web/lib/keeper/tick.ts) requests active markets at most every five minutes; idle markets are not periodically priced. A full mixed-source refresh reserves 0.02 NEAR for TEE assets plus 0.02 NEAR per worker batch, not 0.04 NEAR every minute regardless of activity. The 2-NEAR spendable-balance guard stops maintenance below its floor.
+
+**Measured example, November 6, 2026, 07:59:58 UTC:** the hosted pass took 110.799 seconds and submitted 15 depth updates, one BTC/ETH TEE refresh and one snapshot. Summing `tokens_burnt` from the 17 transaction outcomes and all their receipts gives **0.0083455108168543 NEAR** of gas. The [dated cost fixture](web/e2e/fixtures/keeper-cost-2026-11-06.json) records every transaction hash and its summed gas/NEAR units; reproduce using the transaction status RPC with all receipt outcomes. Explorer examples: [first depth update](https://testnet.nearblocks.io/txns/BCJgb4xtAfcWeJBV9uiqgTL1Vj5HUhWAeqkdjuq7UJw8), [refresh](https://testnet.nearblocks.io/txns/ATznbG2CNrzgXiyQP5Q1totrAg4zW6SsKXhRfr8d1nhG) and [snapshot](https://testnet.nearblocks.io/txns/D3jnA6uj4Azqfgi7M5nCc2CpanT1QQ98WKusbNNqRfW). This excludes attached-deposit flows, storage growth, paid HTTPS calls and hosting; it is one observed workload, not a fixed tick price or a daily budget.
+
+Scheduled GitHub and local macOS runners exist; neither starts merely by deploying the app. GitHub activation still requires publication and secrets configured by the repository owner. App visits and `pnpm keeper` provide fallbacks, not guaranteed uptime. Today the project operator tops up testnet NEAR and the payment key. Before real-money operation, a funded maintenance/oracle budget and a reviewed revenue policy would be needed; neither is implemented as an autonomous treasury.
 
 ## Built with
 
@@ -315,7 +374,7 @@ All quotas, queues and caches above are **per server instance**, not distributed
 
 Production metadata uses `NEXT_PUBLIC_SITE_URL`, or Vercel's production hostname when unset. The [response policy](web/next.config.ts) denies framing, disables MIME sniffing and restricts referrers. CSP permits inline application/wallet code and HTTPS wallet modules/connections, but not production `unsafe-eval`; it is not a nonce-based XSS boundary. Zod uses interpreted validators before hydration. Next's browser `util` shim can still report a caught generator-syntax eval feature probe, then falls back without enabling eval. `/vaults/longtail` permanently redirects to `/vaults/long-tail`.
 
-These API/configuration changes are verified locally; they do not redeploy the hosted frontend.
+These API/configuration changes are included in the hosted November 6 frontend deployment. Future source or environment edits still require a new deployment.
 
 ### Deployment and worker
 
