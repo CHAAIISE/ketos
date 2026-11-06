@@ -90,8 +90,6 @@ fn worker_intents_asset_id(symbol: &str) -> Option<&'static str> {
         "NEAR" => "nep141:wrap.near",
         "ZEC" => "nep141:zec.omft.near",
         "SOL" => "nep141:sol.omft.near",
-        "AURORA" => "nep141:aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
-        "RHEA" => "nep141:token.rhealab.near",
         "DOGE" => "nep141:doge.omft.near",
         "XRP" => "nep141:xrp.omft.near",
         "LTC" => "nep141:ltc.omft.near",

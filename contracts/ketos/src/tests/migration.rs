@@ -95,6 +95,19 @@ fn migration_keeps_legacy_orders_cancellable_and_positions_settleable() {
         assert_eq!(upgraded.vault_shares[i].get(&holders[0]), Some(&(0, vault.total_shares)));
     }
     assert_eq!(upgraded.accounts.get(&trader).unwrap().reserved_margin, 50 * USD);
+    // The V3 maintenance call does not migrate or reinitialize any user state.
+    let retired = ["AURORA", "RHEA"].into_iter()
+        .filter(|id| upgraded.markets.contains_key(*id))
+        .map(str::to_string).collect::<Vec<_>>();
+    let vaults_before = near_sdk::borsh::to_vec(&upgraded.vaults).unwrap();
+    let history_before = upgraded.get_history(trader.clone(), None, None);
+    assert_eq!(upgraded.retire_unsupported_markets(), retired);
+    assert_eq!(near_sdk::borsh::to_vec(&upgraded.vaults).unwrap(), vaults_before);
+    assert_eq!(upgraded.get_history(trader.clone(), None, None), history_before);
+    for (i, vault) in upgraded.vaults.iter().enumerate() {
+        assert_eq!(upgraded.vault_shares[i].get(&holders[0]), Some(&(0, vault.total_shares)));
+    }
+    assert!(upgraded.retire_unsupported_markets().is_empty());
     context(trader.as_str(), now);
     let PromiseOrValue::Value(refund) = upgraded.cancel_order(10, Some(false)) else {
         panic!("retained legacy cancellation must be synchronous");

@@ -1,4 +1,4 @@
-// Deploys Ketos V3 without resetting V2 state; unchanged deployments issue no transactions.
+// Deploys Ketos V3 and retires unsupported markets atomically, without resetting initialized state.
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,8 @@ const LEGACY_KETOS_HASH = "FbrFuxkZHjKJEsUoorjrXe8vAdPi949EL6Dq3kRgaKq8";
 const LEGACY_USDC_HASH = "44Vnm1rH3LDCgMF4ZMA9Wunz2VwSwYvTL6igshLgJsvR";
 const PREVIOUS_USDC_HASH = "Haq6T2sMW2K58F3sGen8zEKJMpBiW5tHo14w39nZUSFr";
 const CORE_MARKETS = ["BTC", "ETH", "NEAR", "SOL"];
-const TEE_MARKETS = [...CORE_MARKETS, "ZEC", "AURORA", "RHEA"];
+const TEE_MARKETS = [...CORE_MARKETS, "ZEC"];
+const RETIRED_MARKETS = ["AURORA", "RHEA"];
 const WORKER_MARKETS = ["DOGE", "XRP", "LTC", "ADA", "SUI", "TRX", "BNB", "AVAX", "LINK"];
 const root = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 
@@ -41,7 +42,8 @@ type Vault = {
 };
 type VaultAccount = { shares: string };
 type Market = {
-  id: string; price_source: string; vault_id: string; max_leverage_cap: number; max_leverage: number;
+  id: string; oracle_asset_id: string; oi_long: string; oi_short: string;
+  price_source: string; vault_id: string; max_leverage_cap: number; max_leverage: number;
   price: string; price_timestamp_ms: number; created_at_ms?: number; leverage_increased_at_ms?: number;
   measured_cap_is_grid_max?: boolean; vault_backed_cap_usd?: string; effective_max_oi_per_side?: string;
   close_only?: boolean; stale_close_spread_bps?: number;
@@ -88,6 +90,140 @@ function near(amount: bigint): string {
   return `${amount / unit}${fraction ? `.${fraction}` : ""} NEAR`;
 }
 
+function borshString(value: string): Buffer {
+  const bytes = Buffer.from(value);
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(bytes.length);
+  return Buffer.concat([length, bytes]);
+}
+
+function readBorshBytes(bytes: Buffer, cursor: { offset: number }): Buffer {
+  if (cursor.offset + 4 > bytes.length) throw new Error("Truncated Borsh length");
+  const length = bytes.readUInt32LE(cursor.offset);
+  cursor.offset += 4;
+  if (cursor.offset + length > bytes.length) throw new Error("Truncated Borsh value");
+  const value = bytes.subarray(cursor.offset, cursor.offset + length);
+  cursor.offset += length;
+  return value;
+}
+
+type IterableHandle = { length: number; lengthOffset: number; vector: Buffer; values: Buffer };
+
+function ketosHandles(raw: RawState): { root: Buffer; markets: IterableHandle; positions: IterableHandle; orders: IterableHandle } {
+  const entry = raw.values.find((item) => Buffer.from(item.key, "base64").equals(Buffer.from("STATE")));
+  if (!entry) throw new Error("Ketos root state missing");
+  const root = Buffer.from(entry.value, "base64");
+  const cursor = { offset: 0 };
+  for (let index = 0; index < 4; index++) readBorshBytes(root, cursor);
+  function iterable(): IterableHandle {
+    const lengthOffset = cursor.offset;
+    const length = root.readUInt32LE(cursor.offset);
+    cursor.offset += 4;
+    return { length, lengthOffset, vector: readBorshBytes(root, cursor), values: readBorshBytes(root, cursor) };
+  }
+  const markets = iterable();
+  readBorshBytes(root, cursor); // Oracle lookup map.
+  readBorshBytes(root, cursor); // Accounts lookup map.
+  const positions = iterable();
+  cursor.offset += 8; // Next position id.
+  const orders = iterable();
+  if (![0, 15].some((prefix) => markets.vector.equals(Buffer.from([prefix, 118])) &&
+      markets.values.equals(Buffer.from([prefix, 109]))) ||
+      !positions.vector.equals(Buffer.from([2, 118])) ||
+      !positions.values.equals(Buffer.from([2, 109])) ||
+      ![7, 16].some((prefix) => orders.vector.equals(Buffer.from([prefix, 118])) &&
+        orders.values.equals(Buffer.from([prefix, 109])))) {
+    throw new Error("Unknown Ketos collection handles; refusing partial storage proof");
+  }
+  return { root, markets, positions, orders };
+}
+
+function vectorKey(handle: IterableHandle, index: number): string {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32LE(index);
+  return Buffer.concat([handle.vector, bytes]).toString("base64");
+}
+
+function mapKey(handle: IterableHandle, serializedKey: Buffer): string {
+  return createHash("sha256").update(handle.values).update(serializedKey).digest("base64");
+}
+
+function iterableEntries(entries: Map<string, string>, handle: IterableHandle): { key: Buffer; value: Buffer }[] {
+  const values: { key: Buffer; value: Buffer }[] = [];
+  for (let index = 0; index < handle.length; index++) {
+    const key = entries.get(vectorKey(handle, index));
+    if (!key) throw new Error("Incomplete iterable key vector");
+    const value = entries.get(mapKey(handle, Buffer.from(key, "base64")));
+    if (!value) throw new Error("Incomplete iterable values");
+    const bytes = Buffer.from(value, "base64");
+    if (bytes.length < 4 || bytes.readUInt32LE(bytes.length - 4) !== index) {
+      throw new Error("Iterable value index mismatch");
+    }
+    values.push({ key: Buffer.from(key, "base64"), value: bytes });
+  }
+  return values;
+}
+
+function retirementSnapshot(raw: RawState): { expected: Map<string, string>; retired: string[] } {
+  const handles = ketosHandles(raw);
+  const expected = new Map(raw.values.map((entry) => [entry.key, entry.value]));
+  const positions = new Map<bigint, string>();
+  for (const { key, value: bytes } of iterableEntries(expected, handles.positions)) {
+    const cursor = { offset: 0 };
+    readBorshBytes(bytes, cursor); // Owner.
+    const market = readBorshBytes(bytes, cursor).toString("utf8");
+    if (RETIRED_MARKETS.includes(market)) throw new Error(`Cannot retire ${market}: live position`);
+    positions.set(key.readBigUInt64LE(), market);
+  }
+  for (const { value: bytes } of iterableEntries(expected, handles.orders)) {
+    const cursor = { offset: 8 };
+    readBorshBytes(bytes, cursor); // Owner.
+    const kind = bytes[cursor.offset++];
+    let market: string;
+    if (kind === 0 || kind === 1) market = readBorshBytes(bytes, cursor).toString("utf8");
+    else if (kind === 2 || kind === 3) {
+      const position = positions.get(bytes.readBigUInt64LE(cursor.offset));
+      if (!position) throw new Error("Orphan bracket order; refusing retirement");
+      market = position;
+    } else throw new Error("Unknown order variant; refusing retirement");
+    if (RETIRED_MARKETS.includes(market)) throw new Error(`Cannot retire ${market}: live order`);
+  }
+  iterableEntries(expected, handles.markets);
+  const retired: string[] = [];
+  for (const id of RETIRED_MARKETS) {
+    const serialized = borshString(id);
+    const key = mapKey(handles.markets, serialized);
+    const encoded = expected.get(key);
+    if (!encoded) continue;
+    const value = Buffer.from(encoded, "base64");
+    const cursor = { offset: 0 };
+    if (readBorshBytes(value, cursor).toString("utf8") !== id) throw new Error("Market key/value mismatch");
+    const oracleAsset = readBorshBytes(value, cursor);
+    const index = value.readUInt32LE(value.length - 4);
+    const lastIndex = handles.markets.length - 1;
+    if (expected.get(vectorKey(handles.markets, index)) !== serialized.toString("base64")) {
+      throw new Error("Market vector/index mismatch");
+    }
+    if (index !== lastIndex) {
+      const swapped = expected.get(vectorKey(handles.markets, lastIndex))!;
+      expected.set(vectorKey(handles.markets, index), swapped);
+      const swappedKey = mapKey(handles.markets, Buffer.from(swapped, "base64"));
+      const swappedValue = Buffer.from(expected.get(swappedKey)!, "base64");
+      swappedValue.writeUInt32LE(index, swappedValue.length - 4);
+      expected.set(swappedKey, swappedValue.toString("base64"));
+    }
+    expected.delete(vectorKey(handles.markets, lastIndex));
+    expected.delete(key);
+    expected.delete(Buffer.concat([Buffer.from([3]), serialized]).toString("base64"));
+    expected.delete(Buffer.concat([Buffer.from([6]), borshString(oracleAsset.toString("utf8"))]).toString("base64"));
+    handles.markets.length--;
+    retired.push(id);
+  }
+  handles.root.writeUInt32LE(handles.markets.length, handles.markets.lengthOffset);
+  expected.set(Buffer.from("STATE").toString("base64"), handles.root.toString("base64"));
+  return { expected, retired };
+}
+
 async function main(): Promise<void> {
   loadEnv();
   const parentId = "ketos.testnet";
@@ -101,6 +237,17 @@ async function main(): Promise<void> {
   const signer = (accountId: string) => new Account(accountId, provider, parentKey);
   const parent = signer(parentId);
   const artifacts = { usdc: wasm("mock_usdc"), ketos: wasm("ketos") };
+  const manifestPath = root("deployments/testnet.json");
+  const previousDeployment = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      network?: string; ketos?: string; usdc?: string; schema_version?: number;
+      code_hashes?: { ketos?: string; usdc?: string };
+    } : null;
+  const previousKetosHash = previousDeployment?.network === "testnet" &&
+    previousDeployment.ketos === ids.ketos && previousDeployment.usdc === ids.usdc &&
+    previousDeployment.schema_version === 3 &&
+    /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(previousDeployment.code_hashes?.ketos ?? "")
+    ? previousDeployment.code_hashes!.ketos : undefined;
   const fundingAccountId = nearAccountId();
   if (fundingAccountId === parentId) {
     throw new Error("Vault seeding requires a separate NEAR_ACCOUNT_ID LP account and its NEAR_PRIVATE_KEY; NEP-141 forbids transfers to the sender itself.");
@@ -191,15 +338,18 @@ async function main(): Promise<void> {
     return { account, initialized, raw, codeBytes: bytes.length };
   }
 
-  async function validateKetos(legacy = false): Promise<void> {
+  async function validateKetos(legacy = false, beforeRetirement = false): Promise<void> {
     const actual = await view<Record<string, unknown>>(ids.ketos, "get_config");
     for (const [name, expected] of Object.entries(config)) {
       if (actual[name] !== expected) throw new Error(`${ids.ketos}: incompatible ${name}; expected ${expected}`);
     }
     const markets = await view<Market[]>(ids.ketos, "get_markets");
     const expectedIds = [...TEE_MARKETS, ...WORKER_MARKETS];
-    if (markets.length < 16 || new Set(markets.map((m) => m.id)).size !== markets.length) {
-      throw new Error(`${ids.ketos}: expected all 16 unique default markets`);
+    if (markets.length < expectedIds.length || new Set(markets.map((m) => m.id)).size !== markets.length) {
+      throw new Error(`${ids.ketos}: expected all ${expectedIds.length} unique supported default markets`);
+    }
+    if (!beforeRetirement && markets.some((market) => RETIRED_MARKETS.includes(market.id))) {
+      throw new Error(`${ids.ketos}: unsupported AURORA/RHEA markets remain registered`);
     }
     for (const id of expectedIds) {
       const market = markets.find((m) => m.id === id);
@@ -247,7 +397,7 @@ async function main(): Promise<void> {
   if (artifacts.ketos.hash === LEGACY_KETOS_HASH || [LEGACY_USDC_HASH, PREVIOUS_USDC_HASH].includes(artifacts.usdc.hash)) {
     throw new Error("Build the V3 Ketos and compatible mock-usdc artifacts before deployment");
   }
-  const ketosState = await inspectContract(ids.ketos, artifacts.ketos.hash, LEGACY_KETOS_HASH);
+  const ketosState = await inspectContract(ids.ketos, artifacts.ketos.hash, LEGACY_KETOS_HASH, previousKetosHash);
   if (!ketosState.account) throw new Error(`${ids.ketos}: create the dedicated testnet account and set KETOS_PRIVATE_KEY first`);
   const usdcState = await inspectContract(ids.usdc, artifacts.usdc.hash, LEGACY_USDC_HASH, PREVIOUS_USDC_HASH);
   const keeperState = await viewAccount(ids.keeper);
@@ -270,13 +420,27 @@ async function main(): Promise<void> {
   if (keeperSecret) KeyPair.fromString(keeperSecret as KeyPairString);
   const migrating = ketosState.initialized && ketosState.account.code_hash === LEGACY_KETOS_HASH;
   const tokenUpgraded = usdcState.initialized && usdcState.account?.code_hash !== artifacts.usdc.hash;
+  const retirement = ketosState.initialized ? retirementSnapshot(ketosState.raw!) : null;
+  const upgradingKetos = ketosState.initialized && ketosState.account.code_hash !== artifacts.ketos.hash;
+  const changingKetos = upgradingKetos || (retirement?.retired.length ?? 0) > 0;
+  if (changingKetos && !process.argv.includes("--quiescent")) {
+    throw new Error("Stop your keeper/submissions and rerun with --quiescent; stable snapshots cannot enumerate pending external receipts");
+  }
+  if (ketosState.initialized && !usdcState.initialized) {
+    throw new Error("Initialized Ketos requires its existing token; refusing custody replacement");
+  }
   if (tokenUpgraded && !ketosState.initialized) {
     throw new Error("An existing token upgrade requires preserved Ketos vaults; refusing simultaneous bootstrap/seeding");
   }
-  if (migrating && !usdcState.initialized) {
-    throw new Error("V2 migration requires the existing initialized token; refusing custody replacement");
+  const marketsBefore = ketosState.initialized ? await view<Market[]>(ids.ketos, "get_markets") : [];
+  if (ketosState.initialized) {
+    await validateKetos(migrating, true);
+    for (const market of marketsBefore) {
+      if (RETIRED_MARKETS.includes(market.id) && (BigInt(market.oi_long) !== 0n || BigInt(market.oi_short) !== 0n)) {
+        throw new Error(`Cannot retire ${market.id}: nonzero open interest`);
+      }
+    }
   }
-  if (ketosState.initialized) await validateKetos(migrating);
   const vaultsBefore = new Map<string, Vault>();
   let tokenSupplyBefore: string | undefined;
   let tokenCustodyBefore: string | undefined;
@@ -293,7 +457,7 @@ async function main(): Promise<void> {
     tokenCustodyBefore = await view<string>(ids.usdc, "ft_balance_of", { account_id: ids.ketos });
     await view<string>(ids.usdc, "ft_balance_of", { account_id: seedAccountId });
     const registration = await view(ids.usdc, "storage_balance_of", { account_id: ids.ketos });
-    if ((migrating || tokenUpgraded) && !registration) {
+    if (ketosState.initialized && !registration) {
       throw new Error("Ketos token registration missing; refusing a mutating token repair during upgrade");
     }
   }
@@ -326,7 +490,7 @@ async function main(): Promise<void> {
       if (BigInt(vault.total_shares) > 0n && BigInt(held.shares) < VAULT_SEED) {
         throw new Error(`${vaultId}: nonempty vault without the full 10000 USDC deployment seed shares`);
       }
-      if ((migrating || tokenUpgraded) && BigInt(vault.total_shares) === 0n) {
+      if (BigInt(vault.total_shares) === 0n) {
         throw new Error(`${vaultId}: seed missing; state-preserving upgrades must not reseed`);
       }
       if (migrating) {
@@ -354,6 +518,9 @@ async function main(): Promise<void> {
     ? await view<string | null>(ids.ketos, "get_price_signer") : null;
   if (previousSigner && previousSigner !== priceSigner) {
     throw new Error("Existing price signer differs from the attested worker; refusing rotation");
+  }
+  if (changingKetos && !migrating && previousSigner !== priceSigner) {
+    throw new Error("State-preserving V3 upgrade requires the existing attested signer; refusing signer repair");
   }
   saveAudit();
 
@@ -389,7 +556,7 @@ async function main(): Promise<void> {
     sum + Buffer.from(entry.key, "base64").length + Buffer.from(entry.value, "base64").length + 128, 4096) : 0;
   const migrationStorage = BigInt(migrationBytes) * STORAGE_PRICE_PER_BYTE;
   const bootstrap = !ketosState.initialized || !usdcState.initialized || !keeperState;
-  const deploymentRequired = bootstrap || migrating || usdcState.account?.code_hash !== artifacts.usdc.hash;
+  const deploymentRequired = bootstrap || changingKetos || usdcState.account?.code_hash !== artifacts.usdc.hash;
   const deploymentBudget = childTransfers + tokenTopUp + codeStorage + migrationStorage +
     (deploymentRequired ? DEPLOY_HEADROOM : 0n) + KETOS_MIN_AVAILABLE;
   // The 10 NEAR bootstrap target is not charged again for an upgrade or a no-op rerun.
@@ -401,6 +568,21 @@ async function main(): Promise<void> {
   for (const [accountId, state] of [[ids.ketos, ketosState], [ids.usdc, usdcState]] as const) {
     const current = await viewAccount(accountId);
     if (current?.code_hash !== state.account?.code_hash) throw new Error(`${accountId}: code changed during preflight`);
+  }
+  if (changingKetos) {
+    for (const [accountId, state] of [[ids.ketos, ketosState], [ids.usdc, usdcState]] as const) {
+      const current = await rpc<RawState>("query", {
+        request_type: "view_state", finality: "final", account_id: accountId,
+        prefix_base64: "", include_proof: false,
+      });
+      const previous = new Map(state.raw!.values.map((entry) => [entry.key, entry.value]));
+      if (!current || current.values.length !== previous.size ||
+          current.values.some((entry) => previous.get(entry.key) !== entry.value)) {
+        throw new Error(`${accountId}: storage changed during preflight; stop your submissions and retry`);
+      }
+      audit.accounts[`${accountId}:stable_predeploy`] = current;
+    }
+    saveAudit();
   }
   await topUpKetos(required);
 
@@ -424,10 +606,14 @@ async function main(): Promise<void> {
     const changed = state.account?.code_hash !== artifact.hash;
     if (changed) pending.push(actions.deployContract(artifact.code));
     if (!state.initialized) pending.push(actions.functionCall("new", init, teraToGas("100")));
-    else if (accountId === ids.ketos && changed) {
-      if (state.account?.code_hash !== LEGACY_KETOS_HASH) throw new Error("Only the pinned V2 Ketos schema can migrate");
-      // Private migration runs as a self-call in the SAME action batch as deploy. Failure rolls both back.
-      pending.push(actions.functionCall("migrate", { share_holders: audit.share_holders }, teraToGas("250")));
+    else if (accountId === ids.ketos && (changed || (retirement?.retired.length ?? 0) > 0)) {
+      // Every action is a self-call in the deploy batch; any migration/retirement failure rolls it all back.
+      if (migrating) {
+        pending.push(actions.functionCall("migrate", { share_holders: audit.share_holders }, teraToGas("250")));
+      } else if (changed && state.account?.code_hash !== previousKetosHash) {
+        throw new Error("Only the manifest-pinned V3 Ketos schema can upgrade without migration");
+      }
+      pending.push(actions.functionCall("retire_unsupported_markets", {}, teraToGas(migrating ? "40" : "250")));
     } else if (accountId === ids.usdc && changed) {
       if (![LEGACY_USDC_HASH, PREVIOUS_USDC_HASH].includes(state.account?.code_hash ?? "")) {
         throw new Error("Only a pinned previous mock-usdc layout can migrate");
@@ -443,9 +629,11 @@ async function main(): Promise<void> {
       receiverId: accountId, actions: pending, waitUntil: "FINAL",
     });
     audit.transactions.push({
-      kind: accountId === ids.ketos && migrating ? "deploy_and_migrate" : "deploy",
+      kind: accountId === ids.ketos && state.initialized
+        ? (migrating ? "deploy_migrate_and_retire" : "upgrade_and_retire") : "deploy",
       account_id: accountId, old_code_hash: state.account?.code_hash ?? EMPTY_CODE_HASH,
       new_code_hash: artifact.hash, share_holders: accountId === ids.ketos && migrating ? audit.share_holders : undefined,
+      retired_markets: accountId === ids.ketos ? retirement?.retired : undefined,
       outcome,
     });
     saveAudit();
@@ -592,7 +780,7 @@ async function main(): Promise<void> {
     console.log(`seeded ${vaultId}: ${VAULT_SEED / USD} USDC accepted and matching LP shares verified`);
   }
 
-  if (!migrating && !tokenUpgraded) {
+  if (!ketosState.initialized && !tokenUpgraded) {
     await ensureRegistered(ids.ketos);
     await seedVault("core");
     await seedVault("long-tail");
@@ -614,7 +802,7 @@ async function main(): Promise<void> {
   if (finalKetos?.code_hash !== artifacts.ketos.hash || finalUsdc?.code_hash !== artifacts.usdc.hash) {
     throw new Error("Final deployment code hash mismatch");
   }
-  if (migrating || tokenUpgraded) {
+  if (changingKetos || tokenUpgraded) {
     const afterBlock = await rpc<{ header: { hash: string; height: number } }>("block", { finality: "final" });
     if (!afterBlock) throw new Error("Cannot pin the preservation snapshot block");
     const after: Record<string, unknown> = {
@@ -626,7 +814,7 @@ async function main(): Promise<void> {
     audit.preservation = { equality, failures };
     // Store the raw snapshots before comparing, including evidence for concurrent mutations.
     for (const [accountId, state] of [[ids.ketos, ketosState], [ids.usdc, usdcState]] as const) {
-      if (accountId === ids.ketos && !migrating) continue;
+      if (accountId === ids.ketos && !changingKetos) continue;
       const raw = await rpc<RawState>("query", {
         request_type: "view_state", block_id: afterBlock.header.hash, account_id: accountId,
         prefix_base64: "", include_proof: false,
@@ -634,7 +822,8 @@ async function main(): Promise<void> {
       if (!raw || !state.raw) throw new Error(`${accountId}: preservation snapshot unavailable`);
       after[accountId] = { raw_state: raw };
       saveAudit();
-      const beforeEntries = new Map(state.raw.values.map((entry) => [entry.key, entry.value]));
+      const beforeEntries = accountId === ids.ketos ? retirement!.expected
+        : new Map(state.raw.values.map((entry) => [entry.key, entry.value]));
       const afterEntries = new Map(raw.values.map((entry) => [entry.key, entry.value]));
       const excluded = new Set<string>();
       if (accountId === ids.usdc && tokenUpgraded) {
@@ -646,7 +835,7 @@ async function main(): Promise<void> {
         }
         excluded.add(stateKey);
       }
-      if (accountId === ids.ketos) {
+      if (accountId === ids.ketos && migrating) {
         excluded.add(Buffer.from("STATE").toString("base64"));
         for (const entry of state.raw.values) {
           const key = Buffer.from(entry.key, "base64");
@@ -671,18 +860,54 @@ async function main(): Promise<void> {
         else unchanged++;
       }
       const addedKeys = [...afterEntries.keys()].filter((key) => !beforeEntries.has(key));
+      const allowedAdded = new Set<string>();
+      if (accountId === ids.ketos && migrating) {
+        const handles = ketosHandles(raw);
+        for (const handle of [handles.markets, handles.orders]) {
+          for (let index = 0; index < handle.length; index++) {
+            const key = vectorKey(handle, index);
+            const value = afterEntries.get(key);
+            if (!value) throw new Error("Incomplete migrated collection");
+            allowedAdded.add(key);
+            allowedAdded.add(mapKey(handle, Buffer.from(value, "base64")));
+          }
+        }
+        for (const key of afterEntries.keys()) {
+          const bytes = Buffer.from(key, "base64");
+          if (bytes.length >= 6 && bytes[0] === 17 && (bytes[1] === 0 || bytes[1] === 1) &&
+              bytes.readUInt32LE(2) === bytes.length - 6) allowedAdded.add(key);
+        }
+      }
+      const unexpectedAddedKeys = addedKeys.filter((key) => !allowedAdded.has(key));
       equality[accountId] = {
-        before_entries: beforeEntries.size, after_entries: afterEntries.size,
+        before_entries: state.raw.values.length, expected_entries: beforeEntries.size, after_entries: afterEntries.size,
         excluded_entries: excludedCount, unchanged_entries: unchanged,
         changed_or_missing_keys_base64: changedOrMissing, added_keys_base64: addedKeys,
+        unexpected_added_keys_base64: unexpectedAddedKeys,
+        retired_markets: accountId === ids.ketos ? retirement!.retired : undefined,
       };
-      if (changedOrMissing.length > 0 || (accountId === ids.usdc && addedKeys.length > 0)) {
+      if (changedOrMissing.length > 0 || unexpectedAddedKeys.length > 0) {
         failures.push(`${accountId}: preserved raw storage changed (possible concurrent mutation)`);
       }
     }
     const finalViews: Record<string, unknown> = {};
     after.views = finalViews;
-    for (const [index, vaultId] of (migrating ? ["core", "long-tail"] : []).entries()) {
+    if (changingKetos) {
+      const result = await rpc<{ result?: number[] }>("query", {
+        request_type: "call_function", block_id: afterBlock.header.hash, account_id: ids.ketos,
+        method_name: "get_markets", args_base64: Buffer.from("{}").toString("base64"),
+      });
+      if (!result?.result) throw new Error("Final market registry preservation view failed");
+      const actual = JSON.parse(Buffer.from(result.result).toString("utf8")) as Market[];
+      const expectedIds = marketsBefore.map((market) => market.id).filter((id) => !RETIRED_MARKETS.includes(id)).sort();
+      const actualIds = actual.map((market) => market.id).sort();
+      finalViews.markets = actual;
+      equality.market_registry = { before: marketsBefore.map((market) => market.id), expected: expectedIds, after: actualIds };
+      if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
+        failures.push("Market registry changed beyond AURORA/RHEA retirement");
+      }
+    }
+    for (const [index, vaultId] of (changingKetos ? ["core", "long-tail"] : []).entries()) {
       const vault = await rpc<{ result?: number[]; error?: string }>("query", {
         request_type: "call_function", block_id: afterBlock.header.hash, account_id: ids.ketos,
         method_name: "get_vault", args_base64: Buffer.from(JSON.stringify({ vault_id: vaultId })).toString("base64"),

@@ -10,6 +10,7 @@ use near_workspaces::operations::Function;
 use near_workspaces::types::{AccessKey, AccountDetailsPatch, Gas, KeyType, NearToken, SecretKey};
 use near_workspaces::{Contract, Worker};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::{err, now_ms, ok, view, wasm};
 
@@ -72,6 +73,74 @@ async fn assert_token_accounting(token: &Contract, expected: &Value) -> Result<(
         );
     }
     Ok(())
+}
+
+fn borsh_string(value: &str) -> Vec<u8> {
+    let mut bytes = (value.len() as u32).to_le_bytes().to_vec();
+    bytes.extend_from_slice(value.as_bytes());
+    bytes
+}
+
+fn lookup_key(prefix: &[u8], value: &str) -> Vec<u8> {
+    let mut bytes = prefix.to_vec();
+    bytes.extend_from_slice(&borsh_string(value));
+    Sha256::digest(bytes).to_vec()
+}
+
+/// Predict the exact schema-3 store::IterableMap swap_remove writes. No market
+/// payload bytes may change: the moved entry changes only its trailing u32 index.
+fn retired_state_expected(
+    state: &HashMap<Vec<u8>, Vec<u8>>,
+    markets: &Value,
+) -> HashMap<Vec<u8>, Vec<u8>> {
+    let mut expected = state.clone();
+    let mut ids = markets.as_array().unwrap().iter()
+        .map(|market| market["id"].as_str().unwrap()).collect::<Vec<_>>();
+    let root = expected.get_mut(b"STATE".as_slice()).unwrap();
+    let mut market_count_offset = 0;
+    // The unchanged schema-3 root begins with the four configured AccountIds.
+    for _ in 0..4 {
+        let len = u32::from_le_bytes(root[market_count_offset..market_count_offset + 4]
+            .try_into().unwrap()) as usize;
+        market_count_offset += 4 + len;
+    }
+    assert_eq!(u32::from_le_bytes(root[market_count_offset..market_count_offset + 4]
+        .try_into().unwrap()) as usize, ids.len());
+    for symbol in ["AURORA", "RHEA"] {
+        let Some(index) = ids.iter().position(|id| *id == symbol) else { continue };
+        let market = markets.as_array().unwrap().iter()
+            .find(|market| market["id"] == symbol).unwrap();
+        let last = ids.len() - 1;
+        let vector_key = |index: usize| {
+            let mut key = vec![15, b'v'];
+            key.extend_from_slice(&(index as u32).to_le_bytes());
+            key
+        };
+        let removed = expected.remove(&lookup_key(&[15, b'm'], symbol)).unwrap();
+        assert!(removed.starts_with(&borsh_string(symbol)));
+        assert_eq!(&removed[removed.len() - 4..], &(index as u32).to_le_bytes());
+        if index != last {
+            let moved_symbol = ids[last];
+            let moved_key = vector_key(last);
+            let moved_id = expected.get(&moved_key).unwrap().clone();
+            assert_eq!(moved_id, borsh_string(moved_symbol));
+            expected.insert(vector_key(index), moved_id);
+            let moved = expected.get_mut(&lookup_key(&[15, b'm'], moved_symbol)).unwrap();
+            assert!(moved.starts_with(&borsh_string(moved_symbol)));
+            let index_offset = moved.len() - 4;
+            assert_eq!(&moved[index_offset..], &(last as u32).to_le_bytes());
+            moved[index_offset..].copy_from_slice(&(index as u32).to_le_bytes());
+        }
+        expected.remove(&vector_key(last));
+        // Standalone LookupMaps use Identity; only IterableMap values use SHA-256.
+        let oracle_key = [vec![6], borsh_string(market["oracle_asset_id"].as_str().unwrap())].concat();
+        assert!(expected.remove(&oracle_key).is_some());
+        expected.remove(&[vec![3], borsh_string(symbol)].concat());
+        ids.swap_remove(index);
+    }
+    expected.get_mut(b"STATE".as_slice()).unwrap()[market_count_offset..market_count_offset + 4]
+        .copy_from_slice(&(ids.len() as u32).to_le_bytes());
+    expected
 }
 
 #[tokio::test]
@@ -239,5 +308,78 @@ async fn migrates_captured_v2_state_atomically_without_losing_claims() -> Result
     let _ = err(ketos.batch().deploy(&new_wasm).call(migration(holders)).transact().await);
     assert_eq!(ketos.view_state().await?, migrated);
     assert_eq!(worker.view_account(ketos.id()).await?.contract_state, migrated_code);
+
+    // Schema 3 is upgraded without invoking migrate again. A later failed action
+    // must roll back the deployment AND both registry removals.
+    let external = err(outsider.call(ketos.id(), "retire_unsupported_markets")
+        .args_json(json!({})).gas(Gas::from_tgas(100)).transact().await);
+    assert!(external.to_lowercase().contains("private"), "{external}");
+    assert_eq!(ketos.view_state().await?, migrated);
+    let failed_retirement = err(ketos.batch().deploy(&new_wasm)
+        .call(Function::new("retire_unsupported_markets").args_json(json!({}))
+            .gas(Gas::from_tgas(100)))
+        .call(Function::new("nonexistent_retirement_rollback_probe").args_json(json!({}))
+            .gas(Gas::from_tgas(10)))
+        .transact().await);
+    assert!(failed_retirement.to_lowercase().contains("method"), "{failed_retirement}");
+    assert_eq!(ketos.view_state().await?, migrated);
+    assert_eq!(worker.view_account(ketos.id()).await?.contract_state, migrated_code);
+
+    let retired = ok(ketos.batch().deploy(&new_wasm)
+        .call(Function::new("retire_unsupported_markets").args_json(json!({}))
+            .gas(Gas::from_tgas(250)))
+        .transact().await?);
+    assert_eq!(retired, json!(["AURORA", "RHEA"]));
+    let retired_state = ketos.view_state().await?;
+    assert_eq!(retired_state, retired_state_expected(&migrated, &markets),
+        "retirement changed storage outside exact registry/oracle/depth removal and swap indexes");
+    for symbol in ["AURORA", "RHEA"] {
+        assert!(view(&ketos, "get_market", json!({ "market_id": symbol })).await?.is_null());
+        assert!(view(&ketos, "get_depth", json!({ "market_id": symbol })).await?.is_null());
+    }
+    assert_eq!(view(&ketos, "get_markets", json!({ "limit": 100 })).await?.as_array().unwrap().len(), 14);
+    for (account_id, expected) in fixture["views"]["accounts"].as_object().unwrap() {
+        for method in ["get_account", "get_account_stats", "get_history", "get_positions", "get_orders"] {
+            assert_eq!(view(&ketos, method, json!({ "account_id": account_id, "limit": 200 })).await?,
+                expected[method], "retirement changed {method} for {account_id}");
+        }
+    }
+    for vault_id in ["core", "long-tail"] {
+        let expected = &fixture["views"]["vaults"][vault_id];
+        assert_eq!(view(&ketos, "get_vault_history", json!({ "vault_id": vault_id })).await?,
+            expected["history"]);
+        for (holder, claim) in expected["holders"].as_object().unwrap() {
+            assert_eq!(view(&ketos, "get_vault_account",
+                json!({ "vault_id": vault_id, "account_id": holder })).await?, *claim);
+        }
+    }
+    assert_token_accounting(&token, &fixture["token"]["views"]).await?;
+    assert_eq!(ok(ketos.call("retire_unsupported_markets").args_json(json!({}))
+        .gas(Gas::from_tgas(100)).transact().await?), json!([]));
+    assert_eq!(ketos.view_state().await?, retired_state);
+
+    // Real FT resolution after a failed asynchronous oracle pull returns the entire
+    // transfer. The captured oracle has no sandbox code; no fake price is supplied.
+    let holder_id = fixture["share_holders"][0].as_str().unwrap();
+    let holder = patch_public_account(&worker, holder_id, seed, &HashMap::new()).await?;
+    let wallet_before = view(&token, "ft_balance_of", json!({ "account_id": holder_id })).await?;
+    let custody_before = view(&token, "ft_balance_of", json!({ "account_id": ketos.id() })).await?;
+    let claim_before = view(&ketos, "get_vault_account",
+        json!({ "vault_id": "long-tail", "account_id": holder_id })).await?;
+    let cost = view(&ketos, "get_vault_price_request_deposit",
+        json!({ "vault_id": "long-tail" })).await?.as_str().unwrap().parse::<u128>()?;
+    ok(holder.as_account().call(ketos.id(), "fund_price_requests").args_json(json!({}))
+        .deposit(NearToken::from_yoctonear(cost)).gas(Gas::from_tgas(100)).transact().await?);
+    let refund = holder.as_account().call(token.id(), "ft_transfer_call")
+        .args_json(json!({ "receiver_id": ketos.id(), "amount": "1000000",
+            "msg": "deposit_vault:long-tail" }))
+        .deposit(NearToken::from_yoctonear(1)).gas(Gas::from_tgas(300)).transact().await?;
+    assert!(refund.is_success(), "FT resolution failed: {:?}", refund.failures());
+    assert_eq!(view(&token, "ft_balance_of", json!({ "account_id": holder_id })).await?, wallet_before);
+    assert_eq!(view(&token, "ft_balance_of", json!({ "account_id": ketos.id() })).await?, custody_before);
+    assert_eq!(view(&ketos, "get_vault_account",
+        json!({ "vault_id": "long-tail", "account_id": holder_id })).await?, claim_before);
+    assert!(view(&ketos, "get_market", json!({ "market_id": "AURORA" })).await?.is_null());
+    assert!(view(&ketos, "get_market", json!({ "market_id": "RHEA" })).await?.is_null());
     Ok(())
 }

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Builds the contracts and deploys (or updates) Ketos on NEAR testnet. Idempotent.
+# Initialized upgrades: stop your keeper/submissions, then run scripts/deploy-testnet.sh --quiescent.
+# The flag acknowledges local quiescence; snapshots and atomic guards do not enumerate external receipts.
 set -euo pipefail
 umask 077
 cd "$(dirname "$0")/.."

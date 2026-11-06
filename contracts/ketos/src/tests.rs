@@ -25,6 +25,7 @@ mod signed_prices;
 mod vaults;
 mod worker_prices;
 mod wallet_trading;
+mod retirement;
 
 const CONTRACT: &str = "ketos.test";
 const USDC: &str = "usdc.test";
@@ -94,7 +95,7 @@ fn registry_paginates_all_markets_in_listing_order() {
     let markets = ketos.get_markets(None, None);
     assert_eq!(
         markets.iter().map(|m| m.market.id.as_str()).collect::<Vec<_>>(),
-        ["BTC", "ETH", "NEAR", "ZEC", "SOL", "AURORA", "RHEA",
+        ["BTC", "ETH", "NEAR", "ZEC", "SOL",
          "DOGE", "XRP", "LTC", "ADA", "SUI", "TRX", "BNB", "AVAX", "LINK"]
     );
     assert!(markets.iter().all(|m| !m.is_open && m.max_oi_per_side.0 == 0));
@@ -107,7 +108,9 @@ fn registry_paginates_all_markets_in_listing_order() {
     assert!(ketos.get_markets(Some(u32::MAX), Some(3)).is_empty());
     assert!(ketos.get_markets(None, Some(0)).is_empty());
     assert_eq!(ketos.get_market("SOL".into()).unwrap().market.vault_id, VaultId::Core);
-    assert_eq!(ketos.get_market("RHEA".into()).unwrap().market.vault_id, VaultId::LongTail);
+    assert_eq!(ketos.get_market("ZEC".into()).unwrap().market.vault_id, VaultId::LongTail);
+    assert!(ketos.get_market("AURORA".into()).is_none());
+    assert!(ketos.get_market("RHEA".into()).is_none());
     let doge = ketos.get_market("DOGE".into()).unwrap().market;
     assert_eq!(doge.price_source, PriceSource::OutlayerWorker);
     assert_eq!(doge.vault_id, VaultId::LongTail);
@@ -193,7 +196,7 @@ fn registry_refuses_reusing_an_intents_asset() {
 #[test]
 fn registry_limit_preserves_existing_markets_and_pagination() {
     let mut ketos = setup();
-    for i in 0..16 {
+    for i in 0..18 {
         ketos.register_market(extra_market(&format!("NEW{i}"), PriceSource::Tee));
     }
     let before = ketos.get_markets(None, Some(u32::MAX));
@@ -203,7 +206,7 @@ fn registry_limit_preserves_existing_markets_and_pagination() {
     assert!(error.is_err());
     assert_eq!(ketos.get_markets(None, Some(u32::MAX)), before);
     assert_eq!(before.len(), 32);
-    assert_eq!(ketos.get_markets(Some(16), Some(100)).last().unwrap().market.id, "NEW15");
+    assert_eq!(ketos.get_markets(Some(14), Some(100)).last().unwrap().market.id, "NEW17");
     assert!(!ketos.oracle_markets.contains_key(&"OVERFLOW.oracle".to_string()));
 }
 
@@ -1079,11 +1082,11 @@ fn oracle_push_stores_8_decimal_prices_and_enables_trading() {
     assert_eq!(stored_price(&ketos, "NEAR"), (382_231_700, T0_MS - 1_500));
     assert_eq!(stored_price(&ketos, "ZEC"), (0, 0));
     assert_eq!(stored_price(&ketos, "SOL"), (15_000_000_000, T0_MS - 1_500));
-    assert_eq!(stored_price(&ketos, "AURORA"), (7_200_000, T0_MS - 1_500));
-    assert_eq!(stored_price(&ketos, "RHEA"), (53_000, T0_MS - 1_500));
+    assert!(ketos.get_market("AURORA".into()).is_none());
+    assert!(ketos.get_market("RHEA".into()).is_none());
 
     let prices = ketos.get_prices();
-    assert_eq!(prices.len(), 16);
+    assert_eq!(prices.len(), 14);
     assert!(prices.iter().find(|p| p.market_id == "NEAR").unwrap().is_fresh);
     assert!(!prices.iter().find(|p| p.market_id == "ZEC").unwrap().is_fresh);
 

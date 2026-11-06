@@ -315,19 +315,18 @@ impl Market {
     }
 }
 
-pub(crate) const TEE_MARKETS: [(&str, &str, &str, VaultId); 7] = [
+pub(crate) const TEE_MARKETS: [(&str, &str, &str, VaultId); 5] = [
         ("BTC", "nbtc.bridge.near", "btc.omft.near", VaultId::Core),
         ("ETH", "aurora", "eth.omft.near", VaultId::Core),
         ("NEAR", "wrap.near", "wrap.near", VaultId::Core),
         ("ZEC", "zec.omft.near", "zec.omft.near", VaultId::LongTail),
         ("SOL", "22.contract.portalbridge.near", "sol.omft.near", VaultId::Core),
-        (
-            "AURORA",
-            "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
-            "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
-            VaultId::LongTail,
-        ),
-        ("RHEA", "token.rhealab.near", "token.rhealab.near", VaultId::LongTail),
+];
+
+pub(crate) const UNSUPPORTED_MARKETS: [&str; 2] = ["AURORA", "RHEA"];
+const UNSUPPORTED_ORACLE_ASSETS: [&str; 2] = [
+    "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
+    "token.rhealab.near",
 ];
 
 /// Initial registry; new markets use the same configuration and risk machinery.
@@ -410,6 +409,13 @@ impl Ketos {
 
     /// Shared insertion path; no privileged endpoint can change a live market's terms.
     pub(crate) fn register_market(&mut self, config: MarketConfig) {
+        require!(
+            !UNSUPPORTED_MARKETS.contains(&config.symbol.as_str())
+                && !UNSUPPORTED_ORACLE_ASSETS.contains(&config.oracle_asset_id.as_str())
+                && !config.intents_asset_id.strip_prefix("nep141:")
+                    .is_some_and(|asset| UNSUPPORTED_ORACLE_ASSETS.contains(&asset)),
+            "ERR_UNSUPPORTED_MARKET"
+        );
         require!(self.markets.len() < MAX_MARKETS, "ERR_MARKET_LIMIT: maximum 32 markets");
         require!(
             !self.markets.contains_key(&config.symbol),
@@ -442,6 +448,56 @@ impl Ketos {
 
 #[near]
 impl Ketos {
+    /// Schema-preserving retirement; deploy and call in one transaction after quiescing
+    /// oracle actions. In-flight actions live in receipts, not enumerable contract state.
+    #[private]
+    pub fn retire_unsupported_markets(&mut self) -> Vec<MarketId> {
+        require!(
+            env::predecessor_account_id() == env::current_account_id(),
+            "ERR_PRIVATE_RETIREMENT"
+        );
+        // Validate both markets before any write, including dangling state whose OI
+        // counters or registry entry no longer reflect its references.
+        for id in UNSUPPORTED_MARKETS {
+            if let Some(market) = self.markets.get(id) {
+                require!(
+                    market.oi_long.0 == 0 && market.oi_short.0 == 0,
+                    "ERR_MARKET_HAS_OPEN_INTEREST"
+                );
+            }
+        }
+        require!(
+            !self.positions.values().any(|position| {
+                UNSUPPORTED_MARKETS.contains(&position.market_id.as_str())
+            }),
+            "ERR_MARKET_HAS_POSITIONS"
+        );
+        require!(
+            !self.orders.values().any(|order| match &order.request {
+                crate::orders::OrderRequest::Limit(entry)
+                | crate::orders::OrderRequest::StopMarket(entry) => {
+                    UNSUPPORTED_MARKETS.contains(&entry.market_id.as_str())
+                }
+                crate::orders::OrderRequest::TakeProfit { position_id, .. }
+                | crate::orders::OrderRequest::StopLoss { position_id, .. } => {
+                    self.positions.get(position_id).is_some_and(|position| {
+                        UNSUPPORTED_MARKETS.contains(&position.market_id.as_str())
+                    })
+                }
+            }),
+            "ERR_MARKET_HAS_ORDERS"
+        );
+        let mut removed = Vec::new();
+        for id in UNSUPPORTED_MARKETS {
+            if let Some(market) = self.markets.remove(id) {
+                self.oracle_markets.remove(&market.oracle_asset_id);
+                self.depth.remove(id);
+                removed.push(market.id);
+            }
+        }
+        removed
+    }
+
     /// At most 100 markets per page, in listing order.
     pub fn get_markets(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<MarketView> {
         let now_ms = env::block_timestamp_ms();

@@ -8,8 +8,8 @@ use crate::{Ketos, KetosExt};
 pub const WORKER_PROJECT: &str = "ketos.testnet/ketos-prices";
 pub const WORKER_WASM_HASH: &str =
     "5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92";
-pub const WORKER_ASSETS: [&str; 21] = [
-    "BTC", "ETH", "NEAR", "ZEC", "SOL", "AURORA", "RHEA", "DOGE", "XRP", "LTC", "ADA", "SUI",
+pub const WORKER_ASSETS: [&str; 19] = [
+    "BTC", "ETH", "NEAR", "ZEC", "SOL", "DOGE", "XRP", "LTC", "ADA", "SUI",
     "TRX", "BNB", "AVAX", "LINK", "UNI", "AAVE", "BCH", "APT", "ARB",
 ];
 pub const WORKER_BATCH_SIZE: usize = 12;

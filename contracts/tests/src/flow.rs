@@ -23,17 +23,12 @@ const KEEPER_METHODS: [&str; 7] = [
 ];
 
 /// Mock oracle values; the first four match the 2026-11-03 feed.
-const PRICES: [(&str, u128); 16] = [
+const PRICES: [(&str, u128); 14] = [
     ("nbtc.bridge.near", 7_756_150_000_000),
     ("aurora", 229_259_500_000),
     ("wrap.near", 400_000_000),
     ("zec.omft.near", 120_660_966_700),
     ("22.contract.portalbridge.near", 15_000_000_000),
-    (
-        "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near",
-        10_000_000,
-    ),
-    ("token.rhealab.near", 5_000_000),
     ("DOGE", 15_000_000),
     ("XRP", 50_000_000),
     ("LTC", 8_000_000_000),
@@ -407,9 +402,12 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .await?);
 
     let markets = view(&ketos, "get_markets", json!({})).await?;
-    assert_eq!(markets.as_array().unwrap().len(), PRICES.len());
+    assert_eq!(markets.as_array().unwrap().len(), 14);
+    assert!(markets.as_array().unwrap().iter().all(|market| {
+        market["id"] != "AURORA" && market["id"] != "RHEA"
+    }));
     let mut paged = Vec::new();
-    for from in (0..PRICES.len()).step_by(3) {
+    for from in (0..markets.as_array().unwrap().len()).step_by(3) {
         let page = view(
             &ketos,
             "get_markets",
