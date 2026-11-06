@@ -4,8 +4,6 @@ import { z } from "zod";
 const u128 = z.string().regex(/^\d+$/).transform(BigInt);
 const i128 = z.string().regex(/^-?\d+$/).transform(BigInt);
 
-/** Markets with a Binance candle feed; the registry itself is open-ended. */
-export const MARKET_IDS = ["BTC", "ETH", "NEAR", "ZEC"] as const;
 export const marketIdSchema = z.string().min(1);
 export type MarketId = z.infer<typeof marketIdSchema>;
 
@@ -25,6 +23,9 @@ export type PriceSource = z.infer<typeof priceSourceSchema>;
 
 /** Scale of borrow and funding rates and indices: 1e12 = 100%. */
 export const RATE_PRECISION = 1_000_000_000_000n;
+
+/** Snapshot freshness for display, liquidation candidates and stress estimates; action pulls recheck prices. */
+export const MAX_PRICE_AGE_MS = 120_000;
 
 export const configSchema = z.object({
   usdc_id: z.string(),

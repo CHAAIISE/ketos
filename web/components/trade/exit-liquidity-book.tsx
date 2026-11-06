@@ -9,7 +9,7 @@ import { PanelTabs } from "@/components/ui/panel-tabs";
 import { formatSizeUsd } from "@/components/liquidity/format";
 import { useAllOpenPositions, useDepth, useLiquidations } from "@/hooks/use-ketos-queries";
 import { MAX_EXIT_IMPACT_BPS } from "@/lib/intents/depth";
-import { formatPrice, formatUsd } from "@/lib/near/format";
+import { formatPrice, usd0 } from "@/lib/near/format";
 import type { Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { OiBar } from "./oi-bar";
@@ -19,8 +19,6 @@ const TABS = [
   { id: "trades", label: "Trades", testId: "book-tab-trades" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
-
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 
 /** Oracle price moved down by the measured impact: the average price a sell of that size got. */
 function exitPrice(price: bigint, impactBps: number): bigint {

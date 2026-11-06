@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
+import { errorMessage } from "@/lib/utils";
 import { ketosKeys } from "./use-ketos-queries";
 
 /** The server runs at most one tick a minute, whoever asks. */
@@ -58,7 +59,7 @@ export function useKeeperTick(): KeeperStatus {
         }
       } catch (e) {
         if (controller.signal.aborted) return;
-        setStatus({ state: "unavailable", reason: e instanceof Error ? e.message : String(e) });
+        setStatus({ state: "unavailable", reason: errorMessage(e) });
       }
       schedule(INTERVAL_MS);
     }

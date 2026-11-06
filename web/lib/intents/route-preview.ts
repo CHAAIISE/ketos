@@ -15,6 +15,14 @@ export type RouteAsset = z.infer<typeof routeAssetSchema>;
 /** Longest amount string accepted, enough for 18 decimals plus a large integer part. */
 const MAX_AMOUNT_LENGTH = 40;
 
+/** Round half up to three significant decimal digits using only integer base units. */
+function normalizeAmount(amountIn: bigint): bigint {
+  const droppedDigits = amountIn.toString().length - 3;
+  if (droppedDigits <= 0) return amountIn;
+  const quantum = 10n ** BigInt(droppedDigits);
+  return ((amountIn + quantum / 2n) / quantum) * quantum;
+}
+
 export const routeQuerySchema = z
   .object({
     asset: routeAssetSchema,
@@ -30,11 +38,11 @@ export const routeQuerySchema = z
       });
       return z.NEVER;
     }
-    return { asset, amountIn };
+    return { asset, amountIn: normalizeAmount(amountIn) };
   });
 export type RouteQuery = z.output<typeof routeQuerySchema>;
 
-/** `?asset=SOL&amount=1.5` to a validated query, or the reason it is invalid. */
+/** `?asset=SOL&amount=1.5` to a validated, three-significant-figure query, or its invalid reason. */
 export function parseRouteQuery(params: URLSearchParams): { ok: true; query: RouteQuery } | { ok: false; error: string } {
   const parsed = routeQuerySchema.safeParse({ asset: params.get("asset") ?? undefined, amount: params.get("amount") ?? undefined });
   if (parsed.success) return { ok: true, query: parsed.data };

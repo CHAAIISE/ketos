@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { useAccountId } from "@/hooks/near-provider";
 import { useLeaderboard } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
-import { formatUnits, formatUsd } from "@/lib/near/format";
+import { formatUnits, formatUsd, usd0 } from "@/lib/near/format";
 import { LEADERBOARD_MAX } from "@/lib/near/views";
 import { cn } from "@/lib/utils";
 import { rankLeaderboard, type LeaderboardKey, type RankedEntry } from "./leaderboard-math";
@@ -32,7 +32,6 @@ const KEY_LABEL: Record<LeaderboardKey, string> = {
   trades: "trades",
 };
 
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 const signedTone = (value: bigint) => (value > 0n ? "text-success" : value < 0n ? "text-destructive" : "text-muted-foreground");
 
 export function LeaderboardScreen() {

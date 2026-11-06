@@ -7,6 +7,7 @@ import { optionalEnv, requireEnv } from "./lib/env.ts";
 import { keeperChain, oneClickDepthSource } from "../web/lib/keeper/chain.ts";
 import { MIN_TICK_INTERVAL_MS } from "../web/lib/keeper/throttle.ts";
 import { runTick } from "../web/lib/keeper/tick.ts";
+import { errorMessage } from "../web/lib/utils.ts";
 
 const webEnv = fileURLToPath(new URL("../web/.env.local", import.meta.url));
 if (existsSync(webEnv)) process.loadEnvFile(webEnv);
@@ -22,7 +23,7 @@ for (;;) {
     console.log(JSON.stringify(summary));
     if (once && !summary.ok) process.exitCode = 1;
   } catch (e) {
-    console.error(`tick failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`tick failed: ${errorMessage(e)}`);
     if (once) process.exit(1);
   }
   if (once) break;

@@ -8,6 +8,7 @@ import { workerSignedPrices } from "../near/signed-prices-server";
 import { orderExecutionSchema, type MarketId } from "../near/types";
 import { settleOutcome } from "../near/tx";
 import { KetosViews } from "../near/views";
+import { errorMessage } from "../utils";
 import type { DepthSource, KeeperChain, MarketDepth } from "./tick";
 
 /** The signer is restricted to the seven maintenance methods on the configured contract. */
@@ -80,7 +81,7 @@ export function oneClickDepthSource(jwt: string | undefined): DepthSource {
       try {
         tokens = await getTokens({ jwt, fetchImpl: fetchWithDeadline });
       } catch (e) {
-        const error = `1Click token list unavailable: ${e instanceof Error ? e.message : String(e)}`;
+        const error = `1Click token list unavailable: ${errorMessage(e)}`;
         return markets.map(({ id: market }) => ({ market, error }));
       }
       const results: (MarketDepth | { market: MarketId; error: string })[] = [];
@@ -94,7 +95,7 @@ export function oneClickDepthSource(jwt: string | undefined): DepthSource {
             const curve = await sampleAsset(market.intents_asset_id, { tokens, jwt, fetchImpl: fetchWithDeadline });
             results[index] = { market: market.id, samples: curve.samples, measuredAtMs };
           } catch (e) {
-            results[index] = { market: market.id, error: e instanceof Error ? e.message : String(e) };
+            results[index] = { market: market.id, error: errorMessage(e) };
           }
         }
       }));

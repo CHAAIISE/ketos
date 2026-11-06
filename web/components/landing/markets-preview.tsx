@@ -4,20 +4,19 @@ import Link from "next/link";
 import { ArrowRight, RotateCw } from "lucide-react";
 import { VAULT_LABEL } from "@/components/markets/markets-table";
 import { marketName } from "@/components/trade/market-header";
-import { isPriceFresh } from "@/components/trade/market-status";
+import { isPriceFresh } from "@/lib/near/market-status";
 import { OiBar } from "@/components/trade/oi-bar";
 import { Button } from "@/components/ui/button";
 import { Container, Eyebrow } from "@/components/ui/page-shell";
 import { useMarkets } from "@/hooks/use-ketos-queries";
 import { LISTING_FEE } from "@/lib/near/calls";
 import { networkName } from "@/lib/near/config";
-import { formatPrice, formatUsd, formatUsdc } from "@/lib/near/format";
+import { formatPrice, usd0, formatUsdc } from "@/lib/near/format";
 import { isMeasuring, type Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { useNow } from "./live-time";
 
 const PREVIEW_ROWS = 8;
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 
 /** Most open interest first, then the deepest exits, so the busiest markets lead. */
 function byActivity(a: Market, b: Market): number {

@@ -6,15 +6,13 @@ import { ErrorState, Skeleton } from "@/components/app/states";
 import { STALE_AFTER_MS, formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { Badge } from "@/components/ui/badge";
 import { networkName } from "@/lib/near/config";
-import { formatUsd } from "@/lib/near/format";
+import { usd0 } from "@/lib/near/format";
 import { isMeasuring, type Market, type VaultId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { PanelHeading } from "./panel-heading";
 import { Term } from "./term";
 
 const COLUMNS = ["Long OI", "Short OI", "Net", "Exit capacity", "Max OI per side", "Net / capacity"] as const;
-
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 
 function NetCell({ net }: { net: bigint }) {
   if (net === 0n) return <span className="text-tertiary">$0</span>;

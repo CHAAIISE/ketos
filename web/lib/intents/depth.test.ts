@@ -7,7 +7,6 @@ import {
   isMarketOpen,
   MAX_DEPTH_AGE_MS,
   maxLeverage,
-  maxOiPerSide,
   sampleAsset,
   SAMPLE_SIZES_USD,
   usdToBaseUnits,
@@ -81,14 +80,6 @@ describe("isMarketOpen", () => {
 
   it("closes once the measurement is older than 30 minutes", () => {
     expect(isMarketOpen(1_000_000, now - MAX_DEPTH_AGE_MS - 1, now)).toBe(false);
-  });
-});
-
-describe("maxOiPerSide", () => {
-  it("is the lower of the hard cap and the exit capacity", () => {
-    expect(maxOiPerSide(500_000, 100_000)).toBe(100_000);
-    expect(maxOiPerSide(500_000, 1_000_000)).toBe(500_000);
-    expect(maxOiPerSide(500_000, 0)).toBe(0);
   });
 });
 

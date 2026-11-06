@@ -8,7 +8,6 @@ import {
   exitCapacityUsd,
   isMarketOpen,
   maxLeverage,
-  maxOiPerSide,
   sampleAsset,
   type AssetDepth,
 } from "../web/lib/intents/depth.ts";
@@ -52,7 +51,7 @@ for (const { symbol, depth } of results) {
       cells +
       usd(capacity).padStart(col) +
       `${maxLeverage(capacity)}x`.padStart(9) +
-      usd(maxOiPerSide(HARD_CAP_USD, capacity)).padStart(col) +
+      usd(Math.min(HARD_CAP_USD, capacity)).padStart(col) +
       (isMarketOpen(capacity, measuredAtMs, measuredAtMs) ? "yes" : "no").padStart(6),
   );
 }
@@ -86,7 +85,7 @@ const full = {
       details: depth.details,
       exit_capacity_usd: capacity,
       max_leverage: maxLeverage(capacity),
-      max_oi_per_side_usd: maxOiPerSide(HARD_CAP_USD, capacity),
+      max_oi_per_side_usd: Math.min(HARD_CAP_USD, capacity),
     };
   }),
 };

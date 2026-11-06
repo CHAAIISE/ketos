@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { GET } from "@/app/api/route-preview/route";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GET as RouteGet } from "@/app/api/route-preview/route";
 import noLiquidity from "./fixtures/quote-no-liquidity.json";
 import routeSol from "./fixtures/quote-route-sol.json";
 import { OneClickError, USDC_NEAR_ASSET_ID, type FetchImpl } from "./oneclick";
@@ -18,6 +18,19 @@ describe("parseRouteQuery", () => {
     expect(query("asset=SOL&amount=1")).toEqual({ ok: true, query: { asset: "SOL", amountIn: 1_000_000_000n } });
     expect(query("asset=BTC&amount=0.015")).toEqual({ ok: true, query: { asset: "BTC", amountIn: 1_500_000n } });
     expect(query("asset=ETH_BASE&amount=0.1")).toEqual({ ok: true, query: { asset: "ETH_BASE", amountIn: 100_000_000_000_000_000n } });
+  });
+
+  it.each([
+    ["SOL", "1.234499999", 1_230_000_000n],
+    ["SOL", "1.235", 1_240_000_000n],
+    ["SOL", "0.999499999", 999_000_000n],
+    ["SOL", "0.9995", 1_000_000_000n],
+    ["SOL", "0.000000001", 1n],
+    ["ETH_BASE", "0.000000000000000001", 1n],
+    ["BTC", "0.00009995", 10_000n],
+    ["ETH_BASE", "9007199254740993.123456789", 9_010_000_000_000_000n * 10n ** 18n],
+  ])("rounds %s %s to three significant figures without floating point", (asset, amount, amountIn) => {
+    expect(query(`asset=${asset}&amount=${amount}`)).toEqual({ ok: true, query: { asset, amountIn } });
   });
 
   it.each([
@@ -105,9 +118,16 @@ describe("quoteRoute", () => {
 });
 
 describe("GET /api/route-preview", () => {
+  let GET: typeof RouteGet;
+  beforeEach(async () => {
+    // Module reload is intentional: each case needs empty process-local caches and IP buckets.
+    vi.resetModules();
+    ({ GET } = await import("@/app/api/route-preview/route"));
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   function get(search: string) {
@@ -119,6 +139,7 @@ describe("GET /api/route-preview", () => {
     vi.stubGlobal("fetch", fetchImpl);
     const res = await get("asset=SOL&amount=1.0000000001");
     expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(await res.json()).toMatchObject({ error: expect.stringMatching(/amount/) });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -130,6 +151,7 @@ describe("GET /api/route-preview", () => {
 
     const first = await get("asset=SOL&amount=1");
     expect(first.status).toBe(200);
+    expect(first.headers.get("Cache-Control")).toBe("public, s-maxage=20");
     expect(await first.json()).toMatchObject({ status: "ok", amountOutFormatted: "94.981067", platformFeeBps: 25 });
     const second = await get("asset=SOL&amount=1.000");
     expect(await second.json()).toMatchObject({ status: "ok" });
@@ -147,6 +169,7 @@ describe("GET /api/route-preview", () => {
     vi.stubGlobal("fetch", respond(503, { message: "Service Unavailable" }));
     const res = await get("asset=BTC&amount=0.5");
     expect(res.status).toBe(502);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(await res.json()).toMatchObject({ error: expect.stringMatching(/^Route quote unavailable: POST \/quote returned HTTP 503/) });
   });
 });

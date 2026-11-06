@@ -52,6 +52,9 @@ export function formatUsd(units: bigint, options: FormatUnitsOptions = {}): stri
   return `${sign}$${sign ? text.slice(1) : text}`;
 }
 
+/** Whole-dollar USDC display shared by compact market and vault summaries. */
+export const usd0 = (units: bigint): string => formatUsd(units, { maxFractionDigits: 0 });
+
 /** 8-decimal price to "$97,123.45"; prices under $1 keep 4 decimals. */
 export function formatPrice(price: bigint, options: FormatUnitsOptions = {}): string {
   const digits = price >= 10n ** BigInt(PRICE_DECIMALS) ? 2 : 4;

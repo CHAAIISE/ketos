@@ -1,8 +1,7 @@
-import { VAULT_IDS, type CrossAccount, type Market, type Position, type Vault, type VaultId } from "@/lib/near/types";
+import { MAX_PRICE_AGE_MS, VAULT_IDS, type CrossAccount, type Market, type Position, type Vault, type VaultId } from "@/lib/near/types";
+import { MAX_DEPTH_AGE_MS } from "@/lib/intents/depth";
 
 const BPS = 10_000n;
-const MAX_PRICE_AGE_MS = 120_000;
-const MAX_DEPTH_AGE_MS = 30 * 60_000;
 
 export interface StressInput {
   markets: readonly Market[];

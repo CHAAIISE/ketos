@@ -9,7 +9,3 @@ function trim(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-/** Impact in bps as "12 bps"; null means 1Click returned no quote. */
-export function formatImpact(bps: number | null): string {
-  return bps === null ? "No liq." : `${bps} bps`;
-}

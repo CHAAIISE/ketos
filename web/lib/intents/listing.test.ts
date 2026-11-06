@@ -25,15 +25,44 @@ const registry = [
 ];
 
 describe("listableAssets", () => {
-  it("offers an oracle asset quoted by NEAR Intents as the same NEP-141 token, ticker uppercased", () => {
+  it("offers an oracle asset quoted by NEAR Intents, uppercased, when its underlying is not listed", () => {
     const assets = listableAssets({
-      markets: registry,
+      markets: registry.filter((market) => market.id !== "BTC"),
       oracleAssetIds: [WBTC],
       tokens: [token(`nep141:${WBTC}`, "wBTC")],
     });
     expect(assets).toEqual([
       { symbol: "WBTC", oracleAssetId: WBTC, intentsAssetId: `nep141:${WBTC}`, priceSource: "tee", referencePriceUsd: 1 },
     ]);
+  });
+
+  it("excludes wrapped duplicates of existing market underlyings even with different oracle and Intents ids", () => {
+    expect(listableAssets({
+      markets: [...registry, market("ETH", "eth.near", "nep141:eth.near")],
+      oracleAssetIds: [WBTC, "weth.near", "wnear.near"],
+      tokens: [
+        token(`nep141:${WBTC}`, "wBTC"),
+        token("nep141:weth.near", "WETH"),
+        token("nep141:wnear.near", "WNEAR"),
+      ],
+    })).toEqual([]);
+  });
+
+  it.each(["USDC", "USDT", "FRAX", "DAI", "USDE", "USDS", "PYUSD", "EURC"])("excludes %s even away from its peg", (symbol) => {
+    expect(listableAssets({
+      markets: registry,
+      oracleAssetIds: ["stable.near"],
+      tokens: [{ ...token("nep141:stable.near", symbol), price: 0.8 }],
+    })).toEqual([]);
+  });
+
+  it.each([["btc.near", WBTC], [WBTC, "btc.near"]])("prefers the native candidate when oracle order starts with %s", (first, second) => {
+    const assets = listableAssets({
+      markets: [],
+      oracleAssetIds: [first, second],
+      tokens: [token("nep141:btc.near", "BTC"), token(`nep141:${WBTC}`, "WBTC")],
+    });
+    expect(assets.map((asset) => asset.symbol)).toEqual(["BTC"]);
   });
 
   it("skips assets already listed by oracle id, Intents id or ticker", () => {

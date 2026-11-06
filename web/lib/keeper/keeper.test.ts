@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CrossAccount, Market, MarketId, Order, Position } from "../near/types";
-import { findLiquidatable, findTriggeredOrders, isFreshPrice } from "./scan";
+import { isPriceFresh } from "../near/market-status";
+import { findLiquidatable, findTriggeredOrders } from "./scan";
 import { MIN_TICK_INTERVAL_MS, TickGate, retryAfterMs } from "./throttle";
 import { FUNDING_INTERVAL_MS, MIN_KETOS_BALANCE_YOCTO, ORDER_BATCH_SIZE, PRICE_REFRESH_INTERVAL_MS, runTick, SNAPSHOT_INTERVAL_MS, type KeeperChain } from "./tick";
 
@@ -218,7 +219,7 @@ describe("keeper tick", () => {
     });
     const noDepth = { sample: async () => [] };
     await runTick(chain, noDepth, () => clock);
-    expect(registry.slice(0, 3).every((m) => isFreshPrice(m, clock))).toBe(true);
+    expect(registry.slice(0, 3).every((m) => isPriceFresh(m, clock))).toBe(true);
     expect(registry[3].price_timestamp_ms).toBe(NOW - PRICE_REFRESH_INTERVAL_MS * 10);
     clock += PRICE_REFRESH_INTERVAL_MS - 1;
     await runTick(chain, noDepth, () => clock);
@@ -226,7 +227,7 @@ describe("keeper tick", () => {
     clock++;
     await runTick(chain, noDepth, () => clock);
     expect(requests).toBe(2);
-    expect(registry.slice(0, 3).every((m) => isFreshPrice(m, clock))).toBe(true);
+    expect(registry.slice(0, 3).every((m) => isPriceFresh(m, clock))).toBe(true);
   });
 
   it("does not refresh active prices again before the five-minute boundary", async () => {

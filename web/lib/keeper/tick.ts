@@ -1,5 +1,7 @@
 import { type CrossAccount, type DepthSample, type Market, type MarketId, type Order, type OrderExecution, type Position } from "../near/types";
-import { findLiquidatable, findTriggeredOrders, isFreshPrice } from "./scan";
+import { isPriceFresh } from "../near/market-status";
+import { errorMessage } from "../utils";
+import { findLiquidatable, findTriggeredOrders } from "./scan";
 
 export const MIN_KETOS_BALANCE_YOCTO = 2n * 10n ** 24n;
 export const ORDER_BATCH_SIZE = 5;
@@ -57,7 +59,7 @@ export type TickSummary =
     }
   | { ok: false; startedAt: string; reason: string };
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
+const message = (error: unknown) => errorMessage(error).slice(0, 300);
 
 /** Transactions remain serial: one restricted signer, no overlapping nonce allocation. */
 export async function runTick(chain: KeeperChain, depthSource: DepthSource, now: () => number = Date.now): Promise<TickSummary> {
@@ -115,16 +117,16 @@ export async function runTick(chain: KeeperChain, depthSource: DepthSource, now:
   try {
     const lastRequest = refreshMarkets.length ? await chain.lastPriceRequestMs() : null;
     if (refreshMarkets.length === 0 || (lastRequest !== null && started - lastRequest < PRICE_REFRESH_INTERVAL_MS)) {
-      prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, skipped: true };
+      prices = { fresh: markets.filter((m) => isPriceFresh(m, now())).length, total: markets.length, skipped: true };
     } else {
       requestedPrices = true;
       const tx = await chain.refreshPrices(refreshMarkets);
       markets = await read("prices markets", () => chain.markets(), markets);
-      prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, tx };
+      prices = { fresh: markets.filter((m) => isPriceFresh(m, now())).length, total: markets.length, tx };
     }
   } catch (e) {
     markets = await read("prices markets", () => chain.markets(), markets);
-    prices = { fresh: markets.filter((m) => isFreshPrice(m, now())).length, total: markets.length, error: message(e) };
+    prices = { fresh: markets.filter((m) => isPriceFresh(m, now())).length, total: markets.length, error: message(e) };
   }
   // Price refresh changes position equity as well as market prices.
   const orderPositions = requestedPrices && openOrders.length

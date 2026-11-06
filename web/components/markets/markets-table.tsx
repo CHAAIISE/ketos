@@ -6,11 +6,11 @@ import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, Star } from "lucide-react";
 import { useNow } from "@/components/landing/live-time";
 import { marketName } from "@/components/trade/market-header";
-import { isPriceFresh, marketStatus } from "@/components/trade/market-status";
+import { isPriceFresh, marketStatus } from "@/lib/near/market-status";
 import { OiBar } from "@/components/trade/oi-bar";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
-import { formatFundingRate, formatPrice, formatUsd } from "@/lib/near/format";
+import { formatFundingRate, formatPrice, usd0 } from "@/lib/near/format";
 import { isMeasuring, type Market, type VaultId } from "@/lib/near/types";
 import type { Change24h } from "@/lib/prices/market-stats";
 import { cn } from "@/lib/utils";
@@ -22,8 +22,6 @@ export interface Sort {
 }
 
 export const VAULT_LABEL: Record<VaultId, string> = { core: "Core", "long-tail": "Long-tail" };
-
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 
 /**
  * Rows in display order; markets without a value for the sort key always go last. Ties go to the

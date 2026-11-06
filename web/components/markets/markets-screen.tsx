@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Search } from "lucide-react";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { formatUtc, useNow } from "@/components/landing/live-time";
-import { marketStatus } from "@/components/trade/market-status";
+import { marketStatus } from "@/lib/near/market-status";
 import { HeaderStat, ReadAt } from "@/components/vault/vault-summary";
 import { Term } from "@/components/vault/term";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,7 @@ import { useFavorites } from "@/hooks/use-favorites";
 import { useMarkets } from "@/hooks/use-ketos-queries";
 import { useMarketStats } from "@/hooks/use-market-feeds";
 import { networkName } from "@/lib/near/config";
-import { formatUsd } from "@/lib/near/format";
+import { usd0 } from "@/lib/near/format";
 import { CANDLE_SOURCE } from "@/lib/prices/candles";
 import { ListMarketPanel } from "./list-market-panel";
 import { MarketsTable, sortMarkets, type Sort, type SortKey } from "./markets-table";
@@ -26,8 +26,6 @@ const FILTERS = [
   { id: "core", label: "Core vault" },
   { id: "long-tail", label: "Long-tail vault" },
 ] as const;
-
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
 
 export function MarketsScreen() {
   const markets = useMarkets();

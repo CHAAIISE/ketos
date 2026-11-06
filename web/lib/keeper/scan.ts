@@ -1,11 +1,5 @@
 import { isLiquidatable, type Market, type MarketId, type Order, type Position } from "../near/types";
-
-export const MAX_PRICE_AGE_MS = 120_000;
-
-export function isFreshPrice(market: Market, nowMs: number): boolean {
-  const ageMs = nowMs - market.price_timestamp_ms;
-  return market.price > 0n && ageMs >= 0 && ageMs <= MAX_PRICE_AGE_MS;
-}
+import { isPriceFresh } from "../near/market-status";
 
 /** Cross equity includes cash and every cross position; it cannot be inferred from one leg. */
 export function findLiquidatable(positions: readonly Position[], markets: readonly Market[], nowMs: number): Position[] {
@@ -13,7 +7,7 @@ export function findLiquidatable(positions: readonly Position[], markets: readon
   return positions
     .filter((p) => {
       const market = priceAt.get(p.market_id);
-      return p.margin_mode === "isolated" && market !== undefined && isFreshPrice(market, nowMs) && isLiquidatable(p);
+      return p.margin_mode === "isolated" && market !== undefined && isPriceFresh(market, nowMs) && isLiquidatable(p);
     })
     .sort((a, b) => {
       const gapA = a.equity - a.maintenance_margin;

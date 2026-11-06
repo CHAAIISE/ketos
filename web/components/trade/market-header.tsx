@@ -10,13 +10,11 @@ import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useCandles } from "@/hooks/use-candles";
-import { formatFundingRate, formatPrice, formatUsd } from "@/lib/near/format";
+import { formatFundingRate, formatPrice, usd0 } from "@/lib/near/format";
 import { isMeasuring, type Market, type MarketId } from "@/lib/near/types";
 import { CANDLE_SOURCE, change24h } from "@/lib/prices/candles";
 import { cn } from "@/lib/utils";
-import { isPriceFresh, marketStatus } from "./market-status";
-
-const usd0 = (units: bigint) => formatUsd(units, { maxFractionDigits: 0 });
+import { isPriceFresh, marketStatus } from "@/lib/near/market-status";
 
 export const marketName = (id: MarketId) => `${id}-USD`;
 

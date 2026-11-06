@@ -17,7 +17,7 @@ import { toNearActionError } from "@/lib/near/errors";
 import { formatPrice, formatUnits, formatUsd, formatUsdc, parseUnits, parseUsdc, PRICE_DECIMALS } from "@/lib/near/format";
 import type { MarginMode, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
-import { marketStatus } from "./market-status";
+import { marketStatus } from "@/lib/near/market-status";
 import type { TradeStep } from "./onboarding";
 import { borrowRatePercent, entryTriggered, MIN_POSITION_MARGIN, previewOrder, type EntryKind } from "./order-math";
 import { BracketFields, EMPTY_BRACKET, MarginModeControl, readBracket, TicketInput, type BracketDraft } from "./ticket-controls";

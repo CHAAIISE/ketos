@@ -3,6 +3,8 @@
   "description": "Native perps on NEAR for Unstoppable DeFi: two LP vaults, with market open interest and leverage capped by exit liquidity measured on NEAR Intents.",
   "keywords": ["near", "perps", "unstoppable-defi", "near-intents", "1click", "outlayer", "vaults", "exit-liquidity"],
   "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=20.12" },
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",

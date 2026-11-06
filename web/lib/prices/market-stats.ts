@@ -6,6 +6,7 @@ export const MAX_STATS_SYMBOLS = 100;
 
 export const statsQuerySchema = z
   .string()
+  .max(MAX_STATS_SYMBOLS * 17)
   .transform((s) => [...new Set(s.split(",").filter(Boolean))])
   .pipe(z.array(tickerSchema).min(1).max(MAX_STATS_SYMBOLS));
 

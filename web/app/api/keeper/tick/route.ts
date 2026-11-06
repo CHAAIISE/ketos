@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { keeperChain, oneClickDepthSource } from "@/lib/keeper/chain";
 import { TickGate } from "@/lib/keeper/throttle";
 import { runTick } from "@/lib/keeper/tick";
+import { errorMessage } from "@/lib/utils";
 
 export const maxDuration = 300;
 
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
       lastTickMs = Math.max(0, ...markets.map((m) => m.depth_measured_at_ms)) || null;
     }
   } catch (e) {
-    return Response.json({ ok: false, reason: `NEAR RPC unavailable: ${e instanceof Error ? e.message : String(e)}` }, { status: 502 });
+    return Response.json({ ok: false, reason: `NEAR RPC unavailable: ${errorMessage(e)}` }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 
   const entry = gate.enter(Date.now(), lastTickMs);
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
     const summary = await runTick(chain, oneClickDepthSource(process.env.ONECLICK_JWT?.trim() || undefined));
     return Response.json(summary, { status: summary.ok ? 200 : 503, headers: { "Cache-Control": "no-store" } });
   } catch (e) {
-    return Response.json({ ok: false, reason: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    return Response.json({ ok: false, reason: errorMessage(e) }, { status: 500, headers: { "Cache-Control": "no-store" } });
   } finally {
     entry.release();
   }

@@ -7,6 +7,7 @@ import {
   type CandlesResponse,
 } from "@/lib/prices/candles";
 
+import { errorMessage } from "@/lib/utils";
 const USER_AGENT = "ketos-candles/0.1 (+https://ketos-three.vercel.app)";
 const CACHE_MS = 30_000;
 const TIMEOUT_MS = 8_000;
@@ -46,7 +47,7 @@ export async function GET(request: Request) {
     return Response.json(body, { headers });
   } catch (e) {
     if (cached) return Response.json(cached.body, { headers });
-    const reason = e instanceof Error ? e.message : String(e);
+    const reason = errorMessage(e);
     return Response.json({ error: `${CANDLE_SOURCE} candles unavailable: ${reason}` }, { status: 502 });
   }
 }

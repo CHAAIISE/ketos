@@ -134,6 +134,3 @@ export function isMarketOpen(capacityUsd: number, measuredAtMs: number, nowMs: n
   return capacityUsd >= MIN_OPEN_CAPACITY_USD && nowMs - measuredAtMs <= MAX_DEPTH_AGE_MS;
 }
 
-export function maxOiPerSide(hardCapUsd: number, capacityUsd: number): number {
-  return Math.min(hardCapUsd, capacityUsd);
-}
