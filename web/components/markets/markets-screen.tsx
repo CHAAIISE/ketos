@@ -34,7 +34,7 @@ export function MarketsScreen() {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>({ key: "oi", dir: "desc" });
-  const all = markets.data ?? [];
+  const all = nowMs ? markets.data ?? [] : [];
   const stats = useMarketStats(all.map((m) => m.id));
 
   const needle = query.trim().toUpperCase();
@@ -68,7 +68,7 @@ export function MarketsScreen() {
           </div>
           <ReadAt at={markets.dataUpdatedAt} failing={markets.isError} />
         </div>
-        {markets.data ? (
+        {nowMs > 0 && markets.data ? (
           <dl className="flex flex-wrap gap-x-10 gap-y-4">
             <HeaderStat label="Markets">
               <span data-testid="markets-count">{all.length}</span>
@@ -98,8 +98,11 @@ export function MarketsScreen() {
               <SearchBox value={query} onChange={setQuery} />
             </div>
           </div>
+          <p className="border-b border-border px-3 py-2 text-label text-muted-foreground sm:hidden">
+            Swipe for funding, limits and vaults. Coin stays in view.
+          </p>
           <div id="markets-panel" role="tabpanel" aria-labelledby={`markets-tab-${filter}`} className="flex min-h-0 flex-1 flex-col">
-            {markets.isPending ? (
+            {!nowMs || markets.isPending ? (
               <div aria-busy className="flex flex-col gap-1 p-3">
                 {Array.from({ length: 8 }, (_, i) => (
                   <Skeleton key={i} className="h-row" />

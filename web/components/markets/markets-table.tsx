@@ -157,8 +157,8 @@ export function MarketsTable({
   const header = { sort, onSort };
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      <table data-testid={tableTestId} className="w-full min-w-232 text-ui tabular-nums">
+    <div className="shrink-0 overflow-x-auto">
+      <table data-testid={tableTestId} className="w-full min-w-232 text-ui tabular-nums [&_tr>:first-child]:sticky [&_tr>:first-child]:left-0 [&_tr>:first-child]:z-10 [&_tr>:first-child]:bg-card">
         <thead className="sticky top-0 z-10 bg-card text-label text-tertiary">
           <tr className="border-b border-border">
             <SortHeader label="Coin" sortKey="coin" align="left" {...header} />

@@ -16,7 +16,7 @@ import { formatShares } from "./vault-math";
 
 export function ReadAt({ at, failing }: { at: number; failing: boolean }) {
   const nowMs = useNow();
-  if (!at) return null;
+  if (!nowMs || !at) return null;
   const age = formatAge(at, nowMs);
   return (
     <span className={cn("flex items-center gap-2 text-label tabular-nums", failing ? "text-warning" : "text-tertiary")}>

@@ -100,6 +100,11 @@ export function LeaderboardScreen() {
             />
           </label>
         </div>
+        {rows.length > 0 ? (
+          <p className="border-b border-border px-3 py-2 text-label text-muted-foreground sm:hidden">
+            Swipe to compare PnL and volume. Trader stays in view.
+          </p>
+        ) : null}
         {board.isPending ? (
           <div aria-busy className="flex flex-col gap-1 p-3">
             {Array.from({ length: 8 }, (_, i) => (
@@ -194,7 +199,7 @@ function LeaderboardTable({
             <th scope="col" className="h-8 w-16 px-3 text-left font-normal">
               Rank
             </th>
-            <th scope="col" className="h-8 px-3 text-left font-normal">
+            <th scope="col" className="sticky left-0 z-10 h-8 bg-card px-3 text-left font-normal">
               Trader
             </th>
             <SortHeader
@@ -230,7 +235,7 @@ function LeaderboardTable({
                 )}
               >
                 <td className={cn("px-3", row.rank <= 3 ? "text-foreground" : "text-tertiary")}>{row.rank}</td>
-                <th scope="row" className="px-3 text-left font-normal">
+                <th scope="row" className={cn("sticky left-0 z-10 px-3 text-left font-normal", current ? "bg-muted" : "bg-card")}>
                   <span className="flex items-center gap-2">
                     <span className="font-mono text-foreground" title={row.account_id}>
                       {shortAccount(row.account_id)}

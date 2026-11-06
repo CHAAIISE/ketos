@@ -35,7 +35,7 @@ function VaultRow({
       className="border-t border-border text-ui tabular-nums hover:bg-muted/40"
       data-testid={`vault-row-${vault.id}`}
     >
-      <th scope="row" className="px-4 py-4 text-left font-normal">
+      <th scope="row" className="sticky left-0 z-10 w-48 min-w-40 max-w-48 bg-card px-4 py-4 text-left font-normal">
         <Link
           href={`/vaults/${vault.id}`}
           className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"
@@ -147,6 +147,11 @@ export function VaultList() {
             Deposit to Core <ArrowUpRight className="size-3.5" />
           </Link>
         </div>
+        {vaults.data ? (
+          <p className="border-b border-border px-4 py-2 text-label text-muted-foreground sm:hidden">
+            Swipe to compare returns and shares. Vault stays in view.
+          </p>
+        ) : null}
         {vaults.isError && !vaults.data ? (
           <ErrorState
             className="m-4"
@@ -172,6 +177,7 @@ export function VaultList() {
                       key={label}
                       className={cn(
                         "px-4 py-3 font-normal",
+                        i === 0 && "sticky left-0 z-10 w-48 min-w-40 max-w-48 bg-muted",
                         i === 0 || i === 5 ? "text-left" : "text-right",
                       )}
                     >
