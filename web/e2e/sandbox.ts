@@ -113,6 +113,21 @@ export async function fundTraderMargin(units: bigint): Promise<void> {
   );
 }
 
+/** Clears the scenario account through public methods, without resetting the contract. */
+export async function clearTraderTrading(): Promise<void> {
+  const views = sandboxViews();
+  const trader = account("NEXT_PUBLIC_E2E_SIGNER");
+  const ketos = env("NEXT_PUBLIC_KETOS_CONTRACT");
+  for (const order of await views.orders(trader.accountId)) {
+    await call(trader, ketos, "cancel_order", { order_id: order.id, to_wallet: true });
+  }
+  for (const position of await views.positions(trader.accountId)) {
+    await call(trader, ketos, "close_position", { position_id: position.id, to_wallet: true });
+  }
+  const margin = (await views.account(trader.accountId))?.margin ?? 0n;
+  if (margin > 0n) await call(trader, ketos, "withdraw_margin", { amount: margin.toString() }, 1n);
+}
+
 /** Sets the mock oracle price (8 decimals); the next stale-cache action pulls it on demand. */
 export async function setOraclePrice(assetId: string, usd: number): Promise<void> {
   const multiplier = BigInt(Math.round(usd * 1e8));

@@ -1,8 +1,7 @@
-import type { Market, Side } from "@/lib/near/types";
+import type { DepthSample, Market, Side } from "@/lib/near/types";
 
 // Mirrors contracts/ketos/src/math.rs so the ticket previews exactly what `open_position` will do.
 const BPS = 10_000n;
-const TRADE_FEE_BPS = 10n;
 const RATE_PRECISION = 1_000_000_000_000n;
 const BORROW_BASE_PER_HOUR = 10_000_000n;
 const BORROW_SLOPE_PER_HOUR = 90_000_000n;
@@ -11,11 +10,34 @@ export const MIN_POSITION_MARGIN = 1_000_000n;
 
 const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
 
-/** Opening or closing fee on a notional: 0.1%, rounded up in favour of the vault. */
-export function tradeFee(size: bigint): bigint {
-  return ceilDiv(size * TRADE_FEE_BPS, BPS);
+/** Protocol trading fee, rounded up in favour of the vault. */
+export function tradeFee(size: bigint, feeBps = 10): bigint {
+  return ceilDiv(size * BigInt(feeBps), BPS);
 }
 
+/** Same nondecreasing interpolation and missing-depth fallback as the contract. */
+export function measuredImpactFee(size: bigint, samples: readonly DepthSample[]): bigint {
+  let previousSize = 0n;
+  let previousBps = 0n;
+  let hasPrevious = false;
+  for (const sample of samples.slice(0, 16)) {
+    if (sample.impact_bps === null) break;
+    const upper = BigInt(sample.size_usd) * 1_000_000n;
+    const impact = BigInt(sample.impact_bps);
+    const bps = impact > previousBps ? impact : previousBps;
+    if (size <= upper) {
+      const span = upper - previousSize;
+      const numerator = hasPrevious ? previousBps * span + (bps - previousBps) * (size - previousSize) : bps;
+      const denominator = hasPrevious ? span * BPS : BPS;
+      return ceilDiv(size * (numerator < denominator ? numerator : denominator), denominator);
+    }
+    previousSize = upper;
+    previousBps = bps;
+    hasPrevious = true;
+  }
+  const fallback = previousBps > 100n ? previousBps : 100n;
+  return ceilDiv(size * (fallback < BPS ? fallback : BPS), BPS);
+}
 export function maintenanceMargin(size: bigint, maxLeverage: number): bigint {
   return ceilDiv(size, 2n * BigInt(maxLeverage));
 }
@@ -67,9 +89,10 @@ export function previewOrder(
   margin: bigint,
   leverage: number,
   entryPrice: bigint = market.price,
+  impactFee = 0n,
 ): OrderPreview {
   const size = margin * BigInt(leverage);
-  const openFee = tradeFee(size);
+  const openFee = tradeFee(size, market.fee_bps) + impactFee;
   const positionMargin = margin > openFee ? margin - openFee : 0n;
   const maintenance = maintenanceMargin(size, market.max_leverage);
   const buffer = positionMargin - maintenance;

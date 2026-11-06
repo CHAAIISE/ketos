@@ -8,6 +8,7 @@ import {
   entryTriggered,
   previewOrder,
   tradeFee,
+  measuredImpactFee,
 } from "./order-math";
 
 const USD = 1_000_000n;
@@ -73,6 +74,23 @@ describe("previewOrder", () => {
     expect(preview.capRoom).toBe(1_000n * USD);
     expect(preview.exceedsCap).toBe(true);
     expect(capRoom({ ...m, oi_long: 21_000n * USD }, "long")).toBe(0n);
+  });
+});
+
+describe("measured execution estimates", () => {
+  it("interpolates impact at micro-USDC precision and includes it in liquidation", () => {
+    const fee = measuredImpactFee(150n * USD, [{ size_usd: 100, impact_bps: 20 }, { size_usd: 200, impact_bps: 60 }]);
+    expect(fee).toBe(600_000n);
+    const preview = previewOrder(market({ fee_bps: 20 }), "long", 30n * USD, 5, 4n * PRICE, fee);
+    expect(preview.openFee).toBe(900_000n);
+    expect(preview.positionMargin).toBe(29_100_000n);
+    expect(preview.liquidationPrice).toBe(362_400_000n);
+  });
+
+  it("never interpolates across a missing quote or understates a descending legacy curve", () => {
+    expect(measuredImpactFee(150n * USD, [{ size_usd: 100, impact_bps: 20 }, { size_usd: 200, impact_bps: null }, { size_usd: 300, impact_bps: 30 }])).toBe(1_500_000n);
+    expect(measuredImpactFee(150n * USD, [{ size_usd: 100, impact_bps: 200 }, { size_usd: 200, impact_bps: 10 }])).toBe(3_000_000n);
+    expect(measuredImpactFee(1n, [])).toBe(1n);
   });
 });
 

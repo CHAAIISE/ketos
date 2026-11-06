@@ -1,11 +1,9 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
-import { Button } from "@/components/ui/button";
+import { useId, type ReactNode } from "react";
 import { FieldMessage } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
 import { formatUnits, formatUsd, parseUnits, PRICE_DECIMALS } from "@/lib/near/format";
-import type { MarginMode, Side } from "@/lib/near/types";
+import type { Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import {
   bracketError,
@@ -15,77 +13,6 @@ import {
   type BracketKind,
 } from "./order-math";
 
-const MODES: { id: MarginMode; label: string; text: string }[] = [
-  {
-    id: "isolated",
-    label: "Isolated",
-    text: "This position has its own margin. If it is liquidated, your other positions and free margin are untouched.",
-  },
-  {
-    id: "cross",
-    label: "Cross",
-    text: "All your cross positions share one margin pool. Gains on one support the others; if the pool falls to its maintenance level, the riskiest positions are closed first.",
-  },
-];
-
-/** "Isolated" / "Cross" button; the modal explains both before switching. */
-export function MarginModeControl({ mode, onChange }: { mode: MarginMode; onChange: (mode: MarginMode) => void }) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(mode);
-  return (
-    <>
-      <button
-        type="button"
-        data-testid="margin-mode"
-        aria-label={`Margin mode ${mode}, change`}
-        onClick={() => {
-          setDraft(mode);
-          setOpen(true);
-        }}
-        className="h-8 rounded-md bg-muted text-ui text-foreground capitalize transition-colors hover:bg-muted/70 focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        {mode}
-      </button>
-      <Modal open={open} onOpenChange={setOpen} title="Margin Mode">
-        <div role="radiogroup" aria-label="Margin mode" className="flex flex-col gap-2">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              role="radio"
-              aria-checked={draft === m.id}
-              tabIndex={draft === m.id ? 0 : -1}
-              data-testid={`margin-mode-${m.id}`}
-              onClick={() => setDraft(m.id)}
-              onKeyDown={(event) => {
-                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next = event.key === "Home" ? "isolated" : event.key === "End" ? "cross" : m.id === "isolated" ? "cross" : "isolated";
-                setDraft(next);
-                event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-testid="margin-mode-${next}"]`)?.focus();
-              }}
-              className={cn(
-                "flex flex-col gap-1 rounded-md border border-border p-3 text-left transition-colors hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring",
-                draft === m.id && "border-foreground hover:border-foreground",
-              )}
-            >
-              <span className="text-ui text-foreground">{m.label}</span>
-              <span className="text-label text-muted-foreground">{m.text}</span>
-            </button>
-          ))}
-        </div>
-        <Button
-          onClick={() => {
-            onChange(draft);
-            setOpen(false);
-          }}
-        >
-          Use {draft}
-        </Button>
-      </Modal>
-    </>
-  );
-}
 
 /** Labelled input row in the ticket style: label left, value right-aligned, unit suffix. */
 export function TicketInput({

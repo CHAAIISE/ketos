@@ -43,6 +43,17 @@ function Change24h({ market }: { market: MarketId }) {
     </span>
   );
 }
+function Volume24h({ market }: { market: MarketId }) {
+  const candles = useCandles(market, "5m");
+  const rows = candles.data?.candles;
+  const end = rows?.at(-1)?.time;
+  const volume = rows && end !== undefined && change24h(rows)
+    ? rows.filter((row) => row.time > end - 86_400).reduce((sum, row) => sum + row.volume * row.close, 0)
+    : null;
+  return <span title={candles.data ? `${CANDLE_SOURCE} spot estimate, fetched ${formatUtc(candles.data.fetchedAtMs, true)}` : undefined}>
+    {volume === null ? candles.isError ? "Unavailable" : "—" : `≈ $${volume.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+  </span>;
+}
 
 function subscribeSeconds(onTick: () => void) {
   const timer = setInterval(onTick, 1_000);
@@ -68,13 +79,15 @@ function FundingStat({ market }: { market: Market }) {
   return (
     <Stat
       label={
-        <Term hint="Hourly rate between traders: positive means longs pay shorts, negative the reverse. It follows the long/short imbalance of open interest, is capped at ±0.05% per hour and accrues every block into each position. The countdown runs to the next full UTC hour.">
-          Funding / UTC hour
+        <Term hint="Hourly cash flow per side: negative pays, positive receives. The majority pays the minority, with unmatched funding going to the vault; capped at 0.05% per hour. Countdown to the next UTC hour.">
+          Funding / 1h
         </Term>
       }
     >
-      <span data-testid="funding-rate" className={rate > 0n ? "text-success" : rate < 0n ? "text-destructive" : undefined}>
-        {formatFundingRate(rate)}
+      <span data-testid="funding-rate">
+        <span className={rate > 0n ? "text-destructive" : rate < 0n ? "text-success" : undefined}>L {formatFundingRate(-rate)}</span>
+        <span className="text-tertiary"> / </span>
+        <span className={rate < 0n ? "text-destructive" : rate > 0n ? "text-success" : undefined}>S {formatFundingRate(rate)}</span>
       </span>
       <span className="text-tertiary"> · </span>
       <span data-testid="funding-countdown">{countdown ?? "—"}</span>
@@ -258,13 +271,16 @@ export function MarketHeader({
         >
           <Change24h market={market.id} />
         </Stat>
+        <Stat label={<Term hint={`${CANDLE_SOURCE} underlying spot volume, estimated from each 5-minute candle's base volume × close over the last 24 hours. Not Ketos trading volume.`}>24h Volume</Term>}>
+          <Volume24h market={market.id} />
+        </Stat>
         <FundingStat market={market} />
         <Stat
           label={<Term hint="Total size of open positions on this market: longs / shorts.">Open Interest</Term>}
         >
-          <span className="text-success">{usd0(market.oi_long)}</span>
+          <span className="text-success">L {usd0(market.oi_long)}</span>
           <span className="text-tertiary"> / </span>
-          <span className="text-destructive">{usd0(market.oi_short)}</span>
+          <span className="text-destructive">S {usd0(market.oi_short)}</span>
         </Stat>
         <Stat
           label={
@@ -275,7 +291,7 @@ export function MarketHeader({
                   : "New positions wait for the first exit-liquidity measurement and available vault capital."
               }
             >
-              Effective cap
+              Max OI
             </Term>
           }
         >

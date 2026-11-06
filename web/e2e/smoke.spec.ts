@@ -47,7 +47,7 @@ test.describe("deployment", { tag: "@smoke" }, () => {
     await page.getByTestId("market-tab-ETH").click();
     await expect(page).toHaveTitle(/^ETH-USD.*\$/);
     await expect.poll(() => page.title()).toContain(await page.getByTestId("mark-price").innerText());
-    await page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: "Markets", exact: true }).click();
+    await page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: "Propose a market", exact: true }).click();
     await expect(page).toHaveTitle(marketsTitle);
   });
 

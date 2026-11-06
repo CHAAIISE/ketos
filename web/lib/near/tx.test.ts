@@ -12,7 +12,7 @@ function outcome(status: unknown, receiptStatuses: unknown[] = []) {
     receipts_outcome: receiptStatuses.map((s, i) => ({
       id: `R${i}`,
       block_hash: "B2",
-      outcome: { executor_id: "perps.ketos-dev.testnet", logs: [], status: s },
+      outcome: { executor_id: "perps.ketos-dev.testnet", logs: [] as string[], status: s },
     })),
   };
 }
@@ -46,6 +46,14 @@ describe("settleOutcome", () => {
       { SuccessValue: b64('"0"') },
     ]);
     expect(settleOutcome(raw)).toEqual({ txHash: "9fGkPq3Zs1", value: "0" });
+  });
+
+  it("preserves a refunded receiver's capacity refusal without turning recovery into transaction failure", () => {
+    const raw = outcome({ SuccessValue: b64('\"0\"') }, [{ SuccessValue: b64('\"100000000\"') }]);
+    raw.receipts_outcome[0].outcome.logs.push("wallet entry rejected: ERR_EXCEEDS_VAULT_CAPITAL: cap 20000000");
+    const result = settleOutcome(raw);
+    expect(result.value).toBe("0");
+    expect(result.refundReason).toBe("wallet entry rejected: ERR_EXCEEDS_VAULT_CAPITAL: cap 20000000");
   });
 
   it("returns a successful fallback close payout despite a failed oracle receipt", () => {

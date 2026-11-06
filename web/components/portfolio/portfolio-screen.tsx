@@ -29,7 +29,7 @@ export function PortfolioScreen() {
     <section className={cn(panel, "p-4")}>
       <h1 className="text-heading">Portfolio</h1>
       <EmptyState className="px-0" action={<ConnectButton />}>
-        Connect your wallet to see your equity, positions and account history. Then use Fund and Deposit to start trading.
+        Connect your wallet to see your equity, positions and account history. Use Fund to get USDC, then trade directly from your wallet.
       </EmptyState>
       <Link href="/markets" className="text-ui text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Browse markets without connecting →</Link>
     </section>
@@ -98,7 +98,7 @@ function AccountPortfolio() {
     content = <ErrorState className="m-3" title="Positions or linked orders could not be refreshed." onRetry={() => { void positions.refetch(); void orders.refetch(); }} />;
   } else if (tab === "positions") {
     content = openPositions.length ? <PositionsTable positions={openPositions} orders={openOrders} allowSwitchToCross /> :
-      <EmptyState action={<Link href="/trade" className="text-foreground underline underline-offset-4">Choose a market →</Link>}>No open positions. {account.data?.margin ? "Your margin is ready; choose a market to open a position." : "Use Fund to get USDC, then Deposit to add trading margin."}</EmptyState>;
+      <EmptyState action={<Link href="/trade" className="text-foreground underline underline-offset-4">Choose a market →</Link>}>No open positions. {account.data?.usdcBalance || account.data?.margin ? "Your USDC is ready; choose a market to open a position." : "Use Fund to get USDC, then choose a market to trade directly from your wallet."}</EmptyState>;
   } else if (tab === "orders") {
     content = openOrders.length ? <OpenOrdersTable orders={openOrders} positions={openPositions} /> :
       <EmptyState action={<Link href="/trade" className="text-foreground underline underline-offset-4">Place an order →</Link>}>No open orders. Place a Limit or Stop order, or attach take profit / stop loss when opening a position.</EmptyState>;
@@ -166,7 +166,7 @@ function AccountPortfolio() {
 
 function Transfers({ events, onDeposit }: { events: readonly HistoryEvent[]; onDeposit: () => void }) {
   const transfers = events.filter((event) => event.kind === "deposit" || event.kind === "withdrawal");
-  if (!transfers.length) return <EmptyState action={<Button variant="outline" size="sm" onClick={onDeposit}>Deposit margin</Button>}>No recorded margin transfers. Deposit moves wallet USDC into trading margin; Withdraw sends available margin back to your wallet. Vault transfers are managed on Vaults.</EmptyState>;
+  if (!transfers.length) return <EmptyState action={<Button variant="outline" size="sm" onClick={onDeposit}>Deposit margin</Button>}>No recorded collateral transfers. Direct wallet trades and advanced Deposit/Withdraw appear here. Vault deposits and withdrawals are managed under Earn.</EmptyState>;
   return <div className="overflow-x-auto">
     <table className="w-full min-w-128 text-label tabular-nums">
       <thead className="bg-muted text-tertiary"><tr className="h-8"><th className="px-3 text-left font-normal" scope="col">Time · UTC</th><th className="px-3 text-left font-normal" scope="col">Type</th><th className="px-3 text-right font-normal" scope="col">Amount</th><th className="px-3 text-left font-normal" scope="col">Route</th></tr></thead>

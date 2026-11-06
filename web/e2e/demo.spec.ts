@@ -9,8 +9,8 @@ import { formatPrice } from "../lib/near/format";
 test.use({ viewport: { width: 1440, height: 900 } });
 
 const USDC = 1_000_000n;
-// A keeper pass runs at most once a minute and samples 1Click for up to twelve markets.
-const KEEPER_WAIT = 420_000;
+// Five-minute price lease, plus browser cadence and two full depth-sampling passes.
+const KEEPER_WAIT = 600_000;
 
 async function expectSinglePrimary(page: Page, label: RegExp): Promise<void> {
   const primary = page.locator("[data-primary]:visible");
@@ -27,7 +27,7 @@ function parseUsd(text: string): number {
 }
 
 async function openApp(page: Page, name: "Trade" | "Markets" | "Vaults" | "Risk" | "Portfolio" | "Leaderboard"): Promise<void> {
-  await page.getByRole("navigation", { name: "App" }).getByRole("link", { name, exact: true }).click();
+  await page.getByRole("navigation", { name: "App" }).getByRole("link", { name: name === "Markets" ? "Propose a market" : name === "Vaults" ? "Earn" : name, exact: true }).click();
 }
 
 async function selectMarket(page: Page, id: string): Promise<void> {
@@ -37,12 +37,8 @@ async function selectMarket(page: Page, id: string): Promise<void> {
 }
 
 async function setLeverage(page: Page, leverage: number): Promise<void> {
-  await page.getByRole("button", { name: /^Leverage \d+×, adjust$/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Adjust Leverage" });
-  await dialog.locator("#order-leverage").fill(String(leverage));
-  await dialog.getByRole("button", { name: "Confirm" }).click();
-  await expect(dialog).toBeHidden();
-  await expect(page.getByTestId("leverage-value")).toHaveText(`${leverage}×`);
+  await page.locator("#order-leverage").fill(String(leverage));
+  await expect(page.locator("#order-leverage")).toHaveValue(String(leverage));
 }
 
 /** Fills the ticket for a market order; brackets are set only when given. */
@@ -62,8 +58,8 @@ async function fillMarketOrder(
 }
 
 test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits", async ({ page }) => {
-  // Active-market surveillance refreshes prices at most every five minutes.
-  test.setTimeout(1_200_000);
+  // Multiple scenes wait on live depth and active-market price surveillance.
+  test.setTimeout(1_800_000);
   const trader = traderAccountId();
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -85,12 +81,12 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(page.locator("[data-primary]:visible")).toHaveCount(1);
   });
 
-  await test.step("2. trade: connect, fund 1,000 USDC, deposit 500 USDC of margin", async () => {
+  await test.step("2. trade: connect and fund the wallet without depositing margin", async () => {
     await page.locator("[data-primary]").click();
     await expect(page).toHaveURL(/\/trade$/);
     await expect(steps).toBeVisible();
-    await expect(currentStep).toContainText(/Connect wallet/);
-    await expectSinglePrimary(page, /^Connect$/);
+    await expect(currentStep).toContainText(/Connect/);
+    await expectSinglePrimary(page, /^Sign in$/);
 
     await page.getByTestId("connect-button").click();
     const walletMenu = page.getByRole("dialog", { name: "Connect a wallet" });
@@ -98,23 +94,16 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await walletMenu.getByTestId("wallet-option-e2e").click();
     await expect(page.getByTestId("wallet-account")).toBeVisible();
 
-    await expect(currentStep).toContainText(/Fund wallet/);
+    await expect(currentStep).toContainText(/Fund/);
     // The ticket's main action follows the guide: claim USDC before anything else.
     await expectSinglePrimary(page, /^Get 1,000 USDC$/);
     await page.getByTestId("fund-button").click();
     await expectToast(page, /1,000 USDC added to your wallet/);
     await expect(page.getByTestId("fund-button")).toHaveText(/Fund in \d+ min/);
 
-    await expect(currentStep).toContainText(/Deposit margin/);
-    await expectSinglePrimary(page, /^Deposit margin$/);
-    await page.locator("[data-primary]:visible").click();
-    const dialog = page.getByRole("dialog", { name: "Margin" });
-    await dialog.locator('input[name="deposit-margin"]').fill("500");
-    await dialog.getByRole("button", { name: "Deposit margin" }).click();
-    await expectToast(page, /\$500\.00 margin deposited/);
-    await expect(dialog).toBeHidden();
-    await expect(page.getByTestId("free-margin")).toHaveText("$500.00");
-    await expect(currentStep).toContainText(/Open a position/);
+    await expect(currentStep).toContainText(/Trade/);
+    expect(await sandboxViews().account(trader)).toBeNull();
+    await expect(page.getByTestId("free-margin")).toHaveText("1,000.00 USDC");
   });
 
   await test.step("3. markets: every listed market with its live cap, search, open ETH", async () => {
@@ -137,7 +126,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
   await test.step("4. trade ETH: market long 5x with take profit and stop loss", async () => {
     await expect(page.getByTestId("mark-price")).toHaveText("$2,292.59");
     await fillMarketOrder(page, ticket, { side: "long", leverage: 5, size: 500, takeProfit: 2750, stopLoss: 2000 });
-    await expectSinglePrimary(page, /Buy \/ Long/);
+    await expectSinglePrimary(page, /^Long$/);
     await page.locator("[data-primary]:visible").click();
     await expectToast(page, /Long ETH 5× opened · \$500\.00/);
     await expect(positions).toHaveCount(1);
@@ -147,6 +136,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(row.locator('[data-testid^="brackets-"]')).toContainText("2,750");
     await expect(row.locator('[data-testid^="brackets-"]')).toContainText("2,000");
     const [position] = await sandboxViews().positions(trader);
+    expect((await sandboxViews().account(trader))?.margin).toBe(0n);
     expect(position.liquidation_price).toBeLessThan(position.entry_price);
     await expect(row).toContainText(formatPrice(position.liquidation_price));
     // The guide steps aside once the first position is open.
@@ -187,7 +177,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await ticket.getByTestId("order-type-market").click();
   });
 
-  await test.step("6. trade ZEC: an oversized order is refused at the live exit-liquidity cap", async () => {
+  await test.step("6. trade ZEC: an oversized order is refused at the effective cap", async () => {
     await selectMarket(page, "ZEC");
     await ticket.getByTestId("side-short").click();
     const market = await getMarket("ZEC");
@@ -196,24 +186,29 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
 
     // The keeper re-measures depth every minute, so size the order from the cap read just now,
     // well above it, and mint the margin that takes (the faucet's 1,000 USDC is not enough).
-    const remaining = BigInt(market.max_oi_per_side) - BigInt(market.oi_short);
+    const remaining = BigInt(market.effective_max_oi_per_side) - BigInt(market.oi_short);
     const margin = ((remaining * 3n) / 2n / BigInt(leverage) / USDC + 1n) * USDC;
     const freeBefore = parseUsd(await page.getByTestId("free-margin").innerText());
     await fundTraderMargin(margin);
     await expect
       .poll(async () => parseUsd(await page.getByTestId("free-margin").innerText()), { timeout: 30_000 })
       .toBeGreaterThanOrEqual(freeBefore + Number(margin / USDC));
+    await ticket.getByLabel("Order funding source").selectOption("margin");
 
     await ticket.locator('input[name="order-size"]').fill(String((margin / USDC) * BigInt(leverage)));
-    await expectSinglePrimary(page, /Sell \/ Short/);
+    await expectSinglePrimary(page, /^Short$/);
+    const accountBeforeRefusal = await sandboxViews().account(trader);
     await page.locator("[data-primary]:visible").click();
     const refusal = page.getByTestId("order-error");
-    await expect(refusal).toContainText(/Exceeds live exit liquidity on NEAR Intents \(cap \$[\d,.]+\)/);
+    await expect(refusal).toBeVisible();
+    expect((await sandboxViews().account(trader))?.margin).toBe(accountBeforeRefusal?.margin);
     await expect(positions).toHaveCount(2);
 
     const useMax = refusal.getByRole("button", { name: /Use max size/ });
     const cap = parseUsd((await useMax.innerText()).replace(/^Use max size/, ""));
     expect(cap).toBeGreaterThan(0);
+    const refusedMarket = await getMarket("ZEC");
+    expect(cap).toBeCloseTo(Number(BigInt(refusedMarket.effective_max_oi_per_side) - BigInt(refusedMarket.oi_short)) / Number(USDC), 0);
     await useMax.click();
     await expect(refusal).toBeHidden();
     const fitted = Number(await ticket.locator('input[name="order-size"]').inputValue());
@@ -269,7 +264,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     }
     await expect(page.getByRole("region", { name: /exposure/i })).toContainText("ETH");
 
-    // Cover both vaults after the 500 USDC margin deposit and the 25 USDC listing fee.
+    // Additional wallet funds cover both LP deposits after the trading and listing costs.
     await mintTraderUsdc(125n * USDC);
     await expectSinglePrimary(page, /Deposit/);
     await page.locator("#vault-deposit").fill("500");
@@ -308,24 +303,24 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
       await page.getByTestId(`risk-market-${asset}`).click();
       await expect(page.locator("#stress-market")).toHaveValue(asset);
       await page.locator("summary").filter({ hasText: "Latest measured impact curve" }).click();
-      await expect(page.getByRole("img", { name: /^Price impact by sell size; exit capacity/ })).toBeVisible();
+      await expect(page.getByRole("img", { name: /^Price impact by sell size;/ })).toBeVisible();
     }
     await page.getByTestId("risk-market-ETH").click();
     await expect(page.locator("#stress-market")).toHaveValue("ETH");
     await expect(page.getByRole("status").filter({ hasText: /Market tightened|No recent tightening observed/ })).toBeVisible();
     await page.locator("summary").filter({ hasText: "Latest measured impact curve" }).click();
-    await expect(page.getByRole("img", { name: /^Price impact by sell size; exit capacity/ })).toBeVisible();
+    await expect(page.getByRole("img", { name: /^Price impact by sell size;/ })).toBeVisible();
 
     await page.locator("#stress-shock").fill("50");
     const row = page.locator('[data-testid^="stress-position-"]').filter({ hasText: "ETH" });
     await expect(row).toContainText("Would liquidate");
     await expect(page.getByTestId("stress-notional")).toHaveText("$500.00");
     const ethPosition = (await sandboxViews().positions(trader)).find((position) => position.market_id === "ETH")!;
-    const expectedDebt = Number(ethPosition.size / 2n - ethPosition.margin +
-      ethPosition.borrow_fee + ethPosition.funding_paid - ethPosition.funding_received) / Number(USDC);
-    // The UI freezes accrual at its last poll; compare cents, not a pre-impact fee fixture.
+    const debtCents = (ethPosition.size / 2n - ethPosition.margin +
+      ethPosition.borrow_fee + ethPosition.funding_paid - ethPosition.funding_received) / 10_000n;
+    // Monetary displays truncate micro-USDC to cents; compare the same fixed-point boundary.
     await expect.poll(async () => parseUsd(await page.getByTestId("stress-debt-core").innerText()))
-      .toBeCloseTo(expectedDebt, 2);
+      .toBe(Number(debtCents) / 100);
     await expect(page.getByTestId("stress-debt-long-tail")).toHaveText("$0.00");
     // The scenario is read-only.
     expect((await getMarket("ETH")).oi_long).toBe("500000000");
@@ -337,7 +332,10 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await openApp(page, "Trade");
     await expect(page).toHaveURL(/\/trade/);
     await selectMarket(page, "NEAR");
+    await expect.poll(async () => (await getMarket("NEAR")).is_open, { timeout: KEEPER_WAIT }).toBe(true);
     await expect(page.getByTestId("mark-price")).toHaveText("$4.00");
+    await expect(ticket.getByLabel("Order funding source")).toBeVisible();
+    await ticket.getByLabel("Order funding source").selectOption("margin");
     const liquidationLeverage = Math.min(5, (await getMarket("NEAR")).max_leverage);
     await fillMarketOrder(page, ticket, { side: "long", leverage: liquidationLeverage, size: 500 });
     await page.locator("[data-primary]:visible").click();
@@ -390,7 +388,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(btc).toContainText("(Cross)");
     await expect(page.getByTestId("portfolio-cross-health")).toContainText("Above maintenance");
     await btc.getByRole("button", { name: "Close" }).click();
-    await expectToast(page, /Short BTC closed · settled into cross margin/);
+    await expectToast(page, /Short BTC closed/);
     await expect(positions).toHaveCount(1);
     await positions.first().getByRole("button", { name: "Close" }).click();
     await expectToast(page, /Long ETH closed/);
@@ -403,9 +401,8 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expectToast(page, /sent back to your wallet/);
     await expect(page.getByTestId("portfolio-available")).toHaveText("$0.00");
     await page.getByRole("tab", { name: "Deposits & Withdrawals" }).click();
-    await expect(page.locator('[data-testid^="transfer-"]').filter({ hasText: "Withdrawal" })).toHaveCount(1);
-    // The opening deposit, not the larger ZEC top-up that may also end in 500.
-    await expect(page.locator('[data-testid^="transfer-"]').filter({ hasText: /(^|[^\d,])\$500\.00/ })).toContainText("Deposit");
+    await expect(page.locator('[data-testid^="transfer-"]').filter({ hasText: "Withdrawal" }).first()).toBeVisible();
+    await expect(page.locator('[data-testid^="transfer-"]').filter({ hasText: "Deposit" }).first()).toBeVisible();
   });
 
   await test.step("12. leaderboard: the demo account ranks by realized PnL and volume", async () => {

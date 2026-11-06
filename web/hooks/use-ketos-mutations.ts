@@ -18,9 +18,10 @@ import {
   type ListMarketArgs,
   type OpenPositionArgs,
   type PlaceOrderArgs,
+  type ClosePositionArgs,
 } from "@/lib/near/calls";
 import type { NearConfig } from "@/lib/near/config";
-import { NearActionError } from "@/lib/near/errors";
+import { NearActionError, toNearActionError } from "@/lib/near/errors";
 import type { NearTransaction, TxResult } from "@/lib/near/tx";
 import { orderSchema, positionSchema, type Order, type Position, type VaultId } from "@/lib/near/types";
 import { useNear } from "./near-provider";
@@ -77,6 +78,7 @@ function useTxMutation<TVars, TData extends TxReceipt>(options: {
           });
         }
         if (transfer && result.value !== transfer.args.amount) {
+          if (result.refundReason) throw toNearActionError(result.refundReason);
           throw new NearActionError({
             code: "TRANSFER_REFUNDED",
             message: "The token transfer was not fully accepted. Unused USDC was refunded; any unspent oracle deposit remains withdrawable.",
@@ -208,9 +210,9 @@ export function useOpenPosition() {
   });
 }
 
-/** Variables: position id. `payout` is what returned to free margin, in USDC units. */
+/** Released collateral goes to the wallet unless explicitly retained on Ketos. */
 export function useClosePosition() {
-  return useTxMutation<number, TxReceipt & { payout: bigint | null }>({
+  return useTxMutation<ClosePositionArgs, TxReceipt & { payout: bigint | null }>({
     build: closePositionTx,
     parse: (result) => ({ txHash: result.txHash, payout: toAmount(result.value) }),
     invalidate: tradingKeys,

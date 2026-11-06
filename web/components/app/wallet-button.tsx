@@ -215,6 +215,7 @@ function AccountMenu({ accountId }: { accountId: string }) {
               <BalanceRow label="Core vault" value={vault.data?.value} />
               <BalanceRow label="Long-tail vault" value={longTail.data?.value} />
             </dl>
+            <p className="px-4 pb-2 text-label text-tertiary">Advanced margin transfers · trading can use your wallet directly.</p>
             <div className="grid grid-cols-2 gap-2 px-4 pb-3">
               <Button size="sm" onClick={() => openFunding("deposit")}>
                 Deposit

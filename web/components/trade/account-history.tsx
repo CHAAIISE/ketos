@@ -124,7 +124,7 @@ export function OpenOrdersTable({ orders, positions }: { orders: readonly Order[
                 onClick={() =>
                   track(() => cancel.mutateAsync(order.id), {
                     pending: `Cancelling ${label.toLowerCase()} on ${target.market}…`,
-                    success: `${label} on ${target.market} cancelled${target.reserved ? ` · ${formatUsd(target.reserved)} back to margin` : ""}`,
+                    success: `${label} on ${target.market} cancelled · released collateral returning to your wallet`,
                   })
                 }
               >

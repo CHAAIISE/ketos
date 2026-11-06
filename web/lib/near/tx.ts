@@ -20,6 +20,8 @@ export interface TxResult {
   txHash: string | null;
   /** JSON-decoded return value of the called method, undefined when there is none. */
   value: unknown;
+  /** Receiver rejection recovered by the NEP-141 resolver; relevant only when tokens return. */
+  refundReason?: string;
 }
 
 /** Raised when a transaction or one of its receipts failed; `failure` is the RPC error JSON. */
@@ -43,7 +45,10 @@ const outcomeSchema = z
     transaction: z.object({ hash: z.string().optional() }).loose().optional(),
     transaction_outcome: z.object({ id: z.string().optional() }).loose().optional(),
     receipts_outcome: z
-      .array(z.object({ outcome: z.object({ status: z.union([statusSchema, z.string()]) }).loose() }).loose())
+      .array(z.object({ outcome: z.object({
+        status: z.union([statusSchema, z.string()]),
+        logs: z.array(z.string()).optional(),
+      }).loose() }).loose())
       .optional(),
   })
   .loose();
@@ -73,7 +78,10 @@ export function settleOutcome(raw: unknown): TxResult {
   const status = typeof outcome.status === "object" ? outcome.status : undefined;
   if (status?.Failure !== undefined) throw new TxFailureError(status.Failure, txHash);
   if (status?.SuccessValue !== undefined) {
-    return { txHash, value: decodeSuccessValue(status.SuccessValue) };
+    const refundReason = (outcome.receipts_outcome ?? [])
+      .flatMap((receipt) => receipt.outcome.logs ?? [])
+      .find((line) => /^(wallet (?:entry|order) rejected|price action cancelled): ERR_/.test(line));
+    return { txHash, value: decodeSuccessValue(status.SuccessValue), ...(refundReason ? { refundReason } : {}) };
   }
   for (const receipt of outcome.receipts_outcome ?? []) {
     const receiptStatus = receipt.outcome.status;

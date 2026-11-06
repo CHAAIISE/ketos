@@ -11,7 +11,7 @@ import { formatPrice, formatUnits, formatUsd, PRICE_DECIMALS, USDC_DECIMALS } fr
 import { isLiquidatable, type Order, type Position } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 
-/** What closing now would credit to free margin: equity minus the closing fee, never below zero. */
+/** Estimated proceeds before a new price is pulled; cross cash may stay behind surviving legs. */
 function closePayout(position: Pick<Position, "equity" | "close_fee">): bigint {
   const owed = position.equity - position.close_fee;
   return owed > 0n ? owed : 0n;
@@ -48,6 +48,7 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
   const switchMode = useSwitchToCross();
   const { track } = useTxToast();
   const [switchPosition, setSwitchPosition] = useState<Position | null>(null);
+  const [keepOnKetos, setKeepOnKetos] = useState(false);
   const triggers = new Map(orders.map((o) => [o.id, o.request.trigger_price]));
 
   const bracket = (id: number | null) => {
@@ -100,18 +101,16 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
         size="xs"
         className="text-label"
         disabled={close.isPending || switchMode.isPending}
-        title={p.margin_mode === "cross" ? "Market close: profit or loss settles into your shared cross pool" : `Market close: about ${formatUsd(payout)} returns to your free margin`}
+        title={p.margin_mode === "cross" ? "Cross cash backs surviving positions; released collateral follows your payout choice" : `Market close: about ${formatUsd(payout)} returns to ${keepOnKetos ? "Ketos margin" : "your wallet"}`}
         onClick={() =>
-          track(() => close.mutateAsync(p.id), {
+          track(() => close.mutateAsync({ positionId: p.id, toWallet: !keepOnKetos }), {
             pending: `Closing ${p.side} ${p.market_id}…`,
             success: (r) =>
-              p.margin_mode === "cross"
-                ? `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · settled into cross margin`
-                : `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · ${formatUsd(r.payout ?? payout)} back to margin`,
+              `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · ${formatUsd(r.payout ?? payout)} ${keepOnKetos ? "kept on Ketos" : "returned to wallet"}`,
           })
         }
       >
-        {close.isPending && close.variables === p.id ? "Closing…" : "Close"}
+        {close.isPending && close.variables?.positionId === p.id ? "Closing…" : "Close"}
       </Button>
     );
   };
@@ -152,6 +151,11 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
 
   return (
     <>
+      <label className="flex items-center justify-end gap-2 border-b border-border px-3 py-2 text-label text-muted-foreground">
+        <input type="checkbox" checked={keepOnKetos} disabled={close.isPending} onChange={(event) => setKeepOnKetos(event.target.checked)} className="size-3.5 accent-foreground" />
+        Keep on Ketos
+        <Term hint="Off: released collateral returns to your wallet. On: keep it as free margin. Cross cash still backs surviving cross positions; only released funds can leave.">Payout</Term>
+      </label>
       <ul className="flex flex-col md:hidden">
         {positions.map((p) => (
           <li key={p.id} data-testid={`position-card-${p.id}`} className="flex flex-col gap-3 border-t border-border px-3 py-3 first:border-t-0">

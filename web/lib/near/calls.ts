@@ -4,6 +4,7 @@ import type { NearTransaction } from "./tx";
 import { signedPricesArg, signedPricesFor, type PriceContracts } from "./signed-prices";
 import type { MarginMode, MarketId, PriceSource, Side, VaultId } from "./types";
 import { KetosViews } from "./views";
+import { entryFundingRequired, executionSlots } from "./order-funding";
 
 const TGAS = 10n ** 12n;
 /** Enough for `ft_transfer_call` → `ft_on_transfer` → `ft_resolve_transfer` and for withdraw callbacks. */
@@ -82,19 +83,35 @@ function bracketsArg(brackets: Brackets | undefined) {
 export interface OpenPositionArgs {
   marketId: MarketId;
   side: Side;
-  /** Collateral taken from free margin, USDC units. */
+  /** Position collateral before opening fees, USDC units. */
   margin: bigint;
   leverage: number;
   /** Defaults to isolated. */
   marginMode?: MarginMode;
   /** Take profit / stop loss placed with the position, executed by the keeper at the oracle price. */
   brackets?: Brackets;
+  /** Wallet transfers are the default; existing Ketos collateral remains an advanced option. */
+  fundingSource?: "wallet" | "margin";
 }
 
 export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, accountId: string): Promise<NearTransaction> {
   const prices = await signedPricesFor(c, {
     kind: "open", market: args.marketId, accountId, marginMode: args.marginMode ?? "isolated",
   });
+  if (args.fundingSource !== "margin") {
+    const request = {
+      market_id: args.marketId, side: args.side, margin: args.margin.toString(), leverage: args.leverage,
+      margin_mode: args.marginMode ?? "isolated", brackets: bracketsArg(args.brackets), ...signedPricesArg(prices),
+    };
+    const tx = transferCallTx(c,
+      entryFundingRequired(args.margin, args.leverage, executionSlots(false, args.brackets)),
+      `open:${JSON.stringify(request)}`, PULL_GAS);
+    // The configured USDC extension forwards the oracle budget before invoking the receiver.
+    tx.actions[0].deposit += await requestDeposit(c, "get_open_price_request_deposit", {
+      market: args.marketId, account_id: accountId, margin_mode: args.marginMode ?? "isolated",
+    });
+    return tx;
+  }
   return call(c.ketosContract, "open_position", {
     market_id: args.marketId,
     side: args.side,
@@ -108,9 +125,14 @@ export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, 
   }), PULL_GAS);
 }
 
-export async function closePositionTx(c: PriceContracts, positionId: number): Promise<NearTransaction> {
+export interface ClosePositionArgs {
+  positionId: number;
+  toWallet?: boolean;
+}
+
+export async function closePositionTx(c: PriceContracts, { positionId, toWallet = true }: ClosePositionArgs): Promise<NearTransaction> {
   return call(c.ketosContract, "close_position", {
-    position_id: positionId, to_wallet: false,
+    position_id: positionId, to_wallet: toWallet,
     ...signedPricesArg(await signedPricesFor(c, { kind: "position", positionId })),
   }, await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
 }
@@ -157,6 +179,11 @@ export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Pro
           brackets: bracketsArg(args.brackets),
           margin_mode: args.marginMode ?? "isolated",
         };
+  if (!("positionId" in args) && args.fundingSource !== "margin") {
+    return transferCallTx(c,
+      entryFundingRequired(args.margin, args.leverage, executionSlots(true, args.brackets)),
+      `order:${JSON.stringify(request)}`, PULL_GAS);
+  }
   // Entry orders only reserve margin; position-backed exits validate the current price.
   const deposit = "positionId" in args
     ? await requestDeposit(c, "get_position_price_request_deposit", { position_id: args.positionId })
@@ -166,9 +193,9 @@ export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Pro
   return call(c.ketosContract, "place_order", { request, ...signedPricesArg(prices) }, deposit, "positionId" in args ? PULL_GAS : GAS);
 }
 
-/** Cancels a pending order; reserved margin returns to free margin. */
+/** Cancels a pending order and returns its released collateral to the wallet. */
 export function cancelOrderTx(c: Contracts, orderId: number): NearTransaction {
-  return call(c.ketosContract, "cancel_order", { order_id: orderId, to_wallet: false });
+  return call(c.ketosContract, "cancel_order", { order_id: orderId, to_wallet: true });
 }
 
 /** Moves `amount` USDC units of free margin into the shared cross-margin pool. */
