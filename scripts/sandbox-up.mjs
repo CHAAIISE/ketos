@@ -27,8 +27,6 @@ const PRICES = [
   ["wrap.near", 400_000_000n],
   ["zec.omft.near", 120_660_966_700n],
   ["22.contract.portalbridge.near", 15_000_000_000n],
-  ["aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near", 10_000_000n],
-  ["token.rhealab.near", 5_000_000n],
   ["DOGE", 15_000_000n],
   ["XRP", 50_000_000n],
   ["LTC", 8_000_000_000n],

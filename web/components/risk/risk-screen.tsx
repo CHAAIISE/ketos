@@ -15,6 +15,7 @@ export function RiskScreen() {
   const markets = useMarkets();
   const [selection, setSelection] = useState("NEAR");
   const [shock, setShock] = useState(20);
+  // The shared query can settle in the shell before this screen hydrates; useNow stays zero until then.
   const now = useNow();
   const selected = markets.data?.some((m) => m.id === selection) ? selection : markets.data?.[0]?.id ?? selection;
   const depth = useDepth(selected);
@@ -27,10 +28,10 @@ export function RiskScreen() {
           <h1 className="text-heading">Risk</h1>
           <p className="mt-1 text-ui text-muted-foreground">Measured exit liquidity, market limits and the impact of a sudden price drop.</p>
         </div>
-        <p className="shrink-0 text-label text-tertiary tabular-nums">{markets.data ? `Registry read ${formatUtc(markets.dataUpdatedAt, true)}` : "Reading onchain markets…"}</p>
+        <p className="shrink-0 text-label text-tertiary tabular-nums">{now > 0 && markets.data ? `Registry read ${formatUtc(markets.dataUpdatedAt, true)}` : "Reading onchain markets…"}</p>
       </section>
-      {markets.isError ? <ErrorState title="Could not refresh the market registry." error={markets.error} onRetry={() => void markets.refetch()} /> : null}
-      {markets.isPending ? <Skeleton className="h-80" /> : markets.data?.length ? (
+      {now > 0 && markets.isError ? <ErrorState title="Could not refresh the market registry." error={markets.error} onRetry={() => void markets.refetch()} /> : null}
+      {!now || markets.isPending ? <Skeleton className="h-80" /> : markets.data?.length ? (
         <div className="flex min-w-0 flex-col gap-1">
           <CapacityHeatmap markets={markets.data} selected={selected} onSelect={setSelection} now={now} />
           <StressPanel markets={markets.data} selected={selected} onSelect={setSelection} shock={shock} onShock={setShock} now={now} />
@@ -40,7 +41,7 @@ export function RiskScreen() {
           </div>
         </div>
       ) : !markets.isError ? <EmptyState>No markets registered yet. Reload once a market has been listed.</EmptyState> : null}
-      <Methodology market={market} />
+      <Methodology market={now ? market : undefined} />
     </>
   );
 }

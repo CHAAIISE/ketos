@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { Account, JsonRpcProvider, teraToGas } from "near-api-js";
 import { KetosViews } from "../lib/near/views";
 
@@ -136,4 +137,20 @@ export async function setOraclePrice(assetId: string, usd: number): Promise<void
     multiplier: multiplier.toString(),
     decimals: 8,
   });
+}
+
+/** Runs the local keeper's real oracle refresh before checking fresh-price admission. */
+export async function refreshSandboxPrices(): Promise<void> {
+  const rpc = provider();
+  const contractId = env("NEXT_PUBLIC_KETOS_CONTRACT");
+  const lastRequest = await rpc.callFunction({ contractId, method: "get_last_price_request_ms", args: {} }) as number | null;
+  if (lastRequest !== null) {
+    const block = await rpc.viewBlock({ finality: "final" });
+    const nowMs = Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n);
+    const waitMs = lastRequest + 30_000 - nowMs;
+    if (waitMs > 0) await sleep(waitMs + 500);
+  }
+  const config = await rpc.callFunction({ contractId, method: "get_config", args: {} }) as { keeper_id: string };
+  const keeper = new Account(config.keeper_id, rpc, env("KEEPER_PRIVATE_KEY") as `ed25519:${string}`);
+  await call(keeper, contractId, "refresh_prices", {}, 0n);
 }

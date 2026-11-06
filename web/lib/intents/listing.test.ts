@@ -56,6 +56,25 @@ describe("listableAssets", () => {
     })).toEqual([]);
   });
 
+  it("excludes retired symbols and route aliases without excluding ETH's aurora oracle", () => {
+    const auroraToken = "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near";
+    const rheaToken = "token.rhealab.near";
+    const assets = listableAssets({
+      markets: [],
+      oracleAssetIds: [auroraToken, rheaToken, "alias-a.near", "alias-r.near", "aurora"],
+      tokens: [
+        token(`nep141:${auroraToken}`, "NEWALIAS"),
+        token(`nep141:${rheaToken}`, "OTHERALIAS"),
+        token("nep141:alias-a.near", "AURORA"),
+        token("nep141:alias-r.near", "RHEA"),
+        token("nep141:aurora", "ETH"),
+      ],
+    });
+    expect(assets).toEqual([
+      { symbol: "ETH", oracleAssetId: "aurora", intentsAssetId: "nep141:aurora", priceSource: "tee", referencePriceUsd: 1 },
+    ]);
+  });
+
   it.each([["btc.near", WBTC], [WBTC, "btc.near"]])("prefers the native candidate when oracle order starts with %s", (first, second) => {
     const assets = listableAssets({
       markets: [],

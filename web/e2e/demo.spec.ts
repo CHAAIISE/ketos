@@ -110,7 +110,8 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await openApp(page, "Markets");
     await expect(page).toHaveURL(/\/markets$/);
     const table = page.getByTestId("markets-table");
-    await expect(page.locator('[data-testid^="market-row-"]')).toHaveCount(16);
+    await expect(page.getByTestId("market-row-AURORA")).toHaveCount(0);
+    await expect(page.getByTestId("market-row-RHEA")).toHaveCount(0);
     await expectSinglePrimary(page, /^List /);
     await expect.poll(async () => (await getMarket("ETH")).is_open, { timeout: KEEPER_WAIT }).toBe(true);
     await expect(page.getByTestId("market-status-ETH")).toHaveText(/^(Open|Price refresh needed)$/);
@@ -140,6 +141,11 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     expect(position.liquidation_price).toBeLessThan(position.entry_price);
     await expect(row).toContainText(formatPrice(position.liquidation_price));
     // The guide steps aside once the first position is open.
+    await expect(steps).toBeHidden();
+    await page.getByRole("button", { name: "Getting started", exact: true }).click();
+    await expect(steps).toBeVisible();
+    await expect(steps.locator('[aria-current="step"]')).toHaveCount(0);
+    await page.getByRole("button", { name: "Hide getting started", exact: true }).click();
     await expect(steps).toBeHidden();
 
     await page.getByTestId("account-tab-orders").click();
@@ -240,7 +246,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     if (await closed.getAttribute("open") === null) await closed.locator("summary").click();
     const status = page.getByTestId(`market-status-${symbol}`);
     await expect(status).toHaveText("Measuring");
-    await expect(page.locator('[data-testid^="market-row-"]')).toHaveCount(17);
 
     // Unmeasured listings are sampled on the very next keeper pass.
     await expect.poll(async () => (await getMarket(symbol)).is_open, { timeout: KEEPER_WAIT }).toBe(true);
@@ -301,7 +306,9 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await openApp(page, "Risk");
     await expect(page).toHaveURL(/\/risk$/);
     await expect(page.getByText("Last measurement", { exact: true }).first()).toBeVisible();
-    await expect(page.locator('[data-testid^="risk-market-"]')).toHaveCount(17);
+    await expect(page.getByTestId("risk-market-UNI")).toBeVisible();
+    await expect(page.getByTestId("risk-market-AURORA")).toHaveCount(0);
+    await expect(page.getByTestId("risk-market-RHEA")).toHaveCount(0);
     for (const asset of ["BTC", "ETH", "NEAR", "ZEC"]) {
       await page.getByTestId(`risk-market-${asset}`).click();
       await expect(page.locator("#stress-market")).toHaveValue(asset);

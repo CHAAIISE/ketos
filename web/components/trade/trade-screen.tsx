@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { PublicRoutePreview } from "@/components/app/route-preview";
 import { OnboardingSteps } from "@/components/ui/onboarding-steps";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useAccountId } from "@/hooks/near-provider";
 import { useAccount, useMarkets, usePositions } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
@@ -57,6 +58,7 @@ export function TradeScreen() {
     () => null,
   );
   const [picked, setPicked] = useState<MarketId | null>(null);
+  const [showGuide, setShowGuide] = useState(false);
   const marketId = picked ?? urlMarket ?? "NEAR";
   // Mirrors the choice into the URL so a reload or a shared link opens the same market.
   const setMarketId = (id: MarketId) => {
@@ -76,7 +78,15 @@ export function TradeScreen() {
 
   return (
     <>
-      {openPositions === 0 ? <OnboardingSteps steps={onboardingSteps(step, openPositions)} /> : null}
+      {openPositions === 0 || showGuide ? <OnboardingSteps steps={onboardingSteps(step, openPositions)} /> : null}
+      <div className={`flex items-center justify-end gap-3 ${openPositions === 0 ? "lg:hidden" : ""}`}>
+        {openPositions > 0 ? (
+          <Button variant="ghost" size="sm" aria-expanded={showGuide} onClick={() => setShowGuide((shown) => !shown)}>
+            {showGuide ? "Hide getting started" : "Getting started"}
+          </Button>
+        ) : null}
+        {market ? <a href="#order-ticket" className={buttonVariants({ variant: "secondary", size: "sm", className: "lg:hidden" })}>Order ticket ↓</a> : null}
+      </div>
 
       {markets.isPending ? (
         <TradeSkeleton />

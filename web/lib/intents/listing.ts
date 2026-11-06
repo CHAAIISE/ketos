@@ -18,6 +18,13 @@ const WRAPPED_UNDERLYING: Readonly<Record<string, string>> = {
   WMATIC: "MATIC", WPOL: "POL", WFTM: "FTM",
 };
 
+// Match the contract's retired symbols and token identities; ETH's oracle id is still "aurora".
+const RETIRED_SYMBOLS: Readonly<Record<string, true>> = { AURORA: true, RHEA: true };
+const RETIRED_ORACLE_IDS: Readonly<Record<string, true>> = {
+  "aaaaaa20d9e0e2461697782ef11675f668207961.factory.bridge.near": true,
+  "token.rhealab.near": true,
+};
+
 function underlying(symbol: string): string {
   return WRAPPED_UNDERLYING[symbol] ?? symbol;
 }
@@ -80,6 +87,7 @@ export function listableAssets({
     const token = nearTokens.get(intentsAssetId);
     if (!token || intentsAssetId === USDC_NEAR_ASSET_ID) continue;
     const symbol = token.symbol.toUpperCase();
+    if (RETIRED_SYMBOLS[symbol] || RETIRED_ORACLE_IDS[oracleAssetId]) continue;
     if (!SYMBOL_RE.test(symbol) || STABLECOINS[symbol] || symbols.has(symbol) || underlyings.has(underlying(symbol))) continue;
     // Prefer a native candidate regardless of the oracle's enumeration order.
     if (WRAPPED_UNDERLYING[symbol] && nativeSymbols.has(underlying(symbol))) continue;

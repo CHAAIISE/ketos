@@ -141,7 +141,7 @@ export function OrderTicket({ market, step, account, className }: {
     {mutation.isPending ? "Placing order…" : `${side === "long" ? "Long" : "Short"}${isMarket ? "" : ` · ${KIND_LABEL[kind]}`}`}
   </Button>;
 
-  return <section aria-label="Open a position" className={cn("flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3", className)}>
+  return <section id="order-ticket" tabIndex={-1} aria-label="Open a position" className={cn("flex min-w-0 scroll-mt-4 flex-col gap-3 rounded-md border border-border bg-card p-3 focus-visible:outline-2 focus-visible:outline-ring", className)}>
     <fieldset disabled={!status.open || mutation.isPending} aria-describedby={!status.open ? "entry-unavailable" : undefined} className="contents">
       <div role="radiogroup" aria-label="Margin mode" className="grid grid-cols-2 gap-2">
         {(["isolated", "cross"] as const).map((mode) => <label key={mode}

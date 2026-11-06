@@ -1,6 +1,7 @@
 import { expect, test as base } from "@playwright/test";
 import { formatUsdc } from "../lib/near/format";
 import { routePreviewSchema } from "../lib/intents/route-preview";
+import { refreshSandboxPrices } from "./sandbox";
 
 const test = base.extend<{ browserErrors: void }>({
   browserErrors: [async ({ page }, use) => {
@@ -26,6 +27,7 @@ test.describe("deployment", { tag: "@smoke" }, () => {
   });
 
   test("markets admit entries on first load after scheduled maintenance", async ({ page }) => {
+    if (!process.env.BASE_URL) await refreshSandboxPrices();
     await page.goto("/markets");
     const statuses = page.locator('[data-testid^="market-status-"]');
     await expect(statuses.first()).toBeVisible();
