@@ -196,7 +196,7 @@ Market rows and open counts share one status rule: depth must be within 30 minut
 
 Displayed per-side allowances use `effective_max_oi_per_side`, not the deeper quote ceiling alone, and identify vault, liquidity or protocol limits. Admission depth can rise more slowly than measured liquidity. A raw curve that passes its entire grid shows `≥` and “largest size probed”; registry-only values instead disclose the potentially ramp-limited admission depth. Market capacities are never summed into a protocol liquidity total. Each observation carries its own timestamp; the app footer explicitly labels its newest observation as “latest of N markets.” A completed browser-requested pass gets its own keeper timestamp; a recent depth update is not claimed as proof that a whole pass completed.
 
-The landing uses a read-only provider and shared cached activity statistics. Wallet code loads only in the trading app; browsing the landing does not fetch every trader's history. These frontend changes are verified locally and do not imply that the hosted release has been redeployed.
+The landing uses a read-only provider and shared cached activity statistics. Wallet code loads only in the trading app; browsing the landing does not fetch every trader's history. These frontend changes were deployed and inspected on November 6, 2026 at desktop and phone widths. Hosted screen inspection used a disconnected wallet and unsent previews; it does not replace the signed local journey or prove a retail wallet integration.
 
 ## Why it matters
 
