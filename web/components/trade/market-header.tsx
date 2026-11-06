@@ -14,7 +14,7 @@ import { formatFundingRate, formatPrice, usd0 } from "@/lib/near/format";
 import { isMeasuring, type Market, type MarketId } from "@/lib/near/types";
 import { CANDLE_SOURCE, change24h } from "@/lib/prices/candles";
 import { cn } from "@/lib/utils";
-import { isPriceFresh, marketStatus } from "@/lib/near/market-status";
+import { formatExitCapacity, isPriceFresh, marketDisplayStatus, marketLimitLabel, marketStatus } from "@/lib/near/market-status";
 
 export const marketName = (id: MarketId) => `${id}-USD`;
 
@@ -93,8 +93,11 @@ function MarketSelector({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [showClosed, setShowClosed] = useState(false);
+  const nowMs = useNow();
   const needle = query.trim().toUpperCase();
   const shown = needle ? markets.filter((m) => m.id.includes(needle)) : markets;
+  const closedCount = shown.filter((m) => !marketStatus(m, nowMs).open).length;
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger
@@ -128,12 +131,12 @@ function MarketSelector({
                 <tr className="h-8 border-b border-border">
                   <th scope="col" className="px-3 text-left font-normal">Market</th>
                   <th scope="col" className="px-3 text-right font-normal">Mark</th>
-                  <th scope="col" className="px-3 text-right font-normal">Max OI</th>
+                  <th scope="col" className="px-3 text-right font-normal">Effective cap</th>
                   <th scope="col" className="px-3 text-right font-normal">Max Leverage</th>
                 </tr>
               </thead>
               <tbody role="listbox" aria-label="Markets">
-                {shown.map((m) => (
+                {shown.filter((m) => showClosed || marketStatus(m, nowMs).open).map((m) => (
                   <tr
                     key={m.id}
                     role="option"
@@ -158,15 +161,21 @@ function MarketSelector({
                         {marketName(m.id)}
                         <Badge variant="success">{m.max_leverage}x</Badge>
                         {isMeasuring(m) ? <Badge variant="warning">Measuring</Badge> : null}
+                        {!marketStatus(m, nowMs).open ? <Badge variant="warning">Closed</Badge> : null}
                       </span>
                     </td>
                     <td className="px-3 text-right tabular-nums">{m.price > 0n ? formatPrice(m.price) : "—"}</td>
-                    <td className="px-3 text-right tabular-nums">{usd0(m.max_oi_per_side)}</td>
+                    <td className="px-3 text-right tabular-nums" title={marketLimitLabel(m)}>{usd0(m.effective_max_oi_per_side)}</td>
                     <td className="px-3 text-right tabular-nums">{m.max_leverage}×</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {closedCount > 0 ? (
+              <button type="button" aria-expanded={showClosed} onClick={() => setShowClosed((value) => !value)} className="w-full border-t border-border px-3 py-2 text-left text-label text-warning hover:bg-muted">
+                {showClosed ? "Hide" : "Show"} thin / closed markets ({closedCount})
+              </button>
+            ) : null}
             {shown.length === 0 ? <p className="px-3 py-4 text-ui text-muted-foreground">No market matches “{query.trim()}”.</p> : null}
             </div>
             <Link
@@ -196,7 +205,7 @@ export function MarketHeader({
   className?: string;
 }) {
   const nowMs = useNow();
-  const status = marketStatus(market, nowMs);
+  const status = marketDisplayStatus(market, nowMs);
   const fresh = isPriceFresh(market, nowMs);
   const measured = market.depth_measured_at_ms;
 
@@ -211,8 +220,9 @@ export function MarketHeader({
       <h1 className="sr-only">Trade {marketName(market.id)}</h1>
       <div className="flex items-center justify-between gap-3">
         <MarketSelector markets={markets} market={market} onSelect={onSelect} />
-        <span className="text-lg font-medium tabular-nums text-foreground md:hidden">
-          {market.price > 0n ? formatPrice(market.price) : "—"}
+        <span className="flex flex-col items-end gap-1 md:hidden">
+          <span className="text-lg font-medium tabular-nums text-foreground">{market.price > 0n ? formatPrice(market.price) : "—"}</span>
+          {!status.open ? <span title={status.label}><Badge variant="warning">{status.reason === "price" ? "Close-only" : status.reason === "stale" ? "Stale depth" : "Closed"}</Badge></span> : null}
         </span>
       </div>
 
@@ -231,8 +241,8 @@ export function MarketHeader({
             <Term
               hint={
                 market.price_timestamp_ms
-                  ? `Oracle price pushed onchain at ${formatUtc(market.price_timestamp_ms, true)}. Orders are refused when it is older than 2 minutes.`
-                  : "No oracle price yet."
+                  ? `Stored price at ${formatUtc(market.price_timestamp_ms, true)}. New entries fetch a fresh price and require it to be no older than 30 seconds.`
+                  : "No stored oracle price yet; an action requests a fresh price."
               }
             >
               Oracle
@@ -261,15 +271,15 @@ export function MarketHeader({
             <Term
               hint={
                 measured
-                  ? `Max open interest per side, set by live exit liquidity: NEAR Intents could sell ${usd0(market.exit_capacity)} of ${market.id} within 1% price impact at ${formatUtc(measured)}. Hard cap ${usd0(market.hard_cap)}.`
-                  : "Set by live exit liquidity once the first NEAR Intents measurement lands."
+                  ? `Effective open-interest cap per side: minimum of exit liquidity, protocol hard cap and available vault backing. Admitted exit ${formatExitCapacity(market)}${market.measured_cap_is_grid_max ? "; probe grid passed, but admission depth may be ramp-limited (see curve for largest size probed)" : ""} at ${formatUtc(measured)}. Hard cap ${usd0(market.hard_cap)}.`
+                  : "New positions wait for the first exit-liquidity measurement and available vault capital."
               }
             >
-              Max OI
+              Effective cap
             </Term>
           }
         >
-          <span data-testid="max-oi">{usd0(market.max_oi_per_side)}</span>
+          <span data-testid="max-oi" title={marketLimitLabel(market)}>{usd0(market.effective_max_oi_per_side)}</span>
         </Stat>
         <Stat
           label={
@@ -280,11 +290,11 @@ export function MarketHeader({
         >
           <span data-testid="max-leverage">{market.max_leverage}×</span>
         </Stat>
-        {status.open ? null : (
-          <Stat label="Status">
-            <Badge variant="warning">{status.label}</Badge>
-          </Stat>
-        )}
+        <Stat label={marketLimitLabel(market)}>
+          {status.open ? <Badge variant="success">Open</Badge> : (
+            <span title={status.label}><Badge variant="warning">{status.reason === "price" ? "Close-only" : status.reason === "stale" ? "Stale depth" : "Closed"}</Badge></span>
+          )}
+        </Stat>
       </dl>
     </section>
   );

@@ -4,14 +4,13 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, Star } from "lucide-react";
-import { useNow } from "@/components/landing/live-time";
 import { marketName } from "@/components/trade/market-header";
-import { isPriceFresh, marketStatus } from "@/lib/near/market-status";
+import { formatExitCapacity, isPriceFresh, marketDisplayStatus, marketLimitLabel } from "@/lib/near/market-status";
 import { OiBar } from "@/components/trade/oi-bar";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { formatFundingRate, formatPrice, usd0 } from "@/lib/near/format";
-import { isMeasuring, type Market, type VaultId } from "@/lib/near/types";
+import type { Market, VaultId } from "@/lib/near/types";
 import type { Change24h } from "@/lib/prices/market-stats";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +24,7 @@ export const VAULT_LABEL: Record<VaultId, string> = { core: "Core", "long-tail":
 
 /**
  * Rows in display order; markets without a value for the sort key always go last. Ties go to the
- * larger measured cap, so tradable markets come before ones still being measured.
+ * larger effective cap within each open/closed group.
  */
 export function sortMarkets(
   markets: readonly Market[],
@@ -50,9 +49,9 @@ export function sortMarkets(
     }
   };
   const tieBreak = (a: Market, b: Market) =>
-    a.max_oi_per_side === b.max_oi_per_side
+    a.effective_max_oi_per_side === b.effective_max_oi_per_side
       ? a.id.localeCompare(b.id)
-      : a.max_oi_per_side > b.max_oi_per_side
+      : a.effective_max_oi_per_side > b.effective_max_oi_per_side
         ? -1
         : 1;
   return [...markets].sort((a, b) => {
@@ -117,36 +116,26 @@ function ChangeCell({ change, loading }: { change: Change24h | null | undefined;
 }
 
 function StatusCell({ market, nowMs }: { market: Market; nowMs: number }) {
-  if (isMeasuring(market)) {
-    return (
-      <Term hint="Newly listed. It opens once the keeper has measured how much of it NEAR Intents can sell.">
-        <Badge variant="warning" data-testid={`market-status-${market.id}`}>
-          Measuring
-        </Badge>
-      </Term>
-    );
-  }
-  const status = marketStatus(market, nowMs);
+  const status = marketDisplayStatus(market, nowMs);
   if (status.open) {
-    return isPriceFresh(market, nowMs) ? (
-      <Badge variant="success" data-testid={`market-status-${market.id}`}>
-        Open
-      </Badge>
-    ) : (
-      <Term hint="The oracle price is older than 2 minutes; orders resume at the next keeper update.">
-        <Badge data-testid={`market-status-${market.id}`}>Waiting for price</Badge>
-      </Term>
-    );
+    return <Badge variant="success" data-testid={`market-status-${market.id}`}>Open</Badge>;
   }
+  const label = status.reason === "no-depth" ? "Measuring"
+    : status.reason === "thin" ? "Thin liquidity"
+      : status.reason === "price" ? "Price refresh needed"
+        : status.reason === "capital" ? "Vault-limited"
+          : "Stale depth";
   return (
-    <Term hint={`${status.label}: new positions are paused, open positions can still be closed.`}>
-      <Badge data-testid={`market-status-${market.id}`}>{status.reason === "thin" ? "Thin liquidity" : "Paused"}</Badge>
+    <Term hint={status.reason === "price" ? `${status.label}. The displayed mark is not current; entries request a fresh price. Closing supports the contract's conservative stale-price fallback.` : `${status.label}. New positions are unavailable. Existing positions can still be closed, subject to the contract's price and payout rules.`}>
+      <Badge variant={status.reason === "thin" ? "warning" : "default"} data-testid={`market-status-${market.id}`}>{label}</Badge>
     </Term>
   );
 }
 
 export function MarketsTable({
   markets,
+  nowMs,
+  tableTestId = "markets-table",
   sort,
   onSort,
   changes,
@@ -155,6 +144,8 @@ export function MarketsTable({
   onToggleFavorite,
 }: {
   markets: readonly Market[];
+  nowMs: number;
+  tableTestId?: string;
   sort: Sort;
   onSort: (key: SortKey) => void;
   changes: Record<string, Change24h | null> | undefined;
@@ -163,12 +154,11 @@ export function MarketsTable({
   onToggleFavorite: (id: string) => void;
 }) {
   const router = useRouter();
-  const nowMs = useNow();
   const header = { sort, onSort };
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
-      <table data-testid="markets-table" className="w-full min-w-232 text-ui tabular-nums">
+      <table data-testid={tableTestId} className="w-full min-w-232 text-ui tabular-nums">
         <thead className="sticky top-0 z-10 bg-card text-label text-tertiary">
           <tr className="border-b border-border">
             <SortHeader label="Coin" sortKey="coin" align="left" {...header} />
@@ -189,19 +179,19 @@ export function MarketsTable({
             />
             <SortHeader
               label={
-                <Term hint="Open interest (total size of open positions, longs + shorts) against the cap per side, set by exit liquidity measured on NEAR Intents.">
-                  Open Interest / Cap
+                <Term hint="Open interest is the total size of open positions, longs + shorts. The effective cap applies separately to each side and is the lowest of measured exit liquidity, the protocol limit and vault backing.">
+                  Open Interest / Effective Cap
                 </Term>
               }
               sortKey="oi"
               {...header}
             />
+            <th scope="col" className="h-8 px-3 text-right font-normal">
+              <Term hint="Depth admitted from the latest exit-liquidity measurement; increases may be ramp-limited. ≥ means the probe grid passed, not that this admitted value is the largest size probed.">Exit depth</Term>
+            </th>
             <SortHeader label="Max Leverage" sortKey="leverage" {...header} />
             <th scope="col" className="h-8 px-3 text-left font-normal">
               <Term hint="The LP vault that takes the other side of this market's traders.">Vault</Term>
-            </th>
-            <th scope="col" className="h-8 px-3 text-left font-normal">
-              Status
             </th>
           </tr>
         </thead>
@@ -232,14 +222,16 @@ export function MarketsTable({
                     >
                       <Star aria-hidden strokeWidth={1.5} className={cn("size-3.5", favorite && "fill-current")} />
                     </button>
-                    <Link
-                      href={href}
-                      onClick={(event) => event.stopPropagation()}
-                      className="rounded-sm font-medium whitespace-nowrap text-foreground outline-none focus-visible:outline-2 focus-visible:outline-ring"
-                    >
-                      {marketName(m.id)}
-                    </Link>
-                    <Badge variant="success">{m.max_leverage}x</Badge>
+                    <span className="flex flex-col items-start gap-1 py-2">
+                      <Link
+                        href={href}
+                        onClick={(event) => event.stopPropagation()}
+                        className="rounded-sm font-medium whitespace-nowrap text-foreground outline-none focus-visible:outline-2 focus-visible:outline-ring"
+                      >
+                        {marketName(m.id)}
+                      </Link>
+                      <StatusCell market={m} nowMs={nowMs} />
+                    </span>
                   </span>
                 </td>
                 <td className={cn("px-3 text-right", !isPriceFresh(m, nowMs) && "text-tertiary")}>
@@ -264,16 +256,19 @@ export function MarketsTable({
                   <span className="inline-flex flex-col items-end gap-1">
                     <span className="whitespace-nowrap">
                       {usd0(m.oi_long + m.oi_short)}
-                      <span className="text-tertiary"> / {usd0(m.max_oi_per_side)}</span>
+                      <span className="text-tertiary"> / {usd0(m.effective_max_oi_per_side)}</span>
                     </span>
-                    <OiBar used={maxSide} cap={m.max_oi_per_side} className="w-28" />
+                    <OiBar used={maxSide} cap={m.effective_max_oi_per_side} className="w-28" />
+                    <span className="text-label text-tertiary">{marketLimitLabel(m)}</span>
                   </span>
+                </td>
+                <td className="px-3 text-right">
+                  <Term hint={`Measured for ${m.id}: ${m.depth_measured_at_ms > 0 ? new Date(m.depth_measured_at_ms).toISOString() : "not measured yet"}.${m.measured_cap_is_grid_max ? " Probe grid passed; admission depth may be ramp-limited. See the curve for the largest size probed." : " Admission depth may be ramp-limited."}`}>
+                    {formatExitCapacity(m)}
+                  </Term>
                 </td>
                 <td className="px-3 text-right">{m.max_leverage}×</td>
                 <td className="px-3 text-muted-foreground">{VAULT_LABEL[m.vault_id]}</td>
-                <td className="px-3">
-                  <StatusCell market={m} nowMs={nowMs} />
-                </td>
               </tr>
             );
           })}

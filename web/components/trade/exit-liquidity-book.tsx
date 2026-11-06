@@ -10,6 +10,7 @@ import { formatSizeUsd } from "@/components/liquidity/format";
 import { useAllOpenPositions, useDepth, useLiquidations } from "@/hooks/use-ketos-queries";
 import { MAX_EXIT_IMPACT_BPS } from "@/lib/intents/depth";
 import { formatPrice, usd0 } from "@/lib/near/format";
+import { formatExitCapacity, marketLimitLabel } from "@/lib/near/market-status";
 import type { Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { OiBar } from "./oi-bar";
@@ -98,7 +99,7 @@ function ExitLadder({ market }: { market: Market }) {
               {i === capIndex ? (
                 <div role="row" data-testid="cap-line" className="flex h-7 items-center justify-between border-y border-border bg-muted px-3 text-foreground">
                   <span role="cell">{MAX_EXIT_IMPACT_BPS} bps cap</span>
-                  <span role="cell" className="tabular-nums">Exit capacity {usd0(market.exit_capacity)}</span>
+                  <span role="cell" className="tabular-nums" title={capIndex === record.samples.length - 1 ? "Largest size probed; actual exit capacity may be greater." : undefined}>Exit {formatExitCapacity(market, record)}</span>
                 </div>
               ) : null}
             </Fragment>
@@ -111,6 +112,10 @@ function ExitLadder({ market }: { market: Market }) {
         ) : null}
       </div>
       <div className="mt-auto flex flex-col gap-2 border-t border-border px-3 py-2.5">
+        <p className="text-label text-muted-foreground">
+          Effective cap {usd0(market.effective_max_oi_per_side)} · {marketLimitLabel(market)}
+        </p>
+        {capIndex === record.samples.length - 1 ? <p className="text-label text-tertiary">{formatExitCapacity(market, record)} (largest size probed)</p> : null}
         {(["long", "short"] as const).map((side) => {
           const used = side === "long" ? market.oi_long : market.oi_short;
           return (
@@ -118,10 +123,10 @@ function ExitLadder({ market }: { market: Market }) {
               <div className="flex justify-between text-label">
                 <span className={side === "long" ? "text-success" : "text-destructive"}>{side === "long" ? "Longs" : "Shorts"}</span>
                 <span className="tabular-nums text-muted-foreground">
-                  {usd0(used)} of {usd0(market.max_oi_per_side)}
+                  {usd0(used)} of {usd0(market.effective_max_oi_per_side)}
                 </span>
               </div>
-              <OiBar used={used} cap={market.max_oi_per_side} />
+              <OiBar used={used} cap={market.effective_max_oi_per_side} />
             </div>
           );
         })}
@@ -203,7 +208,7 @@ function TradesList({ market }: { market: Market }) {
         </div>
       )}
       <p className="border-t border-border px-3 py-2 text-label text-tertiary">
-        Positions still open and keeper liquidations, from the contract. Closed trades are not indexed onchain.
+        Current open positions and recent keeper liquidations. Your closed trades are in Trade History.
       </p>
     </div>
   );

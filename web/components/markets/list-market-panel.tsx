@@ -69,7 +69,7 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
       {
         pending: `Listing ${marketName(asset.symbol)}…`,
         success: `${marketName(asset.symbol)} listed · measuring`,
-        successDescription: () => "It opens once the keeper has measured its exit liquidity on NEAR Intents.",
+        successDescription: () => "It opens after at least $10,000 of measured exit liquidity, sufficient vault backing and a fresh execution price.",
       },
     );
     if (result) {
@@ -87,8 +87,8 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
       <PanelHeading id="list-market-title">List a market</PanelHeading>
       <div className="flex flex-col gap-4 p-3">
         <p className="text-ui text-muted-foreground">
-          Anyone can add a market for {fee} USDC. Its size cap comes from exit liquidity measured on
-          NEAR Intents, like every other market.
+          Anyone can add a market for {fee} USDC. Its effective size cap reflects exit liquidity measured on
+          NEAR Intents and available vault backing, like every other market.
         </p>
 
         {listable.isPending ? (
@@ -196,8 +196,8 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
               ) : null}
             </ul>
             <p className="text-label text-tertiary">
-              The keeper measures markets in rotation, eight per minute. A new market opens once NEAR Intents can absorb at
-              least $10,000 of it within 1% price impact.
+              A new market starts closed. It needs at least $10,000 of measured exit liquidity within 1% price
+              impact, sufficient vault backing and a fresh execution price before a position can open.
             </p>
           </div>
         ) : null}

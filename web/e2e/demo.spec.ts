@@ -122,12 +122,10 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await openApp(page, "Markets");
     await expect(page).toHaveURL(/\/markets$/);
     const table = page.getByTestId("markets-table");
-    for (const header of ["Price", "24h Change", "Open Interest / Cap", "Funding / h", "Max Leverage", "Vault"]) {
-      await expect(table.getByRole("columnheader", { name: header })).toBeVisible();
-    }
-    await expect(table.locator('[data-testid^="market-row-"]')).toHaveCount(16);
+    await expect(page.locator('[data-testid^="market-row-"]')).toHaveCount(16);
     await expectSinglePrimary(page, /^List /);
-    await expect(page.getByTestId("market-status-ETH")).toHaveText("Open", { timeout: KEEPER_WAIT });
+    await expect.poll(async () => (await getMarket("ETH")).is_open, { timeout: KEEPER_WAIT }).toBe(true);
+    await expect(page.getByTestId("market-status-ETH")).toHaveText(/^(Open|Price refresh needed)$/);
     await page.getByTestId("markets-search").fill("ETH");
     await expect(table.locator('[data-testid^="market-row-"]')).toHaveCount(1);
     const eth = page.getByTestId("market-row-ETH");
@@ -240,14 +238,18 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expectSinglePrimary(page, /^List /);
     await page.getByTestId("list-market-submit").click();
     await expectToast(page, /listed · measuring/);
+    const closed = page.getByTestId("markets-closed-group");
+    await expect(closed).toBeVisible();
+    if (await closed.getAttribute("open") === null) await closed.locator("summary").click();
     const status = page.getByTestId(`market-status-${symbol}`);
     await expect(status).toHaveText("Measuring");
-    await expect(page.getByTestId("markets-table").locator('[data-testid^="market-row-"]')).toHaveCount(17);
+    await expect(page.locator('[data-testid^="market-row-"]')).toHaveCount(17);
 
     // Unmeasured listings are sampled on the very next keeper pass.
-    await expect(status).toHaveText("Open", { timeout: KEEPER_WAIT });
+    await expect.poll(async () => (await getMarket(symbol)).is_open, { timeout: KEEPER_WAIT }).toBe(true);
+    await expect(status).toHaveText(/^(Open|Price refresh needed)$/);
     const listed = await getMarket(symbol);
-    expect(BigInt(listed.max_oi_per_side)).toBeGreaterThan(0n);
+    expect(BigInt(listed.effective_max_oi_per_side)).toBeGreaterThan(0n);
     expect(listed.max_leverage).toBeLessThanOrEqual(5);
   });
 

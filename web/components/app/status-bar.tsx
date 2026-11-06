@@ -1,28 +1,26 @@
 "use client";
 
-import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
+import { formatAge, formatUtc, STALE_AFTER_MS, useNow } from "@/components/landing/live-time";
 import { useKeeperTick, type KeeperStatus } from "@/hooks/use-keeper-tick";
 import { useMarkets } from "@/hooks/use-ketos-queries";
 import { cn } from "@/lib/utils";
 
-function keeperText(status: KeeperStatus, nowMs: number): string {
+function keeperText(status: KeeperStatus): string {
   switch (status.state) {
     case "ran":
-      return `Keeper ran ${formatAge(status.atMs, nowMs) || `at ${formatUtc(status.atMs, true)}`}${
-        status.liquidated > 0 ? ` · liquidated ${status.liquidated}` : ""
-      }`;
+      return `Last keeper pass ${formatUtc(status.atMs)}${status.liquidated > 0 ? ` · liquidated ${status.liquidated}` : ""}`;
     case "running":
-      return "Keeper checking every open position…";
+      return `Keeper checking positions…${status.lastPassMs ? ` · last pass ${formatUtc(status.lastPassMs)}` : ""}`;
     case "unavailable":
       return `Keeper unavailable: ${status.reason}`;
     default:
-      return "Keeper runs once a minute while the app is open";
+      return status.lastPassMs ? `Last keeper pass ${formatUtc(status.lastPassMs)}` : "Last keeper pass unavailable · scheduled checks + browser fallback";
   }
 }
 
 /**
  * Thin bar pinned to the bottom of every app page: RPC health, the keeper pass this page asks for
- * once a minute, and the age of the newest exit-liquidity measurement.
+ * while visible, and the explicitly scoped newest exit-liquidity measurement.
  */
 export function StatusBar() {
   const markets = useMarkets();
@@ -54,11 +52,11 @@ export function StatusBar() {
         {markets.isPending ? "Connecting" : online ? "Online" : "Offline"}
       </span>
       <span data-testid="keeper-status" className={cn("truncate", keeper.state === "unavailable" && "text-warning")}>
-        {keeperText(keeper, nowMs)}
+        {keeperText(keeper)}
       </span>
       {measured > 0 ? (
-        <span className="hidden truncate sm:inline">
-          Exit liquidity measured {formatUtc(measured)}{nowMs ? ` · ${formatAge(measured, nowMs)}` : ""}
+        <span className={cn("hidden truncate sm:inline", nowMs > 0 && nowMs - measured > STALE_AFTER_MS && "text-warning")}>
+          Exit liquidity: latest of {markets.data?.length ?? 0} markets · {formatUtc(measured)}{nowMs ? ` · ${formatAge(measured, nowMs)}` : ""}
         </span>
       ) : null}
     </footer>

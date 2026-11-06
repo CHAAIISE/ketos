@@ -32,6 +32,7 @@ beforeEach(() => {
   chain.markets.mockResolvedValue([{
     id: "NEAR", oi_long: 12n, oi_short: 8n, depth_measured_at_ms: NOW,
     exit_capacity: 10_000_000_000n, is_open: true, price: 1n, price_timestamp_ms: NOW,
+    close_only: false,
   }]);
   chain.vaults.mockResolvedValue([{ id: "core", nav: 50n }, { id: "long-tail", nav: 30n }]);
   chain.leaderboard.mockResolvedValue([{ account_id: "alice.near" }]);

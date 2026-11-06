@@ -17,10 +17,10 @@ export function Hero() {
               Perps on NEAR, sized by real liquidity.
             </h1>
             <p className="max-w-md text-body text-muted-foreground">
-              Every market&apos;s size limit comes from what can actually be sold on{" "}
-              <span className="text-foreground">NEAR Intents</span> right now. Traders take leverage against an LP
-              vault, and no market grows past the size that exits{" "}
-              <span className="text-foreground">within 1% price impact</span>.
+              Traders take leverage against an LP vault. New positions are limited by the latest{" "}
+              <span className="text-foreground">NEAR Intents</span> quotes within{" "}
+              <span className="text-foreground">1% price impact</span>, vault capital and protocol caps.
+              Old measurements pause entries; trading actions fetch a fresh price when needed.
             </p>
           </div>
           <Link href="/trade" data-primary className={buttonVariants({ size: "pill", className: "mt-4" })}>

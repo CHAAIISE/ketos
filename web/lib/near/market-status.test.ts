@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_DEPTH_AGE_MS } from "../intents/depth";
-import { isPriceFresh, marketStatus } from "./market-status";
+import { isPriceFresh, marketDisplayStatus, marketStatus } from "./market-status";
 import { MAX_PRICE_AGE_MS, type Market } from "./types";
 
 const NOW = 1_800_000_000_000;
@@ -10,6 +10,7 @@ const market = {
   depth_measured_at_ms: NOW,
   exit_capacity: 10_000_000_000n,
   is_open: true,
+  close_only: false,
 } as Market;
 
 describe("snapshot freshness", () => {
@@ -34,5 +35,14 @@ describe("snapshot freshness", () => {
     expect(marketStatus({ ...market, depth_measured_at_ms: NOW + 1 }, NOW).open).toBe(false);
     expect(marketStatus({ ...market, depth_measured_at_ms: 0 }, NOW).open).toBe(false);
     expect(marketStatus({ ...market, is_open: false }, NOW).open).toBe(false);
+  });
+
+  it("requires a 30-second entry mark for the display count without blocking an action-scoped refresh", () => {
+    expect(marketDisplayStatus({ ...market, price_timestamp_ms: NOW - 30_000 }, NOW).open).toBe(true);
+    const cold = { ...market, price_timestamp_ms: NOW - 30_001 };
+    expect(marketDisplayStatus(cold, NOW).open).toBe(false);
+    expect(marketStatus(cold, NOW).open).toBe(true);
+    expect(marketDisplayStatus({ ...market, close_only: true }, NOW).open).toBe(false);
+    expect(marketDisplayStatus({ ...market, is_open: false }, NOW).open).toBe(false);
   });
 });

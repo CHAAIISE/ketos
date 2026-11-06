@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MAX_EXIT_IMPACT_BPS } from "@/lib/intents/depth";
+import { exitCapacityUsd, MAX_EXIT_IMPACT_BPS } from "@/lib/intents/depth";
 import type { DepthRecord } from "@/lib/near/types";
 import { formatSizeUsd } from "./format";
 
@@ -35,7 +35,8 @@ export function ImpactChart({ record }: { record: DepthRecord }) {
   const compact = width < 520;
 
   const points = samples.filter((s) => s.impact_bps !== null).map((s) => `${x(s.size_usd)},${y(s.impact_bps as number)}`);
-  const capacity = record.exit_capacity_usd;
+  const capacity = exitCapacityUsd(samples);
+  const gridMax = capacity > 0 && capacity === maxSize;
 
   return (
     <div ref={ref} className="w-full" style={{ height: HEIGHT }}>
@@ -44,7 +45,7 @@ export function ImpactChart({ record }: { record: DepthRecord }) {
           width={width}
           height={HEIGHT}
           role="img"
-          aria-label={`Price impact by sell size; exit capacity ${formatSizeUsd(capacity)}`}
+          aria-label={`Price impact by sell size; measured exit ${gridMax ? "at least " : ""}${formatSizeUsd(capacity)}${gridMax ? ", largest size probed" : ""}; admission depth ${formatSizeUsd(record.exit_capacity_usd)}`}
           className="text-label"
         >
           {yTicks.map((tick) => (
@@ -99,7 +100,7 @@ export function ImpactChart({ record }: { record: DepthRecord }) {
                 textAnchor={x(capacity) > PAD.left + innerW * 0.5 ? "end" : "start"}
                 className="fill-foreground"
               >
-                Exit capacity {formatSizeUsd(capacity)}
+                Exit {gridMax ? "≥ " : ""}{formatSizeUsd(capacity)}
               </text>
             </g>
           ) : null}

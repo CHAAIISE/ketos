@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Search } from "lucide-react";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { formatUtc, useNow } from "@/components/landing/live-time";
-import { marketStatus } from "@/lib/near/market-status";
+import { marketDisplayStatus, marketStatus } from "@/lib/near/market-status";
 import { HeaderStat, ReadAt } from "@/components/vault/vault-summary";
 import { Term } from "@/components/vault/term";
 import { Input } from "@/components/ui/input";
@@ -48,9 +48,10 @@ export function MarketsScreen() {
     sort,
     stats.data?.changes,
   );
-  const openCount = all.filter((m) => marketStatus(m, nowMs).open).length;
+  const openCount = all.filter((m) => marketDisplayStatus(m, nowMs).open).length;
+  const openRows = rows.filter((m) => marketStatus(m, nowMs).open);
+  const closedRows = rows.filter((m) => !marketStatus(m, nowMs).open);
   const totalOi = all.reduce((sum, m) => sum + m.oi_long + m.oi_short, 0n);
-  const totalCapacity = all.reduce((sum, m) => sum + m.exit_capacity, 0n);
 
   const onSort = (key: SortKey) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "coin" ? "asc" : "desc" }));
@@ -62,7 +63,7 @@ export function MarketsScreen() {
           <div className="flex min-w-0 flex-col gap-1">
             <h1 className="text-heading text-foreground">Markets</h1>
             <p className="text-ui text-muted-foreground">
-              Every market&apos;s size cap comes from exit liquidity measured on NEAR Intents. Pick one to trade.
+              Market limits reflect measured exit liquidity and vault capital. Pick one to inspect or trade.
             </p>
           </div>
           <ReadAt at={markets.dataUpdatedAt} failing={markets.isError} />
@@ -75,15 +76,6 @@ export function MarketsScreen() {
             </HeaderStat>
             <HeaderStat label={<Term hint="Total size of open positions on every market, longs and shorts.">Open Interest</Term>}>
               {usd0(totalOi)}
-            </HeaderStat>
-            <HeaderStat
-              label={
-                <Term hint="Sum over markets of the largest sale NEAR Intents could absorb within 1% price impact, at the last measurement.">
-                  Measured exit capacity
-                </Term>
-              }
-            >
-              {usd0(totalCapacity)}
             </HeaderStat>
           </dl>
         ) : (
@@ -128,15 +120,45 @@ export function MarketsScreen() {
                   : `No market matches “${query.trim()}”.`}
               </EmptyState>
             ) : (
-              <MarketsTable
-                markets={rows}
-                sort={sort}
-                onSort={onSort}
-                changes={stats.data?.changes}
-                changesLoading={stats.isPending}
-                favorites={favorites}
-                onToggleFavorite={toggle}
-              />
+              <>
+                {openRows.length ? (
+                  <MarketsTable
+                    markets={openRows}
+                    nowMs={nowMs}
+                    sort={sort}
+                    onSort={onSort}
+                    changes={stats.data?.changes}
+                    changesLoading={stats.isPending}
+                    favorites={favorites}
+                    onToggleFavorite={toggle}
+                  />
+                ) : (
+                  <p role="status" className="p-3 text-ui text-muted-foreground">
+                    No markets accepting new positions match this view. Browse the thin and closed markets below to inspect measurements and limits.
+                  </p>
+                )}
+                {closedRows.length ? (
+                  <details className="border-t border-border" data-testid="markets-closed-group">
+                    <summary className="cursor-pointer px-3 py-3 text-ui text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
+                      Thin &amp; closed markets · {closedRows.length}
+                    </summary>
+                    <p className="px-3 pb-3 text-label text-tertiary">
+                      Depth or vault-backing requirements currently prevent new positions. Market details remain accessible.
+                    </p>
+                    <MarketsTable
+                      markets={closedRows}
+                      nowMs={nowMs}
+                      tableTestId="markets-closed-table"
+                      sort={sort}
+                      onSort={onSort}
+                      changes={stats.data?.changes}
+                      changesLoading={stats.isPending}
+                      favorites={favorites}
+                      onToggleFavorite={toggle}
+                    />
+                  </details>
+                ) : null}
+              </>
             )}
           </div>
           <p className="border-t border-border px-3 py-2 text-label text-tertiary">

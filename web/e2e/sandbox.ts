@@ -77,6 +77,8 @@ export interface MarketView {
   id: string;
   max_leverage: number;
   max_oi_per_side: string;
+  effective_max_oi_per_side: string;
+  is_open: boolean;
   oi_long: string;
   oi_short: string;
 }

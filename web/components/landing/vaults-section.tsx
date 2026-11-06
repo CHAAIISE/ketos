@@ -47,7 +47,7 @@ function VaultRow({ vault, markets }: { vault: Vault; markets: Market[] | undefi
         <Stat label="Share price">{formatUsd(vault.share_price, { maxFractionDigits: 4 })}</Stat>
         <Stat label="Fee APR, 7 days">{formatBps(vault.fee_apr_bps)}</Stat>
         <Stat
-          label="Booked result, all-time"
+          label="Realized PnL, all-time"
           className={pnl > 0n ? "text-success" : pnl < 0n ? "text-destructive" : undefined}
         >
           {formatUsd(pnl, { signed: true, maxFractionDigits: 0 })}
@@ -79,7 +79,7 @@ function Body() {
         className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4 text-sm md:flex-row md:items-center md:justify-between"
       >
         <span className="text-foreground">
-          Vaults unavailable. <span className="text-muted-foreground">The {networkName()} RPC did not answer get_vaults.</span>
+          Vaults unavailable. <span className="text-muted-foreground">The {networkName()} vault balances could not be loaded.</span>
         </span>
         <Button variant="outline" size="sm" onClick={() => void vaults.refetch()}>
           <RotateCw />

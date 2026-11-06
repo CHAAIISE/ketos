@@ -4,6 +4,7 @@ import { formatUsd, usdcToNumber } from "@/lib/near/format";
 import type { Revenue } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { PanelHeading } from "./panel-heading";
+import { Term } from "./term";
 import {
   formatHistoryTime,
   REVENUE_KEYS,
@@ -74,7 +75,7 @@ export function RevenueChart({
           </span>
           {observed && !booked ? (
             <span className="pointer-events-none absolute inset-x-0 top-1/2 mt-2 text-center text-label text-tertiary">
-              No revenue booked in this window yet
+              No realized revenue in this window yet
             </span>
           ) : null}
           {buckets.map((bucket) => (
@@ -122,7 +123,7 @@ export function RevenueChart({
         </div>
         <p className="mt-3 text-label text-tertiary">
           {observed
-            ? "Changes in cumulative onchain revenue, booked in the hour or UTC day of the later observation. Gaps are not backfilled; an interval can span missed hours."
+            ? "Changes in cumulative onchain revenue, recorded in the hour or UTC day of the later observation. Gaps are not backfilled; an interval can span missed hours."
             : "Not enough observations to measure revenue changes in this window. All-time totals remain available below."}
         </p>
       </div>
@@ -168,7 +169,7 @@ export function RevenueChart({
         <tfoot className="border-t border-border font-medium">
           <tr className="h-9">
             <th scope="row" className="px-3 text-left">
-              Net result
+              <Term hint="Realized profit or loss after fees, settled funding and the vault's gains or losses against traders. Excludes deposits, withdrawals and unrealized results.">Realized PnL</Term>
             </th>
             <td className="px-3 text-right">
               {observed ? formatUsd(totalRevenue(sums), { signed: true }) : "—"}
@@ -181,9 +182,9 @@ export function RevenueChart({
       </table>
       <p className="p-3 text-label text-tertiary">
         Counterparty PnL is signed from the vault&apos;s side: trader gains are
-        vault losses. These booked amounts exclude LP deposits, withdrawals and
-        unrealized PnL. Cross settlements can include receivables, not only
-        collected cash.
+        vault losses. These realized amounts exclude LP deposits, withdrawals and
+        unrealized PnL. Cross-margin settlements can include money still owed
+        to the vault, not only collected cash.
       </p>
     </section>
   );

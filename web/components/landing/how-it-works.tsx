@@ -21,7 +21,7 @@ const dash = "border-dashed border-accent";
 
 function Diagram() {
   const intents = <Block title="NEAR Intents" detail="1Click dry quotes, mainnet" />;
-  const depth = <Block title="Depth" detail="set_depth · 48 samples per asset" />;
+  const depth = <Block title="Liquidity measurement" detail="7 sizes, $1k–$1M · deeper probes to $5M" />;
   const ketos = <Block title="Perps contract" detail="markets · margin · orders · vaults" />;
   const traders = <Block title="Traders" detail="long / short, isolated or cross" />;
   const vault = <Block title="Vaults" detail="Core and Long-tail, counterparty" />;
@@ -95,8 +95,9 @@ const steps = [
     title: "Measure",
     body: (
       <>
-        A keeper asks NEAR Intents 1Click for dry quotes to sell <span className="text-foreground">$1k to $1M</span>{" "}
-        of every listed token into USDC, and writes the price impact of each size to the contract.
+        A keeper asks NEAR Intents 1Click for seven dry sell quotes from <span className="text-foreground">$1k to $1M</span>{" "}
+        into USDC. If that grid passes, it also probes $2.5M and $5M. These nonbinding quotes are measured off chain
+        and reported to the contract; upkeep depends on a running keeper.
       </>
     ),
   },
@@ -105,9 +106,10 @@ const steps = [
     title: "Cap",
     body: (
       <>
-        Exit capacity is the largest size that moves the price <span className="text-foreground">1% or less</span>.
-        Open interest (total size of open positions) per side is capped at it, and max leverage steps from 2× to
-        20× with depth. A sample older than 30 minutes pauses new positions.
+        The first missing quote or impact above <span className="text-foreground">1%</span> ends the measured range.
+        The admission limit falls immediately but rises by at most 2× per update. The cap per side also respects
+        vault capital and the market&apos;s hard cap. Depth older than 30 minutes pauses entries; leverage rises
+        at most one tier per hour, up to 20× for Core and 5× for Long-tail.
       </>
     ),
   },
@@ -116,10 +118,10 @@ const steps = [
     title: "Trade",
     body: (
       <>
-        Traders go long or short against an LP vault at OutLayer oracle prices, with market, limit, stop, take
-        profit and stop loss orders. Anything above the cap is{" "}
-        <span className="text-foreground">refused on chain</span>, triggered orders included, so a vault never
-        takes on more than the measured exit.
+        Traders go long or short against an LP vault using oracle prices, with market, limit, stop, take
+        profit and stop loss orders. Actions fetch a fresh price when needed. Entries above the effective cap are{" "}
+        <span className="text-foreground">refused on chain</span>, triggered entries included.
+        Positions opened before a cap falls keep their size; limits do not guarantee vault solvency or fills.
       </>
     ),
   },

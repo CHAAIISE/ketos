@@ -68,7 +68,7 @@ export function VaultHeader({ query, vaultId }: { query: UseQueryResult<Vault>; 
         <dl className="flex flex-wrap gap-x-10 gap-y-4">
           <HeaderStat
             label={
-              <Term hint="Net asset value: accounting assets minus traders' unrealized PnL, plus borrow fees and net funding due. Cross receivables are included but cannot fund withdrawals.">
+              <Term hint="Total value locked (TVL), shown as net asset value (NAV): the vault's accounting assets minus traders' unrealized profit or loss, plus fees and funding owed. Includes money owed by cross-margin accounts, which is not withdrawable cash.">
                 TVL
               </Term>
             }
@@ -88,7 +88,7 @@ export function VaultHeader({ query, vaultId }: { query: UseQueryResult<Vault>; 
             <YourDeposit vaultId={vaultId} />
           </HeaderStat>
           <HeaderStat
-            label={<Term hint="NAV divided by the number of vault shares. It rises with fees and trader losses.">Share Price</Term>}
+            label={<Term hint="Net asset value (NAV) divided by the number of vault shares. It rises with fees and trader losses.">Share Price</Term>}
           >
             {formatUsd(vault.share_price, { maxFractionDigits: 4 })}
           </HeaderStat>
@@ -183,8 +183,8 @@ export function PerformanceStats({ query, className }: { query: UseQueryResult<V
           value={formatUsd(vault.borrow_fees_due)}
         />
         <Stat label="Fees, last 7 days" value={formatUsd(vault.fees_7d)} />
-        <Stat label="Net funding due" value={formatUsd(vault.funding_net_due, { signed: true })} />
-        <Stat label="Cross receivables" value={formatUsd(vault.cross_receivable)} />
+        <Stat label={<Term hint="Unsettled funding attributable to the vault. Positive means the vault is owed money; negative means it owes traders. Funding is the periodic payment between long and short positions.">Net funding due</Term>} value={formatUsd(vault.funding_net_due, { signed: true })} />
+        <Stat label={<Term hint="Money owed to this vault by cross-margin accounts whose cash balance is negative. Included in accounting assets, but fully reserved and unavailable for withdrawals until repaid.">Cross receivables</Term>} value={formatUsd(vault.cross_receivable)} />
         <Stat label="Total shares" value={formatShares(vault.total_shares)} />
       </dl>
     </div>

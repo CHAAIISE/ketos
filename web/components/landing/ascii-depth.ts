@@ -2,7 +2,7 @@ import type { DepthSample } from "@/lib/near/types";
 
 /** The x axis covers the sell sizes the keeper quotes, log-spaced. */
 export const AXIS_MIN_USD = 1_000;
-export const AXIS_MAX_USD = 1_000_000;
+export const AXIS_MAX_USD = 5_000_000;
 /** Exit capacity is the largest size whose impact stays at or under this. */
 export const IMPACT_CAP_BPS = 100;
 
@@ -148,7 +148,7 @@ function annotationRows(annotations: readonly AsciiAnnotation[], cols: number): 
 
 function axisRow(cols: number): Row {
   const row = blankRow(LABEL_WIDTH + cols);
-  const ticks = [1_000, 10_000, 100_000, 1_000_000];
+  const ticks = [1_000, 10_000, 100_000, 1_000_000, 5_000_000];
   ticks.forEach((size, index) => {
     const label = compactUsd(size);
     const col = LABEL_WIDTH + sizeColumn(size, cols);

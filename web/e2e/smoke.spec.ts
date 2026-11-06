@@ -5,7 +5,10 @@ import { expect, test } from "@playwright/test";
 test.describe("deployment", { tag: "@smoke" }, () => {
   test.beforeEach(async ({ page }) => {
     // App pages normally request maintenance; a deployment smoke must never send transactions.
-    await page.route("**/api/keeper/tick", (route) => route.abort("blockedbyclient"));
+    await page.route("**/api/keeper/tick", (route) => route.fulfill({
+      status: 200, contentType: "application/json", headers: { "Retry-After": "60" },
+      body: JSON.stringify({ ok: true, state: "throttled" }),
+    }));
   });
 
   test("landing explains the product and leads into the app", async ({ page }) => {
@@ -18,7 +21,9 @@ test.describe("deployment", { tag: "@smoke" }, () => {
 
   test("markets lists the whole registry with live caps", async ({ page }) => {
     await page.goto("/markets");
-    const rows = page.getByTestId("markets-table").locator('[data-testid^="market-row-"]');
+    const closed = page.getByTestId("markets-closed-group");
+    if (await closed.count()) await closed.locator("summary").click();
+    const rows = page.locator('[data-testid^="market-row-"]');
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeGreaterThanOrEqual(7);
     await expect(page.getByTestId("market-row-BTC")).toContainText(/\$[\d,.]+/);
@@ -30,6 +35,8 @@ test.describe("deployment", { tag: "@smoke" }, () => {
     await expect(page.getByTestId("mark-price")).toHaveText(/\$\d/);
     await expect(page.getByTestId("max-oi")).toHaveText(/^\$[\d,]+$/);
     await page.getByTestId("market-selector").click();
+    const showClosed = page.getByRole("button", { name: /Show thin \/ closed markets/ });
+    if (await showClosed.isVisible()) await showClosed.click();
     for (const id of ["BTC", "ETH", "NEAR", "ZEC", "SOL"]) {
       await expect(page.getByTestId(`market-tab-${id}`)).toBeVisible();
     }

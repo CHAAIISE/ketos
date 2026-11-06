@@ -6,6 +6,7 @@ import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { formatAge, formatUtc } from "@/components/landing/live-time";
 import { PanelHeading } from "@/components/vault/panel-heading";
 import { useNear } from "@/hooks/near-provider";
+import { formatExitCapacity, marketLimitLabel } from "@/lib/near/market-status";
 import { formatPrice, formatUsd } from "@/lib/near/format";
 import type { CrossAccount, Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -48,7 +49,7 @@ export function StressPanel({ markets, selected, onSelect, shock, onShock, now }
   const shockedPrice = selectedMarket ? selectedMarket.price * BigInt(100 - shock) / 100n : 0n;
 
   return (
-    <section aria-labelledby="stress-title" className="order-1 min-w-0 rounded-md border border-border bg-card md:order-2">
+    <section aria-labelledby="stress-title" className="order-2 min-w-0 rounded-md border border-border bg-card">
       <PanelHeading id="stress-title" aside={<span className="text-label text-tertiary">Read-only scenario</span>}>Stress test</PanelHeading>
       <div className="grid gap-4 p-3 md:grid-cols-2">
         <div className="flex flex-col gap-2">
@@ -71,13 +72,15 @@ export function StressPanel({ markets, selected, onSelect, shock, onShock, now }
         <>
           <dl className="grid grid-cols-2 border-y border-border text-ui lg:grid-cols-4">
             <Metric label="Liquidatable notional" value={formatUsd(result.liquidatableNotional)} testId="stress-notional" />
-            <Metric label="Measured exit capacity" value={result.capacity === null ? "Unavailable" : formatUsd(result.capacity)} />
+            <Metric label={`${selected} · admission depth`} value={result.capacity === null || !selectedMarket ? "Unavailable" : formatExitCapacity(selectedMarket)} />
             <Metric label="Core bad debt · est." value={formatUsd(result.badDebtByVault.core)} danger={result.badDebtByVault.core > 0n} testId="stress-debt-core" />
             <Metric label="Long-tail bad debt · est." value={formatUsd(result.badDebtByVault["long-tail"])} danger={result.badDebtByVault["long-tail"] > 0n} testId="stress-debt-long-tail" />
           </dl>
           <div className="flex flex-col gap-1 px-3 py-2 text-label text-tertiary">
-            <p>Capacity is the last measured limit, not a forecast after the shock. Bad debt = uncovered trader equity, not total vault loss.</p>
+            <p>{selectedMarket ? `${selected} effective cap per side: ${formatUsd(selectedMarket.effective_max_oi_per_side)} · ${marketLimitLabel(selectedMarket)}. ` : ""}Admission depth is the last recorded limit and may be ramp-limited, not a forecast after the shock. Bad debt = uncovered trader equity, not total vault loss.</p>
+            {selectedMarket?.measured_cap_is_grid_max ? <p>Probe grid passed; admission depth may be ramp-limited. See the curve for the largest size probed.</p> : null}
             <p>Accrued fees and funding frozen at the read. Orders, TP/SL and future liquidity changes excluded; liquidation ordering and cross-account cash affect the estimate.</p>
+            {selectedMarket ? <p>{selected} depth: {selectedMarket.depth_measured_at_ms > 0 ? `${formatUtc(selectedMarket.depth_measured_at_ms, true)} · ${formatAge(selectedMarket.depth_measured_at_ms, now)}` : "not measured yet"}. {selected} displayed price: {selectedMarket.price_timestamp_ms > 0 ? `${formatUtc(selectedMarket.price_timestamp_ms, true)} · ${formatAge(selectedMarket.price_timestamp_ms, now)}` : "unavailable"}.</p> : null}
             {result.warnings.map((warning) => <p key={warning} role="status" className="text-warning">{warning}</p>)}
           </div>
           {result.rows.length ? (

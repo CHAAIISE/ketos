@@ -113,13 +113,13 @@ export function VaultList() {
           <ReadAt at={vaults.dataUpdatedAt} failing={vaults.isError} />
         </div>
         <dl className="flex flex-wrap gap-x-10 gap-y-4">
-          <HeaderStat label="Total value locked">
+          <HeaderStat label={<Term hint="Total value locked (TVL), shown as the sum of each vault's net asset value (NAV). Includes unsettled profit or loss, fees, funding and money owed by cross-margin accounts; not all of it is withdrawable cash.">Total value locked</Term>}>
             {totalNav === undefined ? "—" : formatUsd(totalNav)}
           </HeaderStat>
           <HeaderStat
             label={
-              <Term hint="Sum of booked trading and borrow fees, funding, counterparty PnL, liquidation penalties and listing fees. Excludes deposits, withdrawals and unrealized PnL.">
-                All-time PnL
+              <Term hint="Realized profit or loss: trading and borrow fees, funding, the vault's gains or losses against traders, liquidation penalties and listing fees. Excludes deposits, withdrawals and unrealized PnL.">
+                Realized PnL · all-time
               </Term>
             }
           >
@@ -163,7 +163,7 @@ export function VaultList() {
                     "Vault",
                     "TVL",
                     "Fee APR · 7D",
-                    "All-time PnL",
+                    "Realized PnL · all-time",
                     "Your shares / value",
                     "Markets",
                   ].map((label, i) => (
@@ -175,7 +175,7 @@ export function VaultList() {
                         i === 0 || i === 5 ? "text-left" : "text-right",
                       )}
                     >
-                      {label}
+                      {label === "TVL" ? <Term hint="Total value locked, valued using net asset value (NAV): assets after trader profit or loss, fees and funding. Not the same as withdrawable cash.">{label}</Term> : label === "Fee APR · 7D" ? <Term hint="Annual percentage rate: fees from the last 7 UTC days, annualized over the vault's current net asset value. Not a promised return.">{label}</Term> : label}
                     </th>
                   ))}
                 </tr>

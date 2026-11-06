@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { nearConfig } from "./near/config";
-import { isPriceFresh, marketStatus } from "./near/market-status";
+import { marketDisplayStatus } from "./near/market-status";
 import { historyKindSchema, VAULT_IDS } from "./near/types";
 import { ACCOUNT_HISTORY_LEN, KetosViews, LEADERBOARD_MAX } from "./near/views";
 import { windowVolume } from "./near/volume";
@@ -19,6 +19,7 @@ const marketsSchema = z.array(z.object({
   is_open: z.boolean(),
   price: amount,
   price_timestamp_ms: timestamp,
+  close_only: z.boolean(),
 }));
 const vaultsSchema = z.array(z.object({ id: z.enum(VAULT_IDS), nav: amount }));
 const cohortSchema = z.array(z.object({ account_id: z.string().min(2) })).max(LEADERBOARD_MAX);
@@ -99,8 +100,7 @@ export async function collectStats(views: StatsViews, now: () => number = Date.n
     totalOi: markets.reduce((sum, market) => sum + market.oi_long + market.oi_short, 0n).toString(),
     vaultTvl: vaults.reduce((sum, vault) => sum + vault.nav, 0n).toString(),
     marketsCount: markets.length,
-    openMarketsCount: markets.filter((market) => marketStatus(market, fetchedAtMs).open
-      && isPriceFresh(market, fetchedAtMs)).length,
+    openMarketsCount: markets.filter((market) => marketDisplayStatus(market, fetchedAtMs).open).length,
     fetchedAtMs,
     coverage: {
       complete: !accountLimitReached && !historyWindowIncomplete,

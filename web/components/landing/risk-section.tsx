@@ -7,40 +7,37 @@ import { Container, Eyebrow } from "@/components/ui/page-shell";
 import { useMarkets } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
 import { formatUsd } from "@/lib/near/format";
-import { isMeasuring, type Market } from "@/lib/near/types";
+import { formatExitCapacity, marketDisplayStatus, marketLimitLabel } from "@/lib/near/market-status";
+import type { Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
-import { STALE_AFTER_MS, useNow } from "./live-time";
+import { useNow } from "./live-time";
 
-/** Larger side of open interest over measured exit capacity, in bps; null when nothing is measured. */
+/** Largest open-interest side over the effective admission cap. */
 function utilizationBps(market: Market): bigint | null {
-  if (market.exit_capacity === 0n) return null;
+  if (market.effective_max_oi_per_side === 0n) return null;
   const exposure = market.oi_long > market.oi_short ? market.oi_long : market.oi_short;
-  return (exposure * 10_000n) / market.exit_capacity;
+  return (exposure * 10_000n) / market.effective_max_oi_per_side;
 }
 
 function Tile({ market, nowMs }: { market: Market; nowMs: number }) {
   const bps = utilizationBps(market);
-  const stale = !isMeasuring(market) && nowMs > 0 && nowMs - market.depth_measured_at_ms > STALE_AFTER_MS;
-  const label = isMeasuring(market)
-    ? "Measuring"
-    : stale
-      ? "Stale sample"
-      : bps === null
-        ? "No capacity"
-        : `${bps / 100n}.${(bps % 100n).toString().padStart(2, "0")}%`;
-  const tone = isMeasuring(market)
-    ? "border-border bg-muted text-muted-foreground"
-    : stale || bps === null
-      ? "border-warning/50 bg-warning/10 text-warning"
-      : bps >= 10_000n
-        ? "border-destructive/50 bg-destructive/10 text-destructive"
-        : bps >= 5_000n
-          ? "border-warning/50 bg-warning/10 text-warning"
-          : "border-success/50 bg-success/10 text-success";
+  const status = marketDisplayStatus(market, nowMs);
+  const label = !status.open
+    ? status.label
+    : bps === null
+      ? "No capacity"
+      : `${bps / 100n}.${(bps % 100n).toString().padStart(2, "0")}%`;
+  const tone = !status.open || bps === null
+    ? "border-warning/50 bg-warning/10 text-warning"
+    : bps >= 10_000n
+      ? "border-destructive/50 bg-destructive/10 text-destructive"
+      : bps >= 5_000n
+        ? "border-warning/50 bg-warning/10 text-warning"
+        : "border-success/50 bg-success/10 text-success";
   return (
     <li
       data-testid={`landing-risk-${market.id}`}
-      title={`${market.id}: open interest ${formatUsd(market.oi_long + market.oi_short, { maxFractionDigits: 0 })}, exit capacity ${formatUsd(market.exit_capacity, { maxFractionDigits: 0 })}`}
+      title={`${market.id}: largest OI side ${formatUsd(market.oi_long > market.oi_short ? market.oi_long : market.oi_short, { maxFractionDigits: 0 })}, effective cap ${formatUsd(market.effective_max_oi_per_side, { maxFractionDigits: 0 })} · ${marketLimitLabel(market)} · admission exit limit ${formatExitCapacity(market)}${market.measured_cap_is_grid_max ? ". Probe grid passed; admission depth may be ramp-limited. See the curve for the largest size probed." : ""}`}
       className={cn("flex min-w-0 flex-col gap-1 rounded-sm border p-3", tone)}
     >
       <span className="truncate text-ui font-medium text-foreground">{market.id}</span>
@@ -68,7 +65,7 @@ function Heatmap() {
         className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4 text-sm md:flex-row md:items-center md:justify-between"
       >
         <span className="text-foreground">
-          Utilization unavailable. <span className="text-muted-foreground">The {networkName()} RPC did not answer get_markets.</span>
+          Utilization unavailable. <span className="text-muted-foreground">The {networkName()} market registry could not be loaded.</span>
         </span>
         <Button variant="outline" size="sm" onClick={() => void markets.refetch()}>
           <RotateCw />
@@ -80,7 +77,7 @@ function Heatmap() {
   return (
     <figure className="flex flex-col gap-4">
       <figcaption className="text-label text-tertiary">
-        Utilization now: larger side of open interest / measured exit capacity
+        Utilization: larger side of open interest (total size of open positions) / effective cap per side
       </figcaption>
       <ul className="grid grid-cols-3 gap-1 md:grid-cols-4">
         {markets.data.map((m) => (
@@ -89,7 +86,7 @@ function Heatmap() {
       </ul>
       <p className="flex flex-wrap gap-x-4 gap-y-1 text-label text-tertiary">
         <span className="text-success">Below 50%</span>
-        <span className="text-warning">50% to 100%, or stale</span>
+        <span className="text-warning">50% to 100%, or entry not ready</span>
         <span className="text-destructive">At capacity</span>
       </p>
     </figure>
@@ -106,9 +103,9 @@ export function RiskSection() {
             See the stress before it happens.
           </h2>
           <p className="text-body text-muted-foreground">
-            The risk center shows how much of each market&apos;s exit is already used, how capacity moved over the
-            last 24 hours, and what a 10% to 50% crash would do: which positions liquidate, isolated and cross, and
-            what each vault would be left owing.
+            The risk center shows how much of each market&apos;s effective cap is used, recent measurement history,
+            and estimated effects of a 10% to 50% crash on positions and vaults. Cached-price status is not a
+            fill guarantee: actions fetch a fresh price when needed and recheck limits.
           </p>
           <Link
             href="/risk"

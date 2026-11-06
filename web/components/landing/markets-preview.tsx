@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ArrowRight, RotateCw } from "lucide-react";
 import { VAULT_LABEL } from "@/components/markets/markets-table";
 import { marketName } from "@/components/trade/market-header";
-import { isPriceFresh } from "@/lib/near/market-status";
+import { formatExitCapacity, isPriceFresh, marketDisplayStatus, marketLimitLabel } from "@/lib/near/market-status";
 import { OiBar } from "@/components/trade/oi-bar";
 import { Button } from "@/components/ui/button";
 import { Container, Eyebrow } from "@/components/ui/page-shell";
@@ -14,7 +14,7 @@ import { networkName } from "@/lib/near/config";
 import { formatPrice, usd0, formatUsdc } from "@/lib/near/format";
 import { isMeasuring, type Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
-import { useNow } from "./live-time";
+import { formatAge, formatUtc, useNow } from "./live-time";
 
 const PREVIEW_ROWS = 8;
 
@@ -27,10 +27,9 @@ function byActivity(a: Market, b: Market): number {
   return a.id.localeCompare(b.id);
 }
 
-function Status({ market }: { market: Market }) {
-  if (isMeasuring(market)) return <span className="text-warning">Measuring</span>;
-  if (!market.is_open) return <span className="text-tertiary">Paused</span>;
-  return <span className="text-success">Open</span>;
+function Status({ market, nowMs }: { market: Market; nowMs: number }) {
+  const status = marketDisplayStatus(market, nowMs);
+  return <span className={status.open ? "text-success" : "text-warning"}>{status.open ? "Open" : status.label}</span>;
 }
 
 function Rows({ markets }: { markets: Market[] }) {
@@ -38,13 +37,13 @@ function Rows({ markets }: { markets: Market[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-ui tabular-nums md:min-w-[40rem]">
-        <caption className="sr-only">Markets read from get_markets</caption>
+        <caption className="sr-only">Onchain market registry; open interest is the total size of open positions.</caption>
         <thead>
           <tr className="border-b border-border text-label text-tertiary">
             <th scope="col" className="py-3 pr-4 text-left font-medium">Market</th>
             <th scope="col" className="py-3 pr-4 text-right font-medium">Price</th>
-            <th scope="col" className="hidden md:table-cell py-3 pr-4 text-right font-medium">Exit capacity</th>
-            <th scope="col" className="py-3 pr-4 text-right font-medium"><span className="md:hidden">OI / cap</span><span className="hidden md:inline">Open interest / cap per side</span></th>
+            <th scope="col" className="hidden md:table-cell py-3 pr-4 text-right font-medium">Admission exit limit</th>
+            <th scope="col" className="py-3 pr-4 text-right font-medium"><span className="md:hidden">Largest side / cap</span><span className="hidden md:inline">Largest OI side / effective cap</span></th>
             <th scope="col" className="hidden md:table-cell py-3 pr-4 text-right font-medium">Max leverage</th>
             <th scope="col" className="hidden md:table-cell py-3 pr-4 text-left font-medium">Vault</th>
             <th scope="col" className="hidden sm:table-cell py-3 text-left font-medium">Status</th>
@@ -63,26 +62,35 @@ function Rows({ markets }: { markets: Market[] }) {
                     {marketName(m.id)}
                   </Link>
                   <span className="block text-label font-normal sm:hidden">
-                    <Status market={m} />
+                    <Status market={m} nowMs={nowMs} />
                   </span>
                 </th>
                 <td className={cn("pr-4 text-right text-foreground", !isPriceFresh(m, nowMs) && "text-tertiary")}>
                   {m.price > 0n ? formatPrice(m.price) : "—"}
                 </td>
-                <td className="hidden md:table-cell pr-4 text-right text-foreground">{isMeasuring(m) ? "—" : usd0(m.exit_capacity)}</td>
+                <td className="hidden md:table-cell pr-4 text-right text-foreground" title={m.measured_cap_is_grid_max ? "Probe grid passed; admission depth may be ramp-limited. See the curve for the largest size probed." : undefined}>
+                  {isMeasuring(m) ? "—" : formatExitCapacity(m)}
+                  {m.measured_cap_is_grid_max ? <span className="block text-label text-tertiary">Probe grid passed</span> : null}
+                  {m.depth_measured_at_ms > 0 ? (
+                    <span className="block text-label text-tertiary">
+                      {formatUtc(m.depth_measured_at_ms)} · {formatAge(m.depth_measured_at_ms, nowMs) || "measured"}
+                    </span>
+                  ) : null}
+                </td>
                 <td className="pr-4 text-right">
                   <span className="inline-flex flex-col items-end gap-1">
                     <span className="whitespace-nowrap text-foreground">
-                      {usd0(m.oi_long + m.oi_short)}
-                      <span className="text-tertiary"> / {usd0(m.max_oi_per_side)}</span>
+                      {usd0(maxSide)}
+                      <span className="text-tertiary"> / {usd0(m.effective_max_oi_per_side)}</span>
                     </span>
-                    <OiBar used={maxSide} cap={m.max_oi_per_side} className="w-20 md:w-28" />
+                    <OiBar used={maxSide} cap={m.effective_max_oi_per_side} className="w-20 md:w-28" />
+                    <span className="text-label text-tertiary">{marketLimitLabel(m)}</span>
                   </span>
                 </td>
                 <td className="hidden md:table-cell pr-4 text-right text-foreground">{m.max_leverage}×</td>
                 <td className="hidden md:table-cell pr-4 text-muted-foreground">{VAULT_LABEL[m.vault_id]}</td>
                 <td className="hidden sm:table-cell">
-                  <Status market={m} />
+                  <Status market={m} nowMs={nowMs} />
                 </td>
               </tr>
             );
@@ -111,7 +119,7 @@ function Body() {
         className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4 text-sm md:flex-row md:items-center md:justify-between"
       >
         <span className="text-foreground">
-          Markets unavailable. <span className="text-muted-foreground">The {networkName()} RPC did not answer get_markets.</span>
+          Markets unavailable. <span className="text-muted-foreground">The {networkName()} market registry could not be loaded.</span>
         </span>
         <Button variant="outline" size="sm" onClick={() => void markets.refetch()}>
           <RotateCw />
@@ -128,7 +136,9 @@ function Body() {
         {rows.length < markets.data.length
           ? `${rows.length} busiest of ${markets.data.length} markets. `
           : `All ${markets.data.length} markets. `}
-        Cap per side = the smaller of the market&apos;s hard cap and its measured exit capacity.
+        Open interest is the total size of open positions. The effective cap per side is the smallest of the
+        market&apos;s hard cap, admission exit limit and vault-backed cap. A close-only cached price can be refreshed
+        by a trading action; execution rechecks price freshness and limits.
       </p>
     </div>
   );
@@ -146,8 +156,9 @@ export function MarketsPreview() {
           </h2>
           <p className="text-body text-muted-foreground">
             Majors and long-tail tokens side by side, each with its own cap and leverage. Anyone can list a new
-            market for <span className="text-foreground">{fee} USDC</span>: it stays closed until its first depth
-            measurement, then trades at up to 5×.
+            market for <span className="text-foreground">{fee} USDC</span>: it stays closed until it has a price,
+            at least $10k of fresh admission exit capacity and vault capital. New Long-tail markets trade at up to
+            5×, with leverage increasing gradually as depth allows.
           </p>
           <Link
             href="/markets"

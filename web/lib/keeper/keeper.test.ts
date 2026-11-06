@@ -30,6 +30,10 @@ function market(id: MarketId, priceAgeMs = 10_000): Market {
     last_accrual_ms: NOW,
     funding: { paid_index: [0n, 0n], received_index: [0n, 0n], last_accrual_ms: NOW },
     max_oi_per_side: 100_000n * USD,
+    vault_backed_cap_usd: 100_000n * USD,
+    effective_max_oi_per_side: 100_000n * USD,
+    measured_cap_is_grid_max: false,
+    close_only: false,
     is_open: true,
     funding_rate_per_hour: 0n,
   };

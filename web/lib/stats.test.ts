@@ -15,6 +15,8 @@ function market(overrides: Partial<Market> = {}): Market {
     oi_long: HUGE, oi_short: 7n, max_leverage: 5, price: 300_000_000n,
     price_timestamp_ms: NOW, borrow_index_long: 0n, borrow_index_short: 0n,
     last_accrual_ms: NOW, funding: { paid_index: [0n, 0n], received_index: [0n, 0n], last_accrual_ms: NOW },
+    vault_backed_cap_usd: 1n, effective_max_oi_per_side: 1n, measured_cap_is_grid_max: false,
+    close_only: false,
     max_oi_per_side: 1n, is_open: true, funding_rate_per_hour: 0n, ...overrides,
   };
 }
@@ -76,9 +78,9 @@ describe("onchain aggregate statistics", () => {
   it("requires fresh depth AND price, including exact age and liquidity boundaries", async () => {
     const source = views();
     source.markets = async () => [
-      market({ id: "boundary", depth_measured_at_ms: NOW - 30 * 60_000, price_timestamp_ms: NOW - 120_000 }),
+      market({ id: "boundary", depth_measured_at_ms: NOW - 30 * 60_000, price_timestamp_ms: NOW - 30_000 }),
       market({ id: "old-depth", depth_measured_at_ms: NOW - 30 * 60_000 - 1 }),
-      market({ id: "old-price", price_timestamp_ms: NOW - 120_001 }),
+      market({ id: "old-price", price_timestamp_ms: NOW - 30_001 }),
       market({ id: "no-price", price: 0n }),
       market({ id: "no-price-time", price_timestamp_ms: 0 }),
       market({ id: "no-depth", depth_measured_at_ms: 0 }),
@@ -86,11 +88,12 @@ describe("onchain aggregate statistics", () => {
       market({ id: "future-price", price_timestamp_ms: NOW + 1 }),
       market({ id: "thin", exit_capacity: 9_999_999_999n }),
       market({ id: "closed", is_open: false }),
+      market({ id: "close-only", close_only: true }),
     ];
     const result = await collectStats(source, () => NOW);
-    expect(result.marketsCount).toBe(10);
+    expect(result.marketsCount).toBe(11);
     expect(result.openMarketsCount).toBe(1);
-    expect(result.totalOi).toBe(((HUGE + 7n) * 10n).toString());
+    expect(result.totalOi).toBe(((HUGE + 7n) * 11n).toString());
   });
 
   it("reports observed empty activity as zero only after reading valid sources", async () => {

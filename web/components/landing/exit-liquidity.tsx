@@ -5,7 +5,7 @@ import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDepths, useMarkets } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
-import { formatUsd } from "@/lib/near/format";
+import { formatExitCapacity, marketDisplayStatus } from "@/lib/near/market-status";
 import type { DepthRecord, DepthView, Market, MarketId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import {
@@ -77,7 +77,7 @@ function annotationsFor(assets: Asset[]): AsciiAnnotation[] {
   const notes: AsciiAnnotation[] = [];
   const capacity = lead.record.exit_capacity_usd;
   if (capacity > 0) {
-    notes.push({ sizeUsd: capacity, text: `${lead.id} · ${compactUsd(capacity)} sells within 1%` });
+    notes.push({ sizeUsd: capacity, text: `${lead.id} · limit ${compactUsd(capacity)}` });
   }
   const dry = firstDrySize(lead.record.samples);
   if (dry !== null) notes.push({ sizeUsd: dry, text: `${compactUsd(dry)} · no liquidity` });
@@ -85,8 +85,12 @@ function annotationsFor(assets: Asset[]): AsciiAnnotation[] {
 }
 
 function impactAtCapacity(record: DepthRecord): number | null {
-  const sample = record.samples.find((s) => s.size_usd === record.exit_capacity_usd);
-  return sample?.impact_bps ?? null;
+  let impact: number | null = null;
+  for (const sample of record.samples) {
+    if (sample.impact_bps === null || sample.impact_bps > 100) break;
+    impact = sample.impact_bps;
+  }
+  return impact;
 }
 
 function MeasuredAt({ records }: { records: DepthRecord[] }) {
@@ -102,24 +106,25 @@ function MeasuredAt({ records }: { records: DepthRecord[] }) {
   const age = formatAge(oldest, nowMs);
   return (
     <span className={cn("tabular-nums", stale ? "text-warning" : "text-tertiary")}>
-      measured {range}
-      {age ? ` · ${age}` : null}
-      {stale ? " · older than 30 min, new positions paused until the next sample" : null}
+      {records.length} shown markets measured {range}
+      {age ? ` · oldest ${age}` : null}
+      {stale ? " · some depth older than 30 min" : null}
     </span>
   );
 }
 
 function LegendTable({ assets }: { assets: Asset[] }) {
+  const nowMs = useNow();
   return (
     <table className="w-full text-ui tabular-nums">
-      <caption className="sr-only">Exit liquidity per market, read from get_depth</caption>
+      <caption className="sr-only">Reported exit liquidity and cached-price status per market</caption>
       <thead>
         <tr className="border-b border-border text-label text-tertiary">
           <th scope="col" className="py-2 text-left font-medium">
             Market
           </th>
           <th scope="col" className="py-2 text-right font-medium">
-            Exit capacity
+            Measured exit capacity
           </th>
           <th scope="col" className="py-2 text-right font-medium">
             Max leverage
@@ -132,18 +137,23 @@ function LegendTable({ assets }: { assets: Asset[] }) {
       <tbody>
         {assets.map(({ id, view, record }) => {
           const impact = record ? impactAtCapacity(record) : null;
+          const gridPassed = record && record.samples.length > 0
+            && record.samples.every((sample) => sample.impact_bps !== null && sample.impact_bps <= 100);
+          const status = view ? marketDisplayStatus(view.market, nowMs) : null;
           return (
             <tr key={id} className="border-b border-border last:border-b-0">
               <th scope="row" className="py-2 text-left font-medium text-foreground">
                 {id}
-                {view && !view.market.is_open ? (
-                  <span className="ml-2 text-label font-normal text-warning">paused</span>
+                {status && !status.open ? (
+                  <span className="block text-label font-normal text-warning">{status.label}</span>
                 ) : null}
               </th>
               {view && record ? (
                 <>
                   <td className="py-2 text-right text-foreground">
-                    {formatUsd(view.market.exit_capacity, { maxFractionDigits: 0 })}
+                    {formatExitCapacity(view.market, record)}
+                    {gridPassed ? <span className="block text-label text-tertiary">(largest size probed)</span> : null}
+                    <span className="block text-label text-tertiary">{formatUtc(record.measured_at_ms)}</span>
                   </td>
                   <td className="py-2 text-right text-foreground">{view.market.max_leverage}×</td>
                   <td className="py-2 text-right text-muted-foreground">
@@ -227,7 +237,7 @@ export function ExitLiquidity() {
             >
               <span className="text-foreground">
                 Last measurement unavailable.{" "}
-                <span className="text-muted-foreground">The {networkName()} RPC did not answer get_markets or get_depth.</span>
+                <span className="text-muted-foreground">The {networkName()} liquidity measurements could not be loaded.</span>
               </span>
               <Button variant="outline" size="sm" onClick={retry}>
                 <RotateCw />
@@ -236,7 +246,7 @@ export function ExitLiquidity() {
             </div>
           ) : (
             <span className="sr-only" role="status">
-              Reading get_depth from {networkName()}
+              Loading liquidity measurements from {networkName()}
             </span>
           )}
         </div>
@@ -264,19 +274,24 @@ export function ExitLiquidity() {
   return (
     <Figure caption={records.length ? <MeasuredAt records={records} /> : null}>
       <AsciiGrid key={cols} rows={rows} cols={cols} className={styles.reveal} />
+      <p className="text-label text-tertiary">
+        Grid: $1k–$5M sell size, logarithmic. Denser / taller characters mean lower impact;
+        amber approaches or exceeds 1%, red marks a missing quote. A full row is not unlimited liquidity.
+      </p>
       {records.length ? (
         <>
           <LegendTable assets={assets} />
           <p className="text-label text-tertiary">
             The {assets.length} deepest of {markets.data?.length ?? assets.length} markets. Dry quotes from NEAR
-            Intents 1Click (mainnet, read-only), platform fee excluded, written on chain by the keeper. Exit capacity
-            is the largest quoted size that moves the price 1% or less.
+            Intents 1Click (read-only), platform fee excluded, reported on chain by the keeper.
+            The first missing quote or impact above 1% ends the measured range. Admission limits may be lower
+            while increases ramp up; effective trading caps also depend on vault capital.
           </p>
         </>
       ) : (
         <p className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
-          <span className="text-foreground">Last measurement unavailable.</span> No sample yet. The keeper
-          samples every minute while the app is open.
+          <span className="text-foreground">Last measurement unavailable.</span> No sample yet. Measurements
+          require a running keeper; this read-only page does not start it.
         </p>
       )}
     </Figure>

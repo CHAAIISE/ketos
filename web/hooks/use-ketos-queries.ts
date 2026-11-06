@@ -2,8 +2,6 @@
 
 import { skipToken, useQueries, useQuery } from "@tanstack/react-query";
 import type { HistoryKind, LeaderboardSort, MarketId, VaultId } from "@/lib/near/types";
-import { ACCOUNT_HISTORY_LEN, LEADERBOARD_MAX } from "@/lib/near/views";
-import { windowVolume } from "@/lib/near/volume";
 import { useAccountId, useNear } from "./near-provider";
 
 /** Live data (prices, positions) polls every 5 s; slower-moving views every 10–15 s. */
@@ -36,7 +34,6 @@ export const ketosKeys = {
   depth: (marketId: MarketId | null) => ["ketos", "depth", marketId] as const,
   liquidations: (limit: number) => ["ketos", "liquidations", limit] as const,
   openPositions: () => ["ketos", "open-positions"] as const,
-  volume24h: () => ["ketos", "volume-24h"] as const,
 };
 
 /** Token, oracle and keeper accounts; fixed at deployment. */
@@ -247,33 +244,3 @@ export function useDepths(marketIds: readonly MarketId[]) {
   });
 }
 
-const HISTORY_BATCH = 8;
-
-/**
- * Entry and exit notional of the last 24 h, summed from the onchain history of every ranked
- * trader (the contract keeps the most recently active ones). `complete` is false when the
- * cohort or a history ring is full, making the figure a lower bound.
- */
-export function useVolume24h() {
-  const { views } = useNear();
-  return useQuery({
-    queryKey: ketosKeys.volume24h(),
-    queryFn: async () => {
-      const cohort = await views.leaderboard("volume", LEADERBOARD_MAX);
-      const histories = [];
-      for (let i = 0; i < cohort.length; i += HISTORY_BATCH) {
-        const batch = cohort.slice(i, i + HISTORY_BATCH);
-        histories.push(...(await Promise.all(batch.map((entry) => views.history(entry.account_id)))));
-      }
-      const readAtMs = Date.now();
-      const result = windowVolume(histories, readAtMs, ACCOUNT_HISTORY_LEN);
-      return {
-        ...result,
-        complete: result.complete && cohort.length < LEADERBOARD_MAX,
-        traders: cohort.length,
-        readAtMs,
-      };
-    },
-    refetchInterval: HISTORY_MS,
-  });
-}

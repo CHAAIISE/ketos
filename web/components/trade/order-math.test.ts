@@ -35,6 +35,10 @@ function market(overrides: Partial<Market> = {}): Market {
     last_accrual_ms: 0,
     funding: { paid_index: [0n, 0n], received_index: [0n, 0n], last_accrual_ms: 0 },
     max_oi_per_side: 100_000n * USD,
+    vault_backed_cap_usd: 100_000n * USD,
+    effective_max_oi_per_side: 100_000n * USD,
+    measured_cap_is_grid_max: false,
+    close_only: false,
     is_open: true,
     funding_rate_per_hour: 0n,
     ...overrides,
@@ -61,6 +65,14 @@ describe("previewOrder", () => {
     expect(short.capRoom).toBe(5_000n * USD);
     expect(short.exceedsCap).toBe(true);
     expect(previewOrder(m, "long", 2_000n * USD, 5).exceedsCap).toBe(false);
+  });
+
+  it("limits new exposure by vault capital even when measured exit liquidity is deeper", () => {
+    const m = { ...market({ oi_long: 19_000n * USD }), effective_max_oi_per_side: 20_000n * USD };
+    const preview = previewOrder(m, "long", 300n * USD, 5);
+    expect(preview.capRoom).toBe(1_000n * USD);
+    expect(preview.exceedsCap).toBe(true);
+    expect(capRoom({ ...m, oi_long: 21_000n * USD }, "long")).toBe(0n);
   });
 });
 

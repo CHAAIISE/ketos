@@ -13,7 +13,7 @@ import {
 import { nearConfig, type NearConfig } from "@/lib/near/config";
 import { toNearActionError, type NearActionError } from "@/lib/near/errors";
 import { KetosViews } from "@/lib/near/views";
-import { createWallet, type Wallet, type WalletOption } from "@/lib/near/wallet";
+import type { Wallet, WalletOption } from "@/lib/near/wallet";
 
 export interface NearContextValue {
   config: NearConfig;
@@ -37,8 +37,8 @@ function makeQueryClient() {
   });
 }
 
-/** Mounts TanStack Query and the NEAR wallet for everything below it. */
-export function NearProvider({ children }: { children: ReactNode }) {
+/** Mounts query/view access; only app routes enable the wallet runtime. */
+export function NearProvider({ children, walletEnabled = true }: { children: ReactNode; walletEnabled?: boolean }) {
   const [queryClient] = useState(makeQueryClient);
   const [base] = useState(() => {
     const config = nearConfig();
@@ -48,8 +48,9 @@ export function NearProvider({ children }: { children: ReactNode }) {
   const [walletError, setWalletError] = useState<NearActionError | null>(null);
 
   useEffect(() => {
+    if (!walletEnabled) return;
     let active = true;
-    walletPromise ??= createWallet(base.config);
+    walletPromise ??= import("@/lib/near/wallet").then(({ createWallet }) => createWallet(base.config));
     walletPromise.then(
       (loaded) => {
         if (active) setWallet(loaded);
@@ -61,7 +62,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [base.config]);
+  }, [base.config, walletEnabled]);
 
   const value = useMemo(() => ({ ...base, wallet, walletError }), [base, wallet, walletError]);
 
@@ -70,6 +71,10 @@ export function NearProvider({ children }: { children: ReactNode }) {
       <NearContext value={value}>{children}</NearContext>
     </QueryClientProvider>
   );
+}
+
+export function ReadOnlyNearProvider({ children }: { children: ReactNode }) {
+  return <NearProvider walletEnabled={false}>{children}</NearProvider>;
 }
 
 export function useNear(): NearContextValue {

@@ -64,6 +64,11 @@ export const marketSchema = z.object({
   last_accrual_ms: z.number(),
   funding: fundingSchema,
   max_oi_per_side: u128,
+  vault_backed_cap_usd: u128,
+  effective_max_oi_per_side: u128,
+  measured_cap_is_grid_max: z.boolean(),
+  /** Stored mark is too old for entry; an action must fetch a fresh price first. */
+  close_only: z.boolean(),
   is_open: z.boolean(),
   /** Signed hourly rate, RATE_PRECISION scale: positive means longs pay shorts. */
   funding_rate_per_hour: i128,

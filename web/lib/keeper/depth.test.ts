@@ -28,6 +28,10 @@ function market(index: number): Market {
     last_accrual_ms: 0,
     funding: { paid_index: [0n, 0n], received_index: [0n, 0n], last_accrual_ms: 0 },
     max_oi_per_side: 0n,
+    vault_backed_cap_usd: 0n,
+    effective_max_oi_per_side: 0n,
+    measured_cap_is_grid_max: false,
+    close_only: false,
     is_open: false,
     funding_rate_per_hour: 0n,
   };

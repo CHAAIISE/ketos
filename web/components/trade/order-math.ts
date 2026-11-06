@@ -36,10 +36,10 @@ export function sideOpenInterest(market: Market, side: Side): bigint {
   return side === "long" ? market.oi_long : market.oi_short;
 }
 
-/** Notional still accepted on one side before the exit-liquidity cap, USDC units. */
+/** Notional still accepted on one side before the effective capital/depth cap, USDC units. */
 export function capRoom(market: Market, side: Side): bigint {
   const oi = sideOpenInterest(market, side);
-  return market.max_oi_per_side > oi ? market.max_oi_per_side - oi : 0n;
+  return market.effective_max_oi_per_side > oi ? market.effective_max_oi_per_side - oi : 0n;
 }
 
 export interface OrderPreview {

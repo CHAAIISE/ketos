@@ -41,6 +41,10 @@ const market = {
   last_accrual_ms: 1793816873202,
   funding: { paid_index: ["0", "0"], received_index: ["0", "0"], last_accrual_ms: 1793816873202 },
   max_oi_per_side: "100000000000",
+  vault_backed_cap_usd: "20000000000",
+  effective_max_oi_per_side: "20000000000",
+  measured_cap_is_grid_max: false,
+  close_only: false,
   is_open: true,
   funding_rate_per_hour: "-500000000",
 };

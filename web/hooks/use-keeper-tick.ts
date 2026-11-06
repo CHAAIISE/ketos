@@ -16,11 +16,12 @@ const tickResponseSchema = z.object({
   liquidations: z.array(z.object({ tx: z.string().optional() })).optional(),
 });
 
-export type KeeperStatus =
+export type KeeperStatus = (
   | { state: "waiting" }
   | { state: "running" }
   | { state: "ran"; atMs: number; liquidated: number }
-  | { state: "unavailable"; reason: string };
+  | { state: "unavailable"; reason: string }
+) & { lastPassMs?: number };
 
 /**
  * Asks the server keeper for a pass (depth, prices, liquidations) while the page is open and
@@ -40,26 +41,27 @@ export function useKeeperTick(): KeeperStatus {
 
     async function run() {
       if (document.visibilityState !== "visible") return schedule(INTERVAL_MS);
-      setStatus((s) => (s.state === "ran" ? s : { state: "running" }));
+      setStatus((s) => ({ state: "running", lastPassMs: s.state === "ran" ? s.atMs : s.lastPassMs }));
       try {
         const res = await fetch("/api/keeper/tick", { method: "POST", signal: controller.signal });
         const body = tickResponseSchema.safeParse(await res.json().catch(() => null));
         if (body.success && body.data.state === "throttled") {
-          setStatus((s) => (s.state === "running" ? { state: "waiting" } : s));
+          setStatus((s) => ({ state: "waiting", lastPassMs: s.lastPassMs }));
           const retryAfter = Number(res.headers.get("Retry-After"));
           return schedule(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 + 1_000 : INTERVAL_MS);
         }
         if (body.success && body.data.ok) {
           const liquidated = (body.data.liquidations ?? []).filter((l) => l.tx).length;
-          setStatus({ state: "ran", atMs: Date.now(), liquidated });
+          const atMs = Date.now();
+          setStatus({ state: "ran", atMs, lastPassMs: atMs, liquidated });
           void queryClient.invalidateQueries({ queryKey: ketosKeys.all });
         } else {
           const reason = body.success ? body.data.reason : undefined;
-          setStatus({ state: "unavailable", reason: reason ?? `keeper answered HTTP ${res.status}` });
+          setStatus((s) => ({ state: "unavailable", reason: reason ?? `keeper answered HTTP ${res.status}`, lastPassMs: s.lastPassMs }));
         }
       } catch (e) {
         if (controller.signal.aborted) return;
-        setStatus({ state: "unavailable", reason: errorMessage(e) });
+        setStatus((s) => ({ state: "unavailable", reason: errorMessage(e), lastPassMs: s.lastPassMs }));
       }
       schedule(INTERVAL_MS);
     }

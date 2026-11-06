@@ -8,11 +8,11 @@ import { VaultsSection } from "@/components/landing/vaults-section";
 import { Why } from "@/components/landing/why";
 import { Container, Eyebrow } from "@/components/ui/page-shell";
 import { networkName } from "@/lib/near/config";
-import { NearProvider } from "@/hooks/near-provider";
+import { ReadOnlyNearProvider } from "@/hooks/near-provider";
 
 export default function Home() {
   return (
-    <NearProvider>
+    <ReadOnlyNearProvider>
       <div className="flex min-h-dvh flex-1 flex-col">
         <LandingNav />
         <main className="flex flex-1 flex-col gap-24 pb-24 md:gap-section md:pb-section">
@@ -31,6 +31,6 @@ export default function Home() {
         </main>
         <LandingFooter />
       </div>
-    </NearProvider>
+    </ReadOnlyNearProvider>
   );
 }

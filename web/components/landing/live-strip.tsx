@@ -1,14 +1,13 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useNear } from "@/hooks/near-provider";
-import { VAULT_LABEL } from "@/components/markets/markets-table";
-import { useMarkets, useVaults, useVolume24h } from "@/hooks/use-ketos-queries";
-import { networkName } from "@/lib/near/config";
+import { useMarkets } from "@/hooks/use-ketos-queries";
 import { formatUsd, usdcToNumber } from "@/lib/near/format";
-import { isMeasuring } from "@/lib/near/types";
+import { marketDisplayStatus } from "@/lib/near/market-status";
+import { fetchStats } from "@/lib/stats";
 import { cn } from "@/lib/utils";
 import { FlashValue } from "./flash-value";
 import { STALE_AFTER_MS, formatAge, formatUtc, useNow } from "./live-time";
@@ -25,20 +24,22 @@ function Cell({ label, children, hint, testId }: { label: string; children: Reac
   );
 }
 
-const LABELS = ["Markets open", "Open interest", "Vault TVL", "24h volume", "Last measurement"];
-
+const LABELS = ["Markets open", "Open interest", "Vault TVL", "24h volume", "Latest measurement"];
 const stripClass =
   "flex flex-col divide-y divide-border border-y border-border md:flex-row md:divide-x md:divide-y-0 md:py-8";
 
-/** Protocol totals read from `get_markets`, `get_vaults` and account histories, refreshed while the page is open. */
+/** Activity totals come from the shared server snapshot, never browser history fanout. */
 export function LiveStrip() {
-  const { config } = useNear();
   const markets = useMarkets();
-  const vaults = useVaults();
-  const volume = useVolume24h();
+  const stats = useQuery({
+    queryKey: ["stats"],
+    queryFn: ({ signal }) => fetchStats(signal),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
   const nowMs = useNow();
 
-  if (markets.isPending || vaults.isPending) {
+  if (stats.isPending) {
     return (
       <dl aria-busy className={stripClass}>
         {LABELS.map((label) => (
@@ -50,26 +51,13 @@ export function LiveStrip() {
     );
   }
 
-  if (markets.isError || vaults.isError) {
+  if (!stats.data) {
     return (
-      <div
-        role="alert"
-        className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4 text-sm md:flex-row md:items-center md:justify-between"
-      >
+      <div role="status" className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4 text-sm md:flex-row md:items-center md:justify-between">
         <span className="text-foreground">
-          Live numbers unavailable.{" "}
-          <span className="text-muted-foreground">
-            The {networkName()} RPC did not answer get_markets or get_vaults.
-          </span>
+          Statistics unavailable. <span className="text-muted-foreground">The shared onchain snapshot could not be loaded.</span>
         </span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            void markets.refetch();
-            void vaults.refetch();
-          }}
-        >
+        <Button variant="outline" size="sm" onClick={() => void stats.refetch()}>
           <RotateCw />
           Retry
         </Button>
@@ -77,74 +65,58 @@ export function LiveStrip() {
     );
   }
 
+  const snapshot = stats.data;
+  const openInterest = BigInt(snapshot.totalOi);
+  const tvl = BigInt(snapshot.vaultTvl);
+  const volume = BigInt(snapshot.volume24h);
+  const lowerBound = !snapshot.coverage.complete;
   const list = markets.data;
-  const open = list.filter((m) => m.is_open).length;
-  const measuring = list.filter(isMeasuring).length;
-  const openInterest = list.reduce((sum, m) => sum + m.oi_long + m.oi_short, 0n);
-  const tvl = vaults.data.reduce((sum, v) => sum + v.nav, 0n);
-  const measuredAt = list.length ? Math.max(...list.map((m) => m.depth_measured_at_ms)) : 0;
+  const open = list?.filter((market) => marketDisplayStatus(market, nowMs).open).length;
+  const measuredAt = list?.length ? Math.max(...list.map((market) => market.depth_measured_at_ms)) : 0;
   const stale = measuredAt > 0 && nowMs > 0 && nowMs - measuredAt > STALE_AFTER_MS;
-  const readAt = Math.max(markets.dataUpdatedAt, vaults.dataUpdatedAt);
 
   return (
     <div className="flex flex-col gap-6">
       <dl className={stripClass}>
-        <Cell label={LABELS[0]} hint={`${list.length} listed${measuring ? ` · ${measuring} measuring` : ""}`}>
-          <FlashValue text={`${open} / ${list.length}`} order={open} />
+        <Cell label={LABELS[0]} hint={list ? `${list.length} listed · current cached marks` : markets.isError ? "market registry unavailable" : "loading market registry"}>
+          {open !== undefined && list ? <FlashValue text={`${open} / ${list.length}`} order={open} /> : "—"}
         </Cell>
-        <Cell label={LABELS[1]} hint="longs + shorts, all markets">
+        <Cell label={LABELS[1]} hint="total size of open positions, longs + shorts">
           <FlashValue text={formatUsd(openInterest, { maxFractionDigits: 0 })} order={usdcToNumber(openInterest)} />
         </Cell>
-        <Cell
-          label={LABELS[2]}
-          hint={vaults.data.map((v) => `${VAULT_LABEL[v.id]} ${formatUsd(v.nav, { maxFractionDigits: 0 })}`).join(" · ")}
-        >
+        <Cell label={LABELS[2]} hint="combined vault net asset value">
           <FlashValue text={formatUsd(tvl, { maxFractionDigits: 0 })} order={usdcToNumber(tvl)} />
         </Cell>
         <Cell
           label={LABELS[3]}
           testId="landing-volume-24h"
-          hint={
-            volume.data
-              ? `${volume.data.trades} ${volume.data.trades === 1 ? "trade" : "trades"}${volume.data.complete ? "" : " · lower bound"}`
-              : volume.isError
-                ? "account histories unavailable"
-                : undefined
-          }
+          hint={`${lowerBound ? "≥ " : ""}${snapshot.trades24h} ${snapshot.trades24h === 1 ? "trade" : "trades"} · ${lowerBound ? "≥ " : ""}${snapshot.traders24h} active traders${lowerBound ? " · lower bounds" : ""}`}
         >
-          {volume.data ? (
-            <FlashValue
-              text={`${volume.data.complete ? "" : "≥ "}${formatUsd(volume.data.volume, { maxFractionDigits: 0 })}`}
-              order={usdcToNumber(volume.data.volume)}
-            />
-          ) : volume.isError ? (
-            <span className="text-muted-foreground">unavailable</span>
-          ) : (
-            <span aria-hidden className="block h-7 w-24 rounded-sm bg-muted" />
-          )}
+          <FlashValue text={`${lowerBound ? "≥ " : ""}${formatUsd(volume, { maxFractionDigits: 0 })}`} order={usdcToNumber(volume)} />
         </Cell>
         <Cell
           label={LABELS[4]}
-          hint={
-            measuredAt ? (
-              <span className={cn(stale && "text-warning")}>{formatAge(measuredAt, nowMs) || "\u00a0"}</span>
-            ) : undefined
-          }
+          hint={list ? `latest of ${list.length} markets${measuredAt ? ` · ${formatAge(measuredAt, nowMs)}` : ""}` : "measurement time unavailable"}
         >
-          {measuredAt ? formatUtc(measuredAt) : <span className="text-muted-foreground">unavailable</span>}
+          <span className={cn(stale && "text-warning")}>{measuredAt ? formatUtc(measuredAt) : "—"}</span>
         </Cell>
       </dl>
       <div className="flex flex-col gap-2 text-label text-tertiary">
         <p className="tabular-nums">
-          Read on chain at {formatUtc(readAt, true)}, refreshed while this page is open. Volume sums entry and exit
-          size from each ranked trader&apos;s onchain history over the last 24 hours.
+          Activity and vault snapshot fetched {formatUtc(snapshot.fetchedAtMs, true)}{formatAge(snapshot.fetchedAtMs, nowMs) ? ` · ${formatAge(snapshot.fetchedAtMs, nowMs)}` : ""}.
+          {" "}Shared cache: up to 60 seconds; this page requests an update every minute. The 24h window ends at that snapshot.
+          {list ? ` Market registry read ${formatUtc(markets.dataUpdatedAt, true)}; each market has its own measurement time.` : ""}
         </p>
+        {stats.isError || markets.isError ? (
+          <p role="status" className="text-warning">A refresh failed. Available cached values remain visible; unavailable values are shown as —.</p>
+        ) : null}
         <details>
-          <summary className="w-fit cursor-pointer rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-            Details
-          </summary>
-          <p className="mt-2 font-mono wrap-anywhere">
-            Contract {config.ketosContract} · views get_markets, get_vaults, get_leaderboard, get_history
+          <summary className="w-fit cursor-pointer rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">Details</summary>
+          <p className="mt-2">
+            Volume counts entry and exit notional, including liquidations. Coverage: {snapshot.coverage.accountsScanned} accounts,
+            up to {snapshot.coverage.eventsPerAccountLimit} recent events per account.
+            {lowerBound ? " The account or history limit was reached, so volume, trades and active traders are lower bounds." : " The scanned account histories cover the snapshot’s 24h window."}
+            {" "}Open status describes cached prices; trading actions request a fresh price when needed and recheck limits at execution.
           </p>
         </details>
       </div>

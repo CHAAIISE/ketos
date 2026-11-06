@@ -18,6 +18,7 @@ import { NavChart } from "./nav-chart";
 import { RevenueChart } from "./revenue-chart";
 import { PerformanceStats, VaultHeader } from "./vault-summary";
 import { VaultTicket } from "./vault-ticket";
+import { Term } from "./term";
 import {
   historyPoints,
   pointsInRange,
@@ -56,15 +57,13 @@ function VaultDetails({
             </a>
           ) : null}
         </dd>
-        <dt className="text-tertiary">Views</dt>
-        <dd className="break-words font-mono text-label">
-          get_vault · get_vault_account · get_vault_history · get_markets
-        </dd>
-        <dt className="text-tertiary">NAV</dt>
+        <dt className="text-tertiary">Data sources</dt>
+        <dd>Onchain vault balances, account shares, hourly history and market exposure.</dd>
+        <dt className="text-tertiary"><Term hint="Net asset value: the accounting value of the vault after outstanding trader profit or loss, fees and funding.">NAV</Term></dt>
         <dd>
           Accounting assets − traders&apos; unrealized PnL + borrow fees + net
-          funding due. Cross receivables are included in assets but reserved in
-          full.
+          funding owed. Money owed by cross-margin accounts is included in assets
+          but reserved in full, not available to withdraw.
         </dd>
         <dt className="text-tertiary">Share price</dt>
         <dd>
@@ -80,7 +79,7 @@ function VaultDetails({
         <dd>
           Shares × NAV ÷ total shares, rounded down; refused above unreserved
           assets. Reserves cover maximum position payouts, funding credits and
-          cross receivables.
+          money owed by cross-margin accounts.
         </dd>
         <dt className="text-tertiary">History</dt>
         <dd>
@@ -157,6 +156,9 @@ function VaultDashboard({ vaultId }: { vaultId: VaultId }) {
               ))}
             </div>
           </div>
+          <p className="px-3 pt-3 text-label text-tertiary">
+            <Term hint="Net asset value: assets after outstanding trader profit or loss, fees and funding.">NAV</Term> is the vault&apos;s accounting value, including deposits and withdrawals; share price shows value per share.
+          </p>
           {history.isError ? (
             <ErrorState
               className="m-3"

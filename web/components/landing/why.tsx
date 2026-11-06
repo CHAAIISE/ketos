@@ -5,7 +5,7 @@ const incidents = [
   {
     when: "March 2025",
     title: "Hyperliquid HLP and JELLY",
-    body: "A thin JELLYJELLY market squeezed the HLP vault in a dispute of about $13M. Validators voted to delist the token and force-close positions.",
+    body: "A thin JELLYJELLY market left the HLP vault with about $13.5M of unrealized loss before delisting. Validators voted to delist the token and force-close positions.",
     source: {
       label: "CoinDesk, 26 March 2025",
       href: "https://www.coindesk.com/markets/2025/03/26/hyperliquid-delists-jellyjelly-after-vault-squeezed-in-usd13m-tussle",
@@ -50,11 +50,16 @@ export function Why() {
             </article>
           ))}
           <p className="text-body text-muted-foreground">
-            Both vaults held positions larger than their market could absorb.{" "}
+            In both cases the vault was exposed to more than the market behind the price could absorb.{" "}
             <span className="text-foreground">
-              Ketos caps every market at what can be sold on NEAR Intents within 1%, measured on chain, before a
-              position gets in.
+              Ketos limits new positions using what NEAR Intents solvers quote within 1%, measured off chain
+              by the keeper and enforced by the contract alongside vault-capital and protocol limits.
             </span>
+          </p>
+          <p className="text-body text-muted-foreground">
+            Quotes are nonbinding and the contract trusts the keeper&apos;s reports. They are a proxy for exit
+            liquidity, not proof that solvers can hedge on the oracle&apos;s reference venues. Existing positions
+            are not forcibly resized when a limit falls.
           </p>
         </div>
       </Container>

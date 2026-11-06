@@ -59,7 +59,7 @@ export function LeaderboardScreen() {
           <div className="flex min-w-0 flex-col gap-1">
             <h1 className="text-heading text-foreground">Leaderboard</h1>
             <p className="text-ui text-muted-foreground">
-              All-time ranking of traders by PnL booked onchain at each close and liquidation.
+              All-time ranking by traders&apos; realized profit or loss, recorded onchain at each close and liquidation.
             </p>
           </div>
           <ReadAt at={board.dataUpdatedAt} failing={board.isError} />
@@ -124,7 +124,7 @@ export function LeaderboardScreen() {
           <LeaderboardTable rows={rows} sort={sort} onSort={onSort} accountId={accountId} />
         )}
         <p className="border-t border-border px-3 py-2 text-label text-tertiary">
-          Read from <span className="font-mono">get_leaderboard</span>. Ranks the {LEADERBOARD_MAX} most recently active
+          Onchain trading history. Ranks the {LEADERBOARD_MAX} most recently active
           traders; PnL includes trading fees, borrow fees and settled funding, not open positions.
         </p>
       </section>

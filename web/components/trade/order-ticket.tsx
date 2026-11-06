@@ -17,7 +17,7 @@ import { toNearActionError } from "@/lib/near/errors";
 import { formatPrice, formatUnits, formatUsd, formatUsdc, parseUnits, parseUsdc, PRICE_DECIMALS } from "@/lib/near/format";
 import type { MarginMode, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
-import { marketStatus } from "@/lib/near/market-status";
+import { marketDisplayStatus, marketLimitLabel, marketStatus } from "@/lib/near/market-status";
 import type { TradeStep } from "./onboarding";
 import { borrowRatePercent, entryTriggered, MIN_POSITION_MARGIN, previewOrder, type EntryKind } from "./order-math";
 import { BracketFields, EMPTY_BRACKET, MarginModeControl, readBracket, TicketInput, type BracketDraft } from "./ticket-controls";
@@ -172,6 +172,7 @@ export function OrderTicket({
   const entryPrice = isMarket ? market.price : (trigger ?? 0n);
   const preview = previewOrder(market, side, margin ?? 0n, leverage, entryPrice);
   const status = marketStatus(market, nowMs);
+  const displayStatus = marketDisplayStatus(market, nowMs);
   const freeMargin = account?.margin ?? 0n;
   const maxSize = freeMargin * lev;
   const trading = step === "trade";
@@ -223,7 +224,7 @@ export function OrderTicket({
   }
 
   const ready =
-    Boolean(margin) && !sizeError && !bracketsInvalid && (isMarket ? status.open : trigger !== null && trigger > 0n);
+    status.open && Boolean(margin) && !sizeError && !bracketsInvalid && (isMarket || (trigger !== null && trigger > 0n));
 
   async function submit() {
     if (!margin || !ready) return;
@@ -312,6 +313,7 @@ export function OrderTicket({
       aria-label="Open a position"
       className={cn("flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3", className)}
     >
+      <fieldset disabled={!status.open} aria-describedby={!status.open ? "entry-unavailable" : undefined} className="contents">
       <div className="grid grid-cols-2 gap-2">
         <MarginModeControl
           mode={marginMode}
@@ -455,6 +457,7 @@ export function OrderTicket({
           }}
         />
       </div>
+      </fieldset>
 
       {action}
       {step !== null && step !== "trade" ? (
@@ -464,12 +467,13 @@ export function OrderTicket({
       ) : null}
       {!isMarket || bracketsOn ? keeperNote : null}
 
-      {isMarket && !status.open ? (
-        <FieldMessage tone="error">{status.label}: this market takes no new positions right now.</FieldMessage>
-      ) : null}
-      {!isMarket && !status.open ? (
-        <p className="text-label text-warning">
-          {status.label}: the order waits onchain, but it is refused at execution while the market stays closed.
+      {!status.open ? (
+        <FieldMessage tone="error">
+          <span id="entry-unavailable" data-testid="entry-unavailable">{status.label}: order entry is disabled. Choose another market or wait for capacity to recover. Existing positions can still be closed.</span>
+        </FieldMessage>
+      ) : !displayStatus.open ? (
+        <p data-testid="close-only-notice" className="text-label text-warning">
+          Close-only at the stored price. Submitting an order fetches a fresh price; entry requires a price no older than 30 seconds.
         </p>
       ) : null}
       {refusal ? (
@@ -484,8 +488,8 @@ export function OrderTicket({
       ) : null}
       {preview.exceedsCap && preview.size > 0n ? (
         <p className="text-label text-warning">
-          This size is above what NEAR Intents can absorb on exit right now; the contract will refuse it
-          {isMarket ? "" : " unless the cap grows before the order fills"}.
+          This size exceeds the effective cap ({marketLimitLabel(market).toLowerCase()}); the contract will refuse it
+          {isMarket ? "." : " unless capacity recovers before execution."}
         </p>
       ) : null}
 
@@ -518,7 +522,7 @@ export function OrderTicket({
           {borrowRatePercent(preview.borrowRatePerHour)}
         </Row>
         <Row
-          label={<Term hint="Open interest this side can still take before the exit-liquidity cap.">Cap left ({side === "long" ? "longs" : "shorts"})</Term>}
+          label={<Term hint="Remaining open interest for this side under both the measured exit-liquidity cap and the vault's available capital.">Cap left ({side === "long" ? "longs" : "shorts"}) · {marketLimitLabel(market)}</Term>}
           tone={preview.exceedsCap ? "warning" : undefined}
         >
           {formatUsd(preview.capRoom, { maxFractionDigits: 0 })}
