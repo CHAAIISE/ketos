@@ -84,7 +84,7 @@ Other checks: `pnpm -r typecheck`, `pnpm -r test`, `pnpm contracts:test`.
 
 - **Testnet only, unaudited.** Faucet USDC is not real. Activity on the hosted app comes from our own test accounts.
 - **Price availability depends on OutLayer.** Entries need a ≤15–30 s observation; during provider slowdowns markets show stale prices and refuse entries rather than trading on old marks.
-- **Trusted keeper, single machine.** It reports depth honestly by assumption (the contract checks shape, freshness and caps, not solver quotes) and runs on one Mac.
+- **Trusted keeper, single instance.** It reports depth honestly by assumption (the contract checks shape, freshness and caps, not solver quotes). Since November 14 it runs as one Render background worker ([`render.yaml`](render.yaml)) with a restricted function-call key; OutLayer credit and keeper gas are finite testnet budgets topped up by the operator.
 - **Known contract risks from our internal review (November 14), not fixed before submission:**
   - every vault read scans all open positions, so a flood of tiny positions can exhaust gas for LP deposits and opens;
   - hedge inventory is valued at the oracle mark, and the thin project-funded Ref pool can be pushed to inflate Core NAV;
