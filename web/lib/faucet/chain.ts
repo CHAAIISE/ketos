@@ -98,6 +98,14 @@ export function faucetChain(config: FaucetServerConfig): FaucetChain {
         if (/AccessKeyDoesNotExist|InvalidAccessKey|SignerDoesNotExist|InvalidSignature/.test(text)) {
           throw new FaucetError(503, "FAUCET_KEY_INVALID", "The faucet signer is unavailable. Funding was not authorized.");
         }
+        // Read the already-broadcast transaction by hash; never sign or send a replacement.
+        for (let attempt = 0; attempt < 5; attempt++) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+          try {
+            const outcome = await provider.viewTransactionStatusWithReceipts({ txHash, accountId: config.faucetId, waitUntil: "FINAL" });
+            return { outcome, txHash };
+          } catch { /* Not yet indexed or RPC unavailable: keep reading until the bound. */ }
+        }
         throw new FaucetError(502, "FAUCET_TX_UNCERTAIN",
           "The funding transaction was submitted but its result is unconfirmed. Check the transaction before retrying.",
           undefined, { tx_hash: txHash });

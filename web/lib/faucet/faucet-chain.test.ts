@@ -4,7 +4,7 @@ import { FaucetError, LOW_BALANCE, NEAR } from "./service";
 
 const rpc = vi.hoisted(() => ({
   viewAccount: vi.fn(), viewAccessKey: vi.fn(), getNetworkId: vi.fn(), callFunction: vi.fn(),
-  sendTransactionUntil: vi.fn(), createSignedTransaction: vi.fn(), fromSecretKey: vi.fn(),
+  sendTransactionUntil: vi.fn(), viewTransactionStatusWithReceipts: vi.fn(), createSignedTransaction: vi.fn(), fromSecretKey: vi.fn(),
 }));
 vi.mock("near-api-js", () => ({
   JsonRpcProvider: class {
@@ -13,6 +13,7 @@ vi.mock("near-api-js", () => ({
     getNetworkId = rpc.getNetworkId;
     callFunction = rpc.callFunction;
     sendTransactionUntil = rpc.sendTransactionUntil;
+    viewTransactionStatusWithReceipts = rpc.viewTransactionStatusWithReceipts;
   },
   Account: class { createSignedTransaction = rpc.createSignedTransaction; },
   KeyPairSigner: { fromSecretKey: rpc.fromSecretKey },
@@ -116,15 +117,34 @@ describe("real account availability and authorized signer checks", () => {
 });
 
 describe("single-submit faucet signer", () => {
-  it("waits for FINAL and exposes a locally known transaction hash on an uncertain send without retrying", async () => {
+  it("reads an uncertain send by its hash, then reports it unconfirmed without resubmitting", async () => {
+    vi.useFakeTimers();
     rpc.sendTransactionUntil.mockRejectedValueOnce(new Error(`timeout ${config.privateKey}`));
+    rpc.viewTransactionStatusWithReceipts.mockRejectedValue(new Error("UNKNOWN_TRANSACTION"));
     const chain = faucetChain(config);
-    let failure: unknown;
-    try { await chain.claim("zero.testnet", "a".repeat(64), NEAR / 2n); } catch (error) { failure = error; }
+    const claim = chain.claim("zero.testnet", "a".repeat(64), NEAR / 2n).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const failure = await claim;
+    vi.useRealTimers();
     expect(failure).toMatchObject({ status: 502, code: "FAUCET_TX_UNCERTAIN", evidence: { tx_hash: "precomputed-signed-hash" } });
     expect(String(failure)).not.toContain(config.privateKey);
     expect(rpc.sendTransactionUntil).toHaveBeenCalledTimes(1);
     expect(rpc.sendTransactionUntil.mock.calls[0][1]).toBe("FINAL");
     expect(rpc.createSignedTransaction).toHaveBeenCalledTimes(1);
+    expect(rpc.viewTransactionStatusWithReceipts).toHaveBeenCalledTimes(5);
+  });
+
+  it("returns the confirmed outcome when the broadcast transaction is found by hash", async () => {
+    vi.useFakeTimers();
+    const final = { status: { SuccessValue: "" }, receipts_outcome: [] };
+    rpc.sendTransactionUntil.mockRejectedValueOnce(new Error("Public endpoint rate limit"));
+    rpc.viewTransactionStatusWithReceipts.mockRejectedValueOnce(new Error("UNKNOWN_TRANSACTION")).mockResolvedValueOnce(final);
+    const claim = faucetChain(config).claim("zero.testnet", "a".repeat(64), 0n);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await expect(claim).resolves.toEqual({ outcome: final, txHash: "precomputed-signed-hash" });
+    vi.useRealTimers();
+    expect(rpc.viewTransactionStatusWithReceipts).toHaveBeenCalledWith({
+      txHash: "precomputed-signed-hash", accountId: config.faucetId, waitUntil: "FINAL" });
+    expect(rpc.sendTransactionUntil).toHaveBeenCalledTimes(1);
   });
 });
