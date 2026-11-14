@@ -94,29 +94,30 @@ describe("signed envelope verification", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("waits for queued fresh browser quotes but rejects stale observations delivered later", async () => {
+  it("polls a queued browser job, reuses only a just-observed batch, and rejects stale deliveries", async () => {
     vi.spyOn(JsonRpcProvider.prototype, "callFunction").mockResolvedValue(publicKey);
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), ms);
-      return controller.signal;
+    const callId = "3a7e3ff9-0dce-4568-b477-e34204d7f60e";
+    let prices = envelope(["ETH"], -90_000);
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!body.callId || Date.now() < NOW + 90_000) return Response.json({ status: "pending", callId }, { status: 202 });
+      return Response.json(prices);
     });
-    let prices = envelope(["ETH"], -20_000);
-    vi.stubGlobal("fetch", vi.fn((_input: unknown, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-      const timer = setTimeout(() => resolve(Response.json(prices)), 20_000);
-      init?.signal?.addEventListener("abort", () => {
-        clearTimeout(timer);
-        reject(new DOMException("Timed out", "AbortError"));
-      }, { once: true });
-    })));
+    vi.stubGlobal("fetch", fetchMock);
     const request = { kind: "markets" as const, markets: ["ETH"] };
     const fresh = signedPricesFor(contracts, request);
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(91_000);
     expect(await fresh).toEqual(prices);
-    prices = envelope();
+    expect(fetchMock.mock.calls.filter(([, init]) => !JSON.parse(String(init?.body)).callId)).toHaveLength(1);
+    const calls = fetchMock.mock.calls.length;
+    expect(await signedPricesFor(contracts, request)).toEqual(prices);
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    vi.setSystemTime(Date.now() + 8_000);
+    prices = envelope(["ETH"], -60_000);
     const stale = signedPricesFor(contracts, request);
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(await stale).toBeNull();
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(calls);
   });
 });
 
