@@ -131,14 +131,14 @@ export type SignedPriceLoader = (assets: string[], signer: string) => Promise<Si
 /** Upper bound for one browser acquisition, including provider queueing. */
 export const SIGNED_PRICE_WAIT_MS = 180_000;
 /** A reviewed batch is reused only while it leaves time to sign inside the contract's 15 s window. */
-const REUSE_MAX_AGE_MS = 8_000;
+export const SIGNED_PRICE_REUSE_MS = 8_000;
 const pendingSchema = z.object({ status: z.literal("pending"), callId: z.string() });
 const recent = new Map<string, SignedPrices>();
 
 const fetchSignedPrices: SignedPriceLoader = async (assets, signer) => {
   const key = JSON.stringify([signer, assets]);
   const reused = recent.get(key);
-  if (reused && verifySignedPrices(reused, signer, assets, Date.now() + SIGNED_PRICE_MAX_AGE_MS - REUSE_MAX_AGE_MS)) {
+  if (reused && verifySignedPrices(reused, signer, assets, Date.now() + SIGNED_PRICE_MAX_AGE_MS - SIGNED_PRICE_REUSE_MS)) {
     return reused;
   }
   recent.delete(key);

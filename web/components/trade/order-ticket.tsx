@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { useNow } from "@/components/landing/live-time";
+import { useNow, useSecondClock } from "@/components/landing/live-time";
 import { FundButton, useFundingDialog } from "@/components/app/funding";
 import { Skeleton } from "@/components/app/states";
 import { useTxToast } from "@/components/app/tx-toast";
@@ -16,7 +16,7 @@ import { toNearActionError } from "@/lib/near/errors";
 import { formatPrice, formatUnits, formatUsd, formatUsdc, parseUnits, parseUsdc, PRICE_DECIMALS } from "@/lib/near/format";
 import { entryFundingRequired, executionSlots, maxEntryMargin } from "@/lib/near/order-funding";
 import { executionLimits } from "@/lib/near/execution";
-import { signedPriceObservation, signedPricesFor } from "@/lib/near/signed-prices";
+import { SIGNED_PRICE_REUSE_MS, signedPriceObservation, signedPricesFor } from "@/lib/near/signed-prices";
 import type { MarginMode, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { isPriceFresh, marketDisplayStatus, marketLimitLabel, marketStatus } from "@/lib/near/market-status";
@@ -64,7 +64,13 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
   const [orderLifetimeMs, setOrderLifetimeMs] = useState(7 * 86_400_000);
   const [reviewedPrice, setReviewedPrice] = useState<Pick<Market, "id" | "price" | "price_timestamp_ms"> | null>(null);
   const [reviewingPrice, setReviewingPrice] = useState(false);
+  const [busySince, setBusySince] = useState<number | null>(null);
   const [priceError, setPriceError] = useState<string | null>(null);
+  const clock = useSecondClock();
+  const waitedS = busySince !== null && clock !== null ? Math.max(0, Math.round((clock - busySince) / 1_000)) : 0;
+  // A just-reviewed signed batch is reused only briefly so the contract still receives it fresh.
+  const confirmLeftS = reviewedPrice?.id === market.id && clock !== null
+    ? Math.ceil((reviewedPrice.price_timestamp_ms + SIGNED_PRICE_REUSE_MS - clock) / 1_000) : 0;
   const reference = reviewedPrice?.id === market.id && reviewedPrice.price_timestamp_ms > market.price_timestamp_ms
     ? reviewedPrice : market;
   const referenceFresh = nowMs > 0 && isPriceFresh(reference, nowMs) && nowMs - reference.price_timestamp_ms <= 30_000;
@@ -124,6 +130,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
   async function refreshPrice() {
     if (reviewingPrice) return;
     setReviewingPrice(true);
+    setBusySince(Date.now());
     setPriceError(null);
     try {
       const signed = await signedPricesFor(config, { kind: "markets", markets: [market.id] });
@@ -137,6 +144,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
       setPriceError("Price review failed. No trade was submitted. Try again.");
     } finally {
       setReviewingPrice(false);
+      setBusySince(null);
     }
   }
   async function submit() {
@@ -155,21 +163,30 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
       stopLoss: sl.price ? executionLimits(sl.price, side, true, toleranceBps, restingExpiry) : null,
     } : undefined;
     const base = { marketId: market.id, side, margin, leverage, marginMode, brackets, fundingSource, execution, bracketBounds };
-    const sideLabel = side === "long" ? "Long" : "Short";
-    const done = isMarket || trigger === null
-      ? await track(() => open.mutateAsync(base), {
-          pending: `Opening ${side} ${market.id} ${leverage}×…`,
-          success: `${sideLabel} ${market.id} ${leverage}× opened · ${formatUsd(preview.size)}`, errorInline: true,
-        })
-      : await track(() => place.mutateAsync({ ...base, kind, triggerPrice: trigger }), {
-          pending: `Placing ${KIND_LABEL[kind].toLowerCase()} ${side} ${market.id}…`,
-          success: `${KIND_LABEL[kind]} ${sideLabel.toLowerCase()} ${market.id} placed at ${formatPrice(trigger)}`,
-          successDescription: () => fundingSource === "wallet"
-            ? `${formatUsd(required)} reserved, including keeper rewards.`
-            : `${formatUsd(entryFundingRequired(margin, leverage, 1))} reserved. Any TP/SL rewards need free margin at fill.`, errorInline: true,
-        });
-    if (done) { setSizeInput(""); setTakeProfit(EMPTY_BRACKET); setStopLoss(EMPTY_BRACKET); }
+    setBusySince(Date.now());
+    try {
+      const done = isMarket || trigger === null
+        ? await track(() => open.mutateAsync(base), {
+            pending: `Opening ${side} ${market.id} ${leverage}×…`,
+            success: `${sideLabel} ${market.id} ${leverage}× opened · ${formatUsd(preview.size)}`, errorInline: true,
+          })
+        : await track(() => place.mutateAsync({ ...base, kind, triggerPrice: trigger }), {
+            pending: `Placing ${KIND_LABEL[kind].toLowerCase()} ${side} ${market.id}…`,
+            success: `${KIND_LABEL[kind]} ${sideLabel.toLowerCase()} ${market.id} placed at ${formatPrice(trigger)}`,
+            successDescription: () => fundingSource === "wallet"
+              ? `${formatUsd(required)} reserved, including keeper rewards.`
+              : `${formatUsd(entryFundingRequired(margin, leverage, 1))} reserved. Any TP/SL rewards need free margin at fill.`, errorInline: true,
+          });
+      if (done) { setSizeInput(""); setTakeProfit(EMPTY_BRACKET); setStopLoss(EMPTY_BRACKET); }
+    } finally {
+      setBusySince(null);
+    }
   }
+
+  const sideLabel = side === "long" ? "Long" : "Short";
+  const reviewed = isMarket && reference === reviewedPrice;
+  // An expired review would make submission wait for another signed price; ask for a new one explicitly.
+  const needsReview = isMarket && (!referenceFresh || (reviewed && confirmLeftS <= 0));
 
   let action: ReactNode;
   if (step === null || (step !== "connect" && !account)) action = <Skeleton className="h-10 w-full" />;
@@ -181,13 +198,15 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
     {(connectError ?? wallet.error) ? <FieldMessage tone="error">{connectError ?? wallet.error?.message}</FieldMessage> : null}
   </>;
   else if (step === "fund" && account) action = <FundButton account={account} prominent className="h-10 w-full" />;
-  else if (isMarket && !referenceFresh) action = <Button data-primary="" data-testid="review-entry-price" className="h-10 w-full"
+  else if (needsReview) action = <Button data-primary="" data-testid="review-entry-price" className="h-10 w-full"
     disabled={!status.open || reviewingPrice || mutation.isPending} onClick={() => void refreshPrice()}>
-    {reviewingPrice ? "Observing price… (up to 3 min)" : "Review fresh price"}
+    {reviewingPrice ? `Getting signed price… ${waitedS} s` : `${sideLabel} · get signed price`}
   </Button>;
   else action = <Button data-primary="" data-testid="open-position" variant={side} className="h-10 w-full"
     disabled={!ready || mutation.isPending} onClick={submit}>
-    {mutation.isPending ? "Placing order…" : `${side === "long" ? "Long" : "Short"}${isMarket ? "" : ` · ${KIND_LABEL[kind]}`}`}
+    {mutation.isPending ? `Placing order… ${waitedS} s`
+      : reviewed ? `Confirm ${sideLabel} · ${confirmLeftS} s`
+      : `${sideLabel}${isMarket ? "" : ` · ${KIND_LABEL[kind]}`}`}
   </Button>;
 
   return <section id="order-ticket" tabIndex={-1} aria-label="Open a position" className={cn("flex min-h-0 min-w-0 scroll-mt-4 flex-col gap-2 rounded-lg border border-border bg-card p-3 focus-visible:outline-2 focus-visible:outline-ring lg:min-h-fit", className)}>
@@ -293,7 +312,9 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
     {!isMarket || bracketsOn ? <p data-testid="keeper-note" className="text-label text-tertiary">Bounded execution · finite expiry. Price gaps can reject TP/SL; a fill is never guaranteed.</p>
       : <p className="text-label text-tertiary">Expires in 2 minutes · fees excluded from price tolerance.</p>}
     {!status.open ? <FieldMessage tone="error" role="status"><span id="entry-unavailable" data-testid="entry-unavailable">{status.label}: order entry is disabled. Choose another market or wait for capacity to recover. Existing positions can still be closed.</span></FieldMessage>
-      : isMarket && !referenceFresh ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">Review a fresh signed price before placing this market order. The request is sponsored; it does not submit a trade.</p>
+      : reviewingPrice ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">OutLayer is producing a TEE-signed price for this order: usually seconds, up to 3 minutes when its testnet queue is busy. Nothing is submitted yet.</p>
+      : reviewed && confirmLeftS > 0 ? <p role="status" data-testid="close-only-notice" className="text-label text-success">Signed price ready. Confirm within {confirmLeftS} s so the contract receives it inside its 15-second freshness window.</p>
+      : needsReview ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">Each market order needs a freshly signed price. The request is sponsored and submits nothing; you confirm the trade once it arrives.</p>
       : !displayStatus.open ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">Execution requires a fresh observation no older than 30 seconds.</p> : null}
     {priceError && !referenceFresh ? <FieldMessage tone="error" role="status"><span data-testid="price-review-error">{priceError}</span></FieldMessage> : null}
     {refusal ? <div role="status" data-testid="order-error" className="flex flex-col gap-2 rounded-md border border-destructive/50 p-3">

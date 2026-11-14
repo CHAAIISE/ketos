@@ -38,6 +38,16 @@ export function useNow(): number {
   );
 }
 
+function subscribeSeconds(onTick: () => void) {
+  const timer = setInterval(onTick, 1_000);
+  return () => clearInterval(timer);
+}
+
+/** Wall clock in whole seconds (as ms), for visible countdowns; null while hydrating. */
+export function useSecondClock(): number | null {
+  return useSyncExternalStore(subscribeSeconds, () => Math.floor(Date.now() / 1_000) * 1_000, () => null);
+}
+
 const utcTime = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   minute: "2-digit",

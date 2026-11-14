@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useSyncExternalStore, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Popover } from "@base-ui/react/popover";
 import { ChevronDown } from "lucide-react";
 import { FlashValue } from "@/components/landing/flash-value";
-import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
+import { formatAge, formatUtc, useNow, useSecondClock } from "@/components/landing/live-time";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -55,20 +55,11 @@ function Volume24h({ market }: { market: MarketId }) {
   </span>;
 }
 
-function subscribeSeconds(onTick: () => void) {
-  const timer = setInterval(onTick, 1_000);
-  return () => clearInterval(timer);
-}
-
 /** Time left in the current UTC hour as "mm:ss"; null while hydrating. */
 function useHourCountdown(): string | null {
-  const second = useSyncExternalStore(
-    subscribeSeconds,
-    () => Math.floor(Date.now() / 1_000),
-    () => null,
-  );
-  if (second === null) return null;
-  const left = 3_600 - (second % 3_600);
+  const clock = useSecondClock();
+  if (clock === null) return null;
+  const left = 3_600 - ((clock / 1_000) % 3_600);
   return `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
 }
 
