@@ -15,7 +15,7 @@ import { useOpenPosition, usePlaceOrder } from "@/hooks/use-ketos-mutations";
 import { toNearActionError } from "@/lib/near/errors";
 import { formatPrice, formatUnits, formatUsd, formatUsdc, parseUnits, parseUsdc, PRICE_DECIMALS } from "@/lib/near/format";
 import { entryFundingRequired, executionSlots, maxEntryMargin } from "@/lib/near/order-funding";
-import { executionLimits } from "@/lib/near/execution";
+import { executionLimits, IMMEDIATE_EXECUTION_MS } from "@/lib/near/execution";
 import { SIGNED_PRICE_REUSE_MS, signedPriceObservation, signedPricesFor } from "@/lib/near/signed-prices";
 import type { MarginMode, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
@@ -84,7 +84,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
   const trigger = isMarket ? null : parseUnits(triggerInput, PRICE_DECIMALS);
   const entryPrice = isMarket ? (referenceFresh ? reference.price : 0n) : (trigger ?? 0n);
   const boundPreview = entryPrice > 0n
-    ? executionLimits(entryPrice, side, false, kind === "limit" ? 0 : toleranceBps, nowMs + 120_000).limitPrice
+    ? executionLimits(entryPrice, side, false, kind === "limit" ? 0 : toleranceBps, nowMs + IMMEDIATE_EXECUTION_MS).limitPrice
     : null;
   const size = (margin ?? 0n) * lev;
   const samples = depth.data?.history.at(-1)?.samples;
@@ -157,7 +157,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
     }
     setPriceError(null);
     const execution = executionLimits(entryPrice, side, false, kind === "limit" ? 0 : toleranceBps,
-      isMarket ? submittedAt + 120_000 : restingExpiry);
+      isMarket ? submittedAt + IMMEDIATE_EXECUTION_MS : restingExpiry);
     const bracketBounds = brackets ? {
       takeProfit: tp.price ? executionLimits(tp.price, side, true, 0, restingExpiry) : null,
       stopLoss: sl.price ? executionLimits(sl.price, side, true, toleranceBps, restingExpiry) : null,
@@ -250,8 +250,12 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
         </label>
         <input type="range" min={1} max={market.max_leverage} step={1} value={leverage} aria-label="Leverage slider"
           onChange={(event) => { setLeverageChoice(Number(event.target.value)); resetResult(); }} className="h-5 w-full accent-foreground" />
-        <div className="flex justify-between text-label text-tertiary">
-          {[...new Set([1, ...[2, 5, 10].filter((n) => n < market.max_leverage), market.max_leverage])].map((n) => <button type="button" key={n} onClick={() => { setLeverageChoice(n); resetResult(); }} className="rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">{n}×</button>)}
+        {/* Presets sit where the linear slider puts them; the inset matches the thumb's travel. */}
+        <div className="relative mx-2 h-4 text-label text-tertiary">
+          {[...new Set([1, ...[2, 5, 10].filter((n) => n < market.max_leverage), market.max_leverage])].map((n) => <button type="button" key={n}
+            onClick={() => { setLeverageChoice(n); resetResult(); }}
+            style={{ left: `${market.max_leverage > 1 ? ((n - 1) / (market.max_leverage - 1)) * 100 : 0}%` }}
+            className={cn("absolute -translate-x-1/2 rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", n === leverage && "text-foreground")}>{n}×</button>)}
         </div>
       </div>
       <dl><Row label={<Term hint="Estimated from the reviewed entry reference and opening fees. Cross liquidation depends on the whole pool, not one price.">Est. Liq. Price</Term>}>
@@ -298,7 +302,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
       </div>
     </fieldset>
     <dl className="flex flex-col gap-1">
-      <Row label={<Term hint="Onchain maximum for buys or minimum for sells, excluding fees. Limit orders never fill worse than their limit. A market authorization expires two minutes after submission.">Execution {side === "long" ? "ceiling" : "floor"}</Term>}>{boundPreview === null ? "—" : formatPrice(boundPreview)}</Row>
+      <Row label={<Term hint="Onchain maximum for buys or minimum for sells, excluding fees. Limit orders never fill worse than their limit. A market authorization expires five minutes after submission.">Execution {side === "long" ? "ceiling" : "floor"}</Term>}>{boundPreview === null ? "—" : formatPrice(boundPreview)}</Row>
       <Row label="Order Value">{formatUsd(preview.size)}</Row>
       <Row label="Margin Required">{formatUsd(margin ?? 0n)}</Row>
       <Row label="Est. Entry Price">{entryPrice > 0n ? formatPrice(entryPrice) : "—"}</Row>
@@ -310,7 +314,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
       : step === "fund" ? <p data-testid="step-hint" className="text-label text-muted-foreground">Get 1,000 USDC plus gas if needed. Funding needs no wallet signature.</p>
       : <p className="text-label text-tertiary">{fundingSource === "wallet" ? "One confirmation · USDC moves directly from your wallet. Unused funds return automatically." : "One confirmation · uses your existing Ketos margin."}</p>}
     {!isMarket || bracketsOn ? <p data-testid="keeper-note" className="text-label text-tertiary">Bounded execution · finite expiry. Price gaps can reject TP/SL; a fill is never guaranteed.</p>
-      : <p className="text-label text-tertiary">Expires in 2 minutes · fees excluded from price tolerance.</p>}
+      : <p className="text-label text-tertiary">Expires in 5 minutes · fees excluded from price tolerance.</p>}
     {!status.open ? <FieldMessage tone="error" role="status"><span id="entry-unavailable" data-testid="entry-unavailable">{status.label}: order entry is disabled. Choose another market or wait for capacity to recover. Existing positions can still be closed.</span></FieldMessage>
       : reviewingPrice ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">OutLayer is producing a TEE-signed price for this order: usually seconds, up to 3 minutes when its testnet queue is busy. Nothing is submitted yet.</p>
       : reviewed && confirmLeftS > 0 ? <p role="status" data-testid="close-only-notice" className="text-label text-success">Signed price ready. Confirm within {confirmLeftS} s so the contract receives it inside its 15-second freshness window.</p>

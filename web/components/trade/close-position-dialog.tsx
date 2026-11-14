@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { useClosePosition, useReducePosition } from "@/hooks/use-ketos-mutations";
 import { useDepth, useMarkets } from "@/hooks/use-ketos-queries";
-import { executionLimits } from "@/lib/near/execution";
+import { executionLimits, IMMEDIATE_EXECUTION_MS } from "@/lib/near/execution";
 import { formatPrice, formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
 import { executionReward } from "@/lib/near/order-funding";
 import type { Position } from "@/lib/near/types";
@@ -44,7 +44,7 @@ export function ClosePositionDialog({ position, onClose }: { position: Position;
   const submit = async () => {
     if (error || pending || !market || !depth.isSuccess) return;
     const common = { positionId: position.id, toWallet: !keepOnKetos,
-      execution: executionLimits(position.mark_price, position.side, true, tolerance, Date.now() + 120_000) };
+      execution: executionLimits(position.mark_price, position.side, true, tolerance, Date.now() + IMMEDIATE_EXECUTION_MS) };
     const result = await track(() => full ? close.mutateAsync(common) : reduce.mutateAsync({
       ...common, expectedSize: position.size, size, marginMode: position.margin_mode,
     }), {
@@ -78,7 +78,7 @@ export function ClosePositionDialog({ position, onClose }: { position: Position;
       <label className="flex items-center gap-2 text-label text-muted-foreground"><input type="checkbox" checked={keepOnKetos} disabled={pending}
         onChange={(event) => setKeepOnKetos(event.target.checked)} />Keep on Ketos</label>
       <p className="text-label text-muted-foreground">{cross ? "Cross settlement stays behind surviving cross positions; only free funds can return to your wallet. " : ""}
-        {full ? "Both exits are cancelled." : "TP/SL prices and expiry stay unchanged; their rewards resize with the remaining position."} Estimates use the reviewed mark. Execution requires a fresh price within your limit and expires after two minutes.</p>
+        {full ? "Both exits are cancelled." : "TP/SL prices and expiry stay unchanged; their rewards resize with the remaining position."} Estimates use the reviewed mark. Execution requires a fresh price within your limit and expires after five minutes.</p>
       {error ? <p role="alert" className="text-label text-destructive">{error}</p> : null}
       <Button type="submit" disabled={!!error || pending || !market || !depth.isSuccess}>{pending ? "Confirming…" : full ? "Confirm close" : "Confirm reduction"}</Button>
     </form>

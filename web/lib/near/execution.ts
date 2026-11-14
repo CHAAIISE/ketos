@@ -11,6 +11,9 @@ export interface BracketLimits {
   stopLoss?: ExecutionLimits | null;
 }
 
+/** Market entries and voluntary exits: covers a slow signed-price acquisition (≤3 min) plus wallet signing. */
+export const IMMEDIATE_EXECUTION_MS = 5 * 60_000;
+
 /** Round inward: a buy ceiling never grows and a sell floor never shrinks. */
 export function executionLimits(price: bigint, side: Side, closing: boolean, toleranceBps: number, expiresAtMs: number): ExecutionLimits {
   if (price <= 0n || !Number.isInteger(toleranceBps) || toleranceBps < 0 || toleranceBps >= 10_000) {
