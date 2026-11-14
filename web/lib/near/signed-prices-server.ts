@@ -146,3 +146,64 @@ export class SignedPriceCache {
 const cache = new SignedPriceCache();
 export const workerSignedPrices = (assets: string[], signer: string) => cache.get(assets, signer);
 export const workerSignedObservations = (assets: string[], signer: string) => cache.available(assets, signer);
+
+const CALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export type SignedPriceJob = { status: "pending"; callId: string } | { status: "completed"; prices: SignedPrices } | null;
+
+function jobResult(result: unknown, callId: string, signer: string, assets: string[]): SignedPriceJob {
+  if (!result || typeof result !== "object" || !("status" in result)) return null;
+  if (result.status === "pending") return { status: "pending", callId };
+  if (result.status !== "completed" || !("output" in result)) return null;
+  const output: unknown = typeof result.output === "string" ? JSON.parse(result.output) : result.output;
+  const prices = verifySignedObservations(output, signer, assets);
+  return prices?.assets.length === assets.length ? { status: "completed", prices: prices.signedPrices } : null;
+}
+
+/**
+ * Starts one paid asynchronous execution and returns its call ID immediately, so a
+ * browser can wait out provider queueing without a serverless deadline buying a
+ * replacement job. Freshness is still enforced on the returned observation.
+ */
+export async function submitSignedPriceJob(input: unknown, signer: string): Promise<SignedPriceJob> {
+  const assets = signedPriceAssets(input);
+  const paymentKey = process.env.OUTLAYER_PAYMENT_KEY?.trim();
+  if (!assets || !paymentKey) return null;
+  try {
+    const response = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Payment-Key": paymentKey },
+      signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({
+        async: true,
+        input: { command: "signed_prices", assets },
+        version_key: workerDeployment.wasm_sha256,
+        secrets_ref: { profile: "price-signing", account_id: "ketos.testnet" },
+      }),
+    });
+    if (!response.ok) return null;
+    const result: unknown = await response.json();
+    if (!result || typeof result !== "object" || !("call_id" in result) || typeof result.call_id !== "string") return null;
+    return CALL_ID.test(result.call_id) ? jobResult(result, result.call_id, signer, assets) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads an existing execution; never submits or pays for another one. */
+export async function pollSignedPriceJob(callId: unknown, input: unknown, signer: string): Promise<SignedPriceJob> {
+  const assets = signedPriceAssets(input);
+  const paymentKey = process.env.OUTLAYER_PAYMENT_KEY?.trim();
+  if (!assets || !paymentKey || typeof callId !== "string" || !CALL_ID.test(callId)) return null;
+  try {
+    const response = await fetch(`${API_URL}/calls/${callId}`, {
+      headers: { "X-Payment-Key": paymentKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+    // A failed lookup says nothing about the accepted job: keep waiting, never resubmit.
+    if (!response.ok) return response.status >= 500 ? { status: "pending", callId } : null;
+    return jobResult(await response.json(), callId, signer, assets);
+  } catch {
+    return { status: "pending", callId };
+  }
+}

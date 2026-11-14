@@ -128,14 +128,40 @@ async function requestedAssets(views: KetosViews, request: SignedPriceRequest): 
 
 export type SignedPriceLoader = (assets: string[], signer: string) => Promise<SignedPrices | null>;
 
-const fetchSignedPrices: SignedPriceLoader = async (assets) => {
-  const response = await fetch("/api/signed-prices", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ assets }),
-    signal: AbortSignal.timeout(50_000),
-  });
-  return response.ok ? envelopeSchema.parse(await response.json()) : null;
+/** Upper bound for one browser acquisition, including provider queueing. */
+export const SIGNED_PRICE_WAIT_MS = 180_000;
+/** A reviewed batch is reused only while it leaves time to sign inside the contract's 15 s window. */
+const REUSE_MAX_AGE_MS = 8_000;
+const pendingSchema = z.object({ status: z.literal("pending"), callId: z.string() });
+const recent = new Map<string, SignedPrices>();
+
+const fetchSignedPrices: SignedPriceLoader = async (assets, signer) => {
+  const key = JSON.stringify([signer, assets]);
+  const reused = recent.get(key);
+  if (reused && verifySignedPrices(reused, signer, assets, Date.now() + SIGNED_PRICE_MAX_AGE_MS - REUSE_MAX_AGE_MS)) {
+    return reused;
+  }
+  recent.delete(key);
+  const deadline = Date.now() + SIGNED_PRICE_WAIT_MS;
+  let callId: string | undefined;
+  while (Date.now() < deadline) {
+    const response = await fetch("/api/signed-prices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(callId ? { assets, callId } : { assets }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status === 202) {
+      callId = pendingSchema.parse(await response.json()).callId;
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+      continue;
+    }
+    if (!response.ok) return null;
+    const prices = envelopeSchema.parse(await response.json());
+    recent.set(key, prices);
+    return prices;
+  }
+  return null;
 };
 
 /** Missing signer, unsupported sets, and worker failures never prevent the funded T51 action. */

@@ -183,7 +183,7 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
   else if (step === "fund" && account) action = <FundButton account={account} prominent className="h-10 w-full" />;
   else if (isMarket && !referenceFresh) action = <Button data-primary="" data-testid="review-entry-price" className="h-10 w-full"
     disabled={!status.open || reviewingPrice || mutation.isPending} onClick={() => void refreshPrice()}>
-    {reviewingPrice ? "Observing price…" : "Review fresh price"}
+    {reviewingPrice ? "Observing price… (up to 3 min)" : "Review fresh price"}
   </Button>;
   else action = <Button data-primary="" data-testid="open-position" variant={side} className="h-10 w-full"
     disabled={!ready || mutation.isPending} onClick={submit}>
