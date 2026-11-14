@@ -1,0 +1,31 @@
+{
+  "network": "testnet",
+  "status": "integrated_testnet_lifecycle_verified",
+  "market": "NEAR",
+  "controller": "ketos.testnet",
+  "usdc": "usdc.ketos.testnet",
+  "config": {
+    "custody_id": "ketos-hedge-2951de72.testnet",
+    "exchange_id": "ref-finance-101.testnet",
+    "wrapped_near_id": "wrap.testnet",
+    "pool_id": 2954
+  },
+  "wrapped_near_code_hash": "DsbyUrKaSJAT91Pewfi71QExPLBooDp1z4sL9GUDhNHa",
+  "expected_custody_code_hash": "SphwXmbNtfqDYTFvtuPY8X1DbTJ6ZC4HTqsDZH2AJjg",
+  "custody_deployment_transaction": "AcQ15RQAyDBsFHPqdgxVHHYn86PNhAXBd2PqfjCqMNiY",
+  "experiment_lp_owner": "ketos-dev.testnet",
+  "controller_migration_transaction": "Ud7h6qCUSG91jyfKuhdwAYQZnW3ZytwMfms7gFC6KP2",
+  "acceptance": {
+    "completed_at": "2026-11-12T14:07:13.113Z",
+    "buy_transaction": "5Vmvt2VidkipJsyAHJGUs5Eqwzkf3dghXN2N4aX2hH2h",
+    "sell_transaction": "5rhnbrf4GafLomLMkP1iRKrgyhxhXrfGDiJyrHy3TJZp",
+    "funded_micro_usdc": "1000000",
+    "returned_micro_usdc": "998767",
+    "realized_pnl_micro_usdc": "-1233",
+    "residual_yocto_near": "0"
+  },
+  "fixture_block_hash": "3BzWLf8TzcMaNgCCDRHkDrmxjAu5s719RYk3UeMLyAeQ",
+  "exchange_code_hash": "AEAm8sQ5KYZRgnpq2CN2NhX6d8QV76iRtiDpy5Ai6zDX",
+  "pool_liquidity": "Separately funded project demo liquidity; not Ketos vault assets.",
+  "spot_limit": "No borrowed inventory or naked short. Coverage depends on actual pool liquidity."
+}

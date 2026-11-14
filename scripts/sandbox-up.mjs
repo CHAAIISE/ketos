@@ -19,7 +19,7 @@ const DEPTH_FIXTURE = root("web/e2e/fixtures/depth-2026-11-03.json");
 const USD = 1_000_000n;
 const VAULT_SEED = 10_000n * USD;
 const MARKETS = ["BTC", "ETH", "NEAR", "ZEC"];
-const KEEPER_METHODS = ["refresh_prices", "set_depth", "liquidate", "liquidate_cross", "execute_orders", "settle_funding", "snapshot_vaults"];
+const KEEPER_METHODS = ["refresh_prices", "submit_signed_prices", "set_depth", "liquidate", "liquidate_cross", "execute_orders", "settle_funding", "snapshot_vaults"];
 // Mock oracle values for sandbox trading; the first four match the 2026-11-03 feed.
 const PRICES = [
   ["nbtc.bridge.near", 7_756_150_000_000n],
@@ -183,6 +183,7 @@ async function seed(rpcUrl) {
   // 20 NEAR: the keeper tick refuses to run below 2 NEAR on the Ketos contract.
   await deploy(ids.ketos, 20, "ketos", {
     usdc_id: ids.usdc, oracle_id: ids.oracle, outlayer_id: ids.oracle, keeper_id: ids.keeper,
+    hedge_config: null,
   });
   await create(ids.lp, 10);
   await create(ids.trader, 50, traderKey.getPublicKey());

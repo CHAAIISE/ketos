@@ -63,7 +63,7 @@ function persistSecret(file: string, secret: string): void {
 
 export async function deployFaucet(): Promise<void> {
   loadEnv();
-  const rpcUrl = optionalEnv("NEAR_RPC_URL") ?? "https://test.rpc.fastnear.com";
+  const rpcUrl = optionalEnv("NEAR_RPC_URL") ?? "https://near-testnet.drpc.org";
   const provider = new JsonRpcProvider({ url: rpcUrl });
   const parentSecret = requireEnv("KETOS_PRIVATE_KEY") as KeyPairString;
   const parentPublic = KeyPair.fromString(parentSecret).getPublicKey().toString();

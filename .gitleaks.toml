@@ -1,9 +1,0 @@
-[extend]
-useDefault = true
-
-[[allowlists]]
-description = "Public testnet contract state exported with view_state: base64 storage keys and values, no credentials"
-paths = [
-  '''^contracts/tests/fixtures/ketos-v4-testnet\.json$''',
-  '''^contracts/tests/fixtures/ketos-v5-derived\.json$''',
-]

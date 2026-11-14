@@ -88,12 +88,12 @@ function main() {
     return;
   }
   if (command === "run") {
-    // Keep the launchd job alive until the one-shot child exits: StartInterval never overlaps it.
-    const result = spawnSync(argument || executable("pnpm"), ["keeper", "--once"], {
+    // launchd owns the persistent runner and restarts it after an unexpected exit.
+    const result = spawnSync(argument || executable("pnpm"), ["keeper"], {
       cwd: root,
       stdio: "inherit",
     });
-    if (result.error) throw new Error("Could not start pnpm keeper --once.");
+    if (result.error) throw new Error("Could not start pnpm keeper.");
     process.exitCode = result.status ?? 1;
     return;
   }
@@ -147,8 +147,12 @@ ${strings(["/bin/bash", script, "run", pnpm])}
     <key>PATH</key>
     <string>${xml(searchPath)}</string>
   </dict>
-  <key>StartInterval</key>
-  <integer>60</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
   <key>StandardOutPath</key>
   <string>${xml(path.join(logs, "stdout.log"))}</string>
   <key>StandardErrorPath</key>
@@ -161,7 +165,7 @@ ${strings(["/bin/bash", script, "run", pnpm])}
     if (launchctl(["print", service], true)) launchctl(["bootout", service]);
     launchctl(["bootstrap", domain, plist]);
   }
-  console.log(dryRun ? `Keeper plist generated at ${plist}; launchctl was not called.` : "Keeper launch agent installed (one tick every 60 seconds while logged in).");
+  console.log(dryRun ? `Keeper plist generated at ${plist}; launchctl was not called.` : "Keeper launch agent installed (continuous risk/depth cycles while this Mac is awake and logged in).");
 }
 
 try {

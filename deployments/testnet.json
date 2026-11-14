@@ -7,12 +7,12 @@
   "outlayer": "outlayer.testnet",
   "keeper": "keeper.ketos.testnet",
   "faucet": "faucet.ketos.testnet",
-  "rpc": "https://test.rpc.fastnear.com",
-  "schema_version": 3,
+  "rpc": "https://near-testnet.drpc.org",
+  "schema_version": 6,
   "code_hashes": {
-    "ketos": "GZedzrcB5rgvDzgkEXxWCbpvRRSw51AEJrJxiGEejsnN",
+    "ketos": "BVbduTK6nJEwYPF3KUppUmr1RyPWPgwqWkGj2uS4G9ru",
     "usdc": "ADPNqMYYidWEZhTahEomwdczWt3ukp58fa7Svx2dt9fW"
   },
   "price_signer": "ed25519:3XbNrUzS7TFJbDn94weVDnJNubGSTkEYUdqu4f67JGDD",
-  "price_signer_attestation_url": "https://testnet-api.outlayer.ai/attestations/by-call/1a689502-67f1-4c9c-91e3-696d47fd1a62"
+  "price_signer_attestation_url": "https://testnet-api.outlayer.ai/attestations/by-call/8eb09c76-1615-4710-9332-c2695dd1e201"
 }

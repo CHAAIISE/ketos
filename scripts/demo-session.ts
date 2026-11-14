@@ -9,6 +9,7 @@ import { sampleAsset, exitCapacityUsd } from "../web/lib/intents/depth.ts";
 import { getTokens } from "../web/lib/intents/oneclick.ts";
 import { WORKER_LISTING_ROUTES } from "../web/lib/intents/listing.ts";
 import { depositMarginTx, depositVaultTx, placeOrderTx, listMarketTx } from "../web/lib/near/calls.ts";
+import { executionArg, executionLimits } from "../web/lib/near/execution.ts";
 import { signedPricesFor, type SignedPriceRequest } from "../web/lib/near/signed-prices.ts";
 import { workerSignedPrices } from "../web/lib/near/signed-prices-server.ts";
 import { settleOutcome, type NearTransaction } from "../web/lib/near/tx.ts";
@@ -168,11 +169,14 @@ async function main(): Promise<void> {
     }
   }
   async function snapshot(): Promise<void> {
+    const vaults = await views.vaults();
     report.after = {
-      observed_at: new Date().toISOString(), leaderboard: await views.leaderboard("volume"), vaults: await views.vaults(),
+      observed_at: new Date().toISOString(), leaderboard: await views.leaderboard("volume"), vaults,
       accounts: await Promise.all(accountIds.map(async (id) => ({
         account_id: id, margin: await views.account(id), positions: await views.positions(id), orders: await views.orders(id),
-        history: await views.history(id), core: await views.vaultAccount("core", id), long_tail: await views.vaultAccount("long-tail", id),
+        history: await views.history(id),
+        vault_accounts: Object.fromEntries(await Promise.all(vaults.map(async (vault) =>
+          [vault.id, await views.vaultAccount(vault.id, id)]))),
       }))),
     };
     save();
@@ -181,7 +185,6 @@ async function main(): Promise<void> {
     await snapshot();
     const leaders = await views.leaderboard("volume");
     assert(accountIds.every((id) => leaders.some((row) => row.account_id === id && row.trades > 0)));
-    assert((await views.vaults()).every((vault) => vault.revenue.fees > 0n));
     assert(report.steps.filter((step) => step.status === "confirmed" && step.hash).length >= 8);
     let profitable = false;
     for (const id of accountIds) {
@@ -195,12 +198,17 @@ async function main(): Promise<void> {
     assert(profitable && report.profitable_close, "A confirmed net-profitable close is still missing");
     assert(report.listing, "A paid market listing is still missing");
     assert((await market(report.listing)).depth_measured_at_ms > 0, "Listed market has no real depth measurement");
+    const launched = await market(report.listing);
+    if (launched.isolated_only) {
+      assert((await views.vaultAccount(launched.vault_id, traders[2].accountId)).shares > 0n, "Dedicated market LP capital is missing");
+    }
     for (const vaultId of ["core", "long-tail"] as const) {
+      assert((await views.vault(vaultId)).revenue.fees > 0n, `${vaultId} has no trading fees from the demonstrated markets`);
       assert((await views.vaultAccount(vaultId, traders[2].accountId)).shares > 0n, `${vaultId} demo LP deposit is missing`);
     }
     report.completed_at = new Date().toISOString();
     save();
-    console.log("Verified: three trading accounts, both vaults earning fees, profitable close, listing and confirmed transaction hashes.");
+    console.log("Verified: three trading accounts, shared-pool trading fees, profitable close, funded listing and confirmed transaction hashes.");
   }
   if (process.argv.includes("--verify")) {
     await verifySession();
@@ -239,6 +247,11 @@ async function main(): Promise<void> {
       market_id: id, side, margin: (100n * USD).toString(), leverage: Math.min(5, m.max_leverage), margin_mode: "isolated",
       brackets: brackets ? { take_profit: (spot * 110n / 100n).toString(), stop_loss: (spot * 90n / 100n).toString() } : null,
       signed_prices: prices,
+      execution: executionArg(executionLimits(spot, side, false, 50, Date.now() + 120_000)),
+      bracket_bounds: brackets ? {
+        take_profit: executionArg(executionLimits(spot * 110n / 100n, side, true, 0, Date.now() + 7 * 86_400_000)),
+        stop_loss: executionArg(executionLimits(spot * 90n / 100n, side, true, 50, Date.now() + 7 * 86_400_000)),
+      } : null,
     });
     assert(value !== null && value !== undefined, `${label} was not applied`);
     assert((await views.positions(trader.accountId)).some((p) => p.market_id === id && p.side === side));
@@ -252,6 +265,7 @@ async function main(): Promise<void> {
     await sendTx("btc-limit", traders[2], await placeOrderTx(config, {
       kind: "limit", marketId: "BTC", side: "short", margin: 100n * USD, leverage: Math.min(3, (await market("BTC")).max_leverage),
       triggerPrice: spot * 1001n / 1000n, fundingSource: "margin",
+      execution: executionLimits(spot * 1001n / 1000n, "short", false, 0, Date.now() + 7 * 86_400_000),
     }));
     assert((await views.orders(traders[2].accountId)).some((order) => order.request.kind === "limit"));
   }
@@ -296,10 +310,21 @@ async function main(): Promise<void> {
       save();
       await call(`listing-depth:${symbol}`, keeper, "set_depth", { market_id: symbol, samples: curve.samples, measured_at_ms: at });
       await call(`listing-price:${symbol}`, traders[2], "pull_market_price", { market_id: symbol, signed_prices: await signed({ kind: "markets", markets: [symbol] }) });
-      assert((await market(symbol)).is_open);
       break;
     }
     assert(report.listing, "No unlisted supported asset currently has real exit capacity >= 10,000 USD");
+  }
+  const listedMarket = await market(report.listing);
+  if (listedMarket.isolated_only) {
+    const label = `lp:${listedMarket.vault_id}`;
+    if (!report.steps.some((step) => step.label === label && step.status === "confirmed")) {
+      const txs = await depositVaultTx(config, listedMarket.vault_id, 50n * USD);
+      for (let i = 0; i < txs.length; i++) {
+        await sendTx(i === txs.length - 1 ? label : `${label}:fund:${i}`, traders[2], txs[i]);
+      }
+    }
+    assert((await views.vaultAccount(listedMarket.vault_id, traders[2].accountId)).shares > 0n);
+    assert((await market(report.listing)).is_open, "Dedicated LP capital and measured depth must admit entry");
   }
 
   const waitArg = process.argv.find((arg) => arg.startsWith("--wait-seconds="));
@@ -321,7 +346,8 @@ async function main(): Promise<void> {
       const entryFee = history.find((e) => e.kind === "open" && e.position_id === p.id)?.fees ?? 0n;
       if (!report.profitable_close && pnl - p.borrow_fee - p.funding_payment - p.close_fee - entryFee > p.size / 10_000n + 10_000n) {
         const trader = traders.find((a) => a.accountId === p.account_id)!;
-        await call(`profit-close:${p.id}`, trader, "close_position", { position_id: p.id, to_wallet: false, signed_prices: await signed({ kind: "position", positionId: p.id }) });
+        const execution = executionArg(executionLimits(spot, p.side, true, 50, Date.now() + 120_000));
+        await call(`profit-close:${p.id}`, trader, "close_position", { position_id: p.id, to_wallet: false, execution, signed_prices: await signed({ kind: "position", positionId: p.id }) });
         const close = (await views.history(p.account_id)).find((e) => e.kind === "close" && e.position_id === p.id);
         assert(close && close.realized_pnl > entryFee, "Price moved before settlement; no net-profitable close confirmed");
         report.profitable_close = { account_id: p.account_id, event: close, entry_fee: entryFee, net_gain: close.realized_pnl - entryFee };

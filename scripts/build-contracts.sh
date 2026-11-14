@@ -11,9 +11,10 @@ build_home="$(mktemp -d)"
 trap 'rm -rf "$build_home"' EXIT
 
 mkdir -p res
-for crate in ketos mock-usdc mock-oracle; do
+for crate in ketos mock-usdc mock-oracle hedge-custody; do
   (cd "$crate" && HOME="$build_home" cargo near build non-reproducible-wasm --no-abi)
   name="${crate//-/_}"
   cp "target/near/$name/$name.wasm" "res/$name.wasm"
 done
+pnpm --dir .. exec tsx scripts/fetch-hedge-fixtures.ts
 ls -1 res/*.wasm

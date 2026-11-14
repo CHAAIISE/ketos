@@ -1,8 +1,6 @@
-name: Keeper
+name: Operator keeper fallback
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -48,7 +46,7 @@ jobs:
               });
               if (!response.ok) return fail(`Keeper HTTP failure (${response.status}).`);
               const summary = await response.json();
-              if (summary?.ok !== true) return fail("Keeper tick reported failure.");
+              if (summary?.ok !== true || summary.degraded) return fail("Keeper tick reported degraded maintenance.");
               console.log("Keeper tick completed successfully.");
             } catch {
               fail("Keeper request failed, timed out, or returned invalid JSON.");

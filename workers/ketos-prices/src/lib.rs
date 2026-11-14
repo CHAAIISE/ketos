@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
+#[cfg(test)]
+mod tests_bitstamp;
+
 pub const SCALE: u128 = 100_000_000;
 pub const MAX_ASSETS: usize = 12;
 pub const MAX_INPUT_BYTES: usize = 1024;
@@ -11,6 +14,8 @@ pub const PRICE_DOMAIN: &str = "ketos:prices:v1";
 pub const MAX_SIGNED_PAYLOAD_BYTES: usize = 3072;
 pub const MAX_SIGNED_OUTPUT_BYTES: usize = 4096;
 pub const MAX_SOURCE_AGE_MS: u64 = 120_000;
+/// Leaves delivery and inclusion time inside the contract's 15-second signed-price window.
+pub const MAX_COLLECTION_AGE_MS: u64 = 8_000;
 pub const MAX_FUTURE_SKEW_MS: u64 = 5_000;
 
 pub type Result<T, E = &'static str> = std::result::Result<T, E>;
@@ -211,6 +216,7 @@ pub enum Source {
     Coinbase,
     Kraken,
     Binance,
+    Bitstamp,
 }
 
 impl Source {
@@ -219,22 +225,27 @@ impl Source {
             Self::Coinbase => "coinbase",
             Self::Kraken => "kraken",
             Self::Binance => "binance",
+            Self::Bitstamp => "bitstamp",
         }
     }
 
     pub fn url(self, asset: Asset) -> String {
         match self {
             Self::Coinbase => format!(
-                "https://api.exchange.coinbase.com/products/{}-USD/ticker",
+                "https://api.exchange.coinbase.com/products/{}-USD/book?level=1",
                 asset.symbol
             ),
             Self::Kraken => format!(
-                "https://api.kraken.com/0/public/Ticker?pair={}",
+                "https://api.kraken.com/0/public/Trades?pair={}&count=1",
                 asset.kraken_pair
             ),
             Self::Binance => format!(
-                "https://api.binance.com/api/v3/ticker/price?symbol={}USDT",
+                "https://api.binance.com/api/v3/trades?symbol={}USDT&limit=1",
                 asset.symbol
+            ),
+            Self::Bitstamp => format!(
+                "https://www.bitstamp.net/api/v2/ticker/{}usd/",
+                asset.symbol.to_ascii_lowercase()
             ),
         }
     }
@@ -284,75 +295,119 @@ pub fn parse_price(value: &str) -> Result<u128> {
 }
 
 #[derive(Deserialize)]
-struct CoinbaseTicker {
-    price: String,
+struct CoinbaseBook {
+    bids: [(String, String, u64); 1],
+    asks: [(String, String, u64); 1],
+    auction_mode: bool,
     time: String,
 }
 
 #[derive(Deserialize)]
-struct KrakenTicker {
+struct KrakenTrades {
     error: Vec<String>,
-    result: BTreeMap<String, KrakenTrade>,
+    result: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
-struct KrakenTrade {
-    c: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct BinanceTicker {
-    symbol: String,
+struct BinanceTrade {
     price: String,
+    time: u64,
 }
 
-pub fn parse_source(source: Source, asset: Asset, body: &[u8], now_ms: u64) -> Result<u128> {
+#[derive(Deserialize)]
+struct BitstampTicker {
+    bid: String,
+    ask: String,
+    timestamp: String,
+    market_type: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Observation {
+    pub price: u128,
+    pub timestamp_ms: u64,
+}
+
+fn observation(price: u128, timestamp_ms: u64, now_ms: u64) -> Result<Observation> {
+    if timestamp_ms == 0 || timestamp_ms > now_ms.saturating_add(MAX_FUTURE_SKEW_MS)
+        || now_ms.saturating_sub(timestamp_ms) > MAX_SOURCE_AGE_MS
+    {
+        return Err("source trade is stale or in the future");
+    }
+    Ok(Observation { price, timestamp_ms })
+}
+
+pub fn parse_source(source: Source, asset: Asset, body: &[u8], now_ms: u64) -> Result<Observation> {
     if body.len() > MAX_RESPONSE_BYTES {
         return Err("source response too large");
     }
     match source {
         Source::Coinbase => {
-            let ticker: CoinbaseTicker =
-                serde_json::from_slice(body).map_err(|_| "invalid Coinbase ticker")?;
-            let timestamp = OffsetDateTime::parse(&ticker.time, &Rfc3339)
+            let book: CoinbaseBook =
+                serde_json::from_slice(body).map_err(|_| "invalid Coinbase L1 book")?;
+            if book.auction_mode || book.bids[0].2 == 0 || book.asks[0].2 == 0 {
+                return Err("Coinbase book is indicative or has no orders");
+            }
+            parse_price(&book.bids[0].1)?;
+            parse_price(&book.asks[0].1)?;
+            let bid = parse_price(&book.bids[0].0)?;
+            let ask = parse_price(&book.asks[0].0)?;
+            if ask < bid || ask - bid > bid / 100 {
+                return Err("Coinbase book is crossed or spread exceeds one percent");
+            }
+            let timestamp = OffsetDateTime::parse(&book.time, &Rfc3339)
                 .map_err(|_| "invalid Coinbase timestamp")?;
             let source_ms = u64::try_from(timestamp.unix_timestamp_nanos() / 1_000_000)
                 .map_err(|_| "invalid Coinbase timestamp")?;
-            if source_ms > now_ms.saturating_add(MAX_FUTURE_SKEW_MS)
-                || now_ms.saturating_sub(source_ms) > MAX_SOURCE_AGE_MS
-            {
-                return Err("Coinbase ticker is stale or in the future");
-            }
-            parse_price(&ticker.price)
+            observation(bid + (ask - bid) / 2, source_ms, now_ms)
         }
         Source::Kraken => {
-            let ticker: KrakenTicker =
-                serde_json::from_slice(body).map_err(|_| "invalid Kraken ticker")?;
-            if !ticker.error.is_empty() || ticker.result.len() != 1 {
+            let mut trades: KrakenTrades =
+                serde_json::from_slice(body).map_err(|_| "invalid Kraken trades")?;
+            trades.result.remove("last");
+            if !trades.error.is_empty() || trades.result.len() != 1 {
                 return Err("Kraken error or unexpected pair count");
             }
-            let (key, trade) = ticker
-                .result
-                .into_iter()
-                .next()
-                .ok_or("missing Kraken pair")?;
+            let (key, value) = trades.result.into_iter().next().ok_or("missing Kraken pair")?;
             if key != asset.kraken_pair && key != asset.kraken_legacy_key {
                 return Err("unexpected Kraken pair");
             }
-            // c = [last closed trade price, lot volume]; never use bid, ask or VWAP.
-            if trade.c.len() != 2 {
-                return Err("invalid Kraken last trade");
+            let rows = value.as_array().ok_or("invalid Kraken trades")?;
+            if rows.len() != 1 { return Err("unexpected Kraken trade count"); }
+            let trade = rows[0].as_array().ok_or("invalid Kraken trade")?;
+            let price = trade.first().and_then(|v| v.as_str()).ok_or("missing Kraken price")?;
+            let seconds = trade.get(2).and_then(|v| v.as_f64()).ok_or("missing Kraken trade time")?;
+            if !seconds.is_finite() || seconds <= 0.0 || seconds * 1000.0 >= u64::MAX as f64 {
+                return Err("invalid Kraken trade time");
             }
-            parse_price(&trade.c[0])
+            observation(parse_price(price)?, (seconds * 1000.0).floor() as u64, now_ms)
         }
         Source::Binance => {
-            let ticker: BinanceTicker =
-                serde_json::from_slice(body).map_err(|_| "invalid Binance ticker")?;
-            if ticker.symbol.strip_suffix("USDT") != Some(asset.symbol) {
-                return Err("unexpected Binance symbol");
+            // Identity is bound to the fixed requested symbol URL; this API returns no symbol.
+            let trades: Vec<BinanceTrade> =
+                serde_json::from_slice(body).map_err(|_| "invalid Binance trades")?;
+            if trades.len() != 1 { return Err("unexpected Binance trade count"); }
+            observation(parse_price(&trades[0].price)?, trades[0].time, now_ms)
+        }
+        Source::Bitstamp => {
+            let ticker: BitstampTicker =
+                serde_json::from_slice(body).map_err(|_| "invalid Bitstamp ticker")?;
+            if ticker.market_type != "SPOT" {
+                return Err("Bitstamp market is not spot");
             }
-            // This result is USDT, not USD. Callers must convert before aggregation.
-            parse_price(&ticker.price)
+            let bid = parse_price(&ticker.bid)?;
+            let ask = parse_price(&ticker.ask)?;
+            if ask < bid || ask - bid > bid / 100 {
+                return Err("Bitstamp book is crossed or spread exceeds one percent");
+            }
+            if ticker.timestamp.is_empty() || !ticker.timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("invalid Bitstamp timestamp");
+            }
+            let timestamp_ms = ticker.timestamp.parse::<u64>().ok()
+                .and_then(|seconds| seconds.checked_mul(1_000))
+                .ok_or("invalid Bitstamp timestamp")?;
+            // Timestamp belongs to the venue's bid/ask snapshot, not its last trade.
+            observation(bid + (ask - bid) / 2, timestamp_ms, now_ms)
         }
     }
 }
@@ -372,7 +427,7 @@ pub fn usdt_to_usd(price_usdt: u128, usd_per_usdt: u128) -> Result<u128> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct Price(pub String, pub Vec<Source>);
+pub struct Price(pub String, pub Vec<Source>, #[serde(skip)] pub u64);
 
 /// All supplied venues must agree; never discard an outlier to manufacture quorum.
 pub fn aggregate(observations: &[(Source, u128)]) -> Result<Price> {
@@ -402,29 +457,45 @@ pub fn aggregate(observations: &[(Source, u128)]) -> Result<Price> {
     } else {
         values[middle]
     };
-    Ok(Price(median.to_string(), sources))
+    Ok(Price(median.to_string(), sources, 0))
 }
 
-/// Fetch the two real USD venues first. Binance is only a missing-venue fallback,
-/// never a tiebreaker for disagreement. The fetch callback returns USD prices.
+/// Fetch a USD book and trade venue first, then a timestamped USD quote if one is missing.
+/// Converted Binance is the final missing-venue fallback, never a disagreement tiebreaker.
 pub fn collect_prices(
     assets: &[Asset],
-    mut fetch: impl FnMut(Asset, Source) -> Option<u128>,
+    mut now_ms: impl FnMut() -> u64,
+    mut fetch: impl FnMut(Asset, Source) -> Option<Observation>,
 ) -> BTreeMap<&'static str, Price> {
     let mut prices = BTreeMap::new();
+    let fresh = |price: &Observation, now: u64| {
+        price.price > 0 && price.timestamp_ms > 0 && price.timestamp_ms <= now
+            && now - price.timestamp_ms <= MAX_COLLECTION_AGE_MS
+    };
     for &asset in assets {
         let mut observations = Vec::with_capacity(3);
         for source in [Source::Coinbase, Source::Kraken] {
-            if let Some(price) = fetch(asset, source).filter(|&price| price > 0) {
+            if let Some(price) = fetch(asset, source).filter(|price| fresh(price, now_ms())) {
                 observations.push((source, price));
             }
         }
+        let observed_at = now_ms();
+        observations.retain(|(_, price)| fresh(price, observed_at));
         if observations.len() == 1 {
-            if let Some(price) = fetch(asset, Source::Binance).filter(|&price| price > 0) {
-                observations.push((Source::Binance, price));
+            for source in [Source::Bitstamp, Source::Binance] {
+                if let Some(price) = fetch(asset, source).filter(|price| fresh(price, now_ms())) {
+                    observations.push((source, price));
+                    break;
+                }
             }
         }
-        if let Ok(price) = aggregate(&observations) {
+        let completed_at = now_ms();
+        observations.retain(|(_, price)| fresh(price, completed_at));
+        let values: [(Source, u128); 3] = std::array::from_fn(|i| {
+            observations.get(i).map(|(source, value)| (*source, value.price)).unwrap_or((Source::Coinbase, 0))
+        });
+        if let Ok(mut price) = aggregate(&values[..observations.len()]) {
+            price.2 = observations.iter().map(|(_, value)| value.timestamp_ms).min().unwrap_or(0);
             prices.insert(asset.symbol, price);
         }
     }
@@ -458,14 +529,13 @@ struct PricesPayload<'a> {
     prices: BTreeMap<&'static str, SignedPrice<'a>>,
 }
 
-/// Construct the only message this worker may sign. The timestamp is captured
-/// before collection and converted to seconds, never refreshed after HTTP I/O.
+/// Sign the oldest contributing observation time, including conversion legs.
 pub fn encode_prices_payload(output: &Output) -> Result<String> {
     if output.prices.len() > MAX_ASSETS {
         return Err("signed prices exceed 12 assets");
     }
     let mut prices = BTreeMap::new();
-    for (&symbol, Price(price, sources)) in &output.prices {
+    for (&symbol, Price(price, sources, timestamp_ms)) in &output.prices {
         if !SUPPORTED_ASSETS.iter().any(|asset| asset.symbol == symbol) {
             return Err("unsupported signed asset");
         }
@@ -473,14 +543,14 @@ pub fn encode_prices_payload(output: &Output) -> Result<String> {
         if value == 0 || price.bytes().any(|byte| !byte.is_ascii_digit()) {
             return Err("invalid signed price");
         }
-        if !(2..=3).contains(&sources.len())
+        if *timestamp_ms == 0 || !(2..=3).contains(&sources.len())
             || sources.iter().enumerate().any(|(i, source)| sources[..i].contains(source))
         {
             return Err("signed prices require distinct source quorum");
         }
         prices.insert(symbol, SignedPrice {
             price,
-            publish_time: output.timestamp_ms / 1000,
+            publish_time: timestamp_ms / 1000,
             sources,
         });
     }
@@ -596,8 +666,8 @@ mod tests {
         Output {
             timestamp_ms: 1_790_000_000_999,
             prices: BTreeMap::from([
-                ("ETH", Price("12300000000".to_string(), vec![Source::Coinbase, Source::Kraken])),
-                ("BTC", Price("45600000000".to_string(), vec![Source::Kraken, Source::Binance])),
+                ("ETH", Price("12300000000".to_string(), vec![Source::Coinbase, Source::Kraken], 1_790_000_000_999)),
+                ("BTC", Price("45600000000".to_string(), vec![Source::Kraken, Source::Binance], 1_790_000_000_999)),
             ]),
         }
     }
@@ -633,10 +703,10 @@ mod tests {
             assert!(encode_prices_payload(&output).is_err());
         }
         let mut output = signed_fixture();
-        output.prices.insert("USDT", Price("1".to_string(), vec![Source::Coinbase, Source::Kraken]));
+        output.prices.insert("USDT", Price("1".to_string(), vec![Source::Coinbase, Source::Kraken], 1));
         assert_eq!(encode_prices_payload(&output), Err("unsupported signed asset"));
         output.prices = SUPPORTED_ASSETS[..13].iter().map(|asset| (
-            asset.symbol, Price("1".to_string(), vec![Source::Coinbase, Source::Kraken])
+            asset.symbol, Price("1".to_string(), vec![Source::Coinbase, Source::Kraken], 1)
         )).collect();
         assert_eq!(encode_prices_payload(&output), Err("signed prices exceed 12 assets"));
     }
@@ -647,7 +717,7 @@ mod tests {
             timestamp_ms: u64::MAX,
             prices: SUPPORTED_ASSETS[..MAX_ASSETS].iter().map(|asset| (
                 asset.symbol,
-                Price(u128::MAX.to_string(), vec![Source::Coinbase, Source::Kraken, Source::Binance]),
+                Price(u128::MAX.to_string(), vec![Source::Coinbase, Source::Kraken, Source::Binance], u64::MAX),
             )).collect(),
         };
         let payload = encode_prices_payload(&output).unwrap();
@@ -863,33 +933,37 @@ mod tests {
         let mut calls = Vec::new();
         let prices = collect_prices(
             &[asset("BTC"), asset("ETH"), asset("NEAR"), asset("DOGE")],
+            || 2,
             |asset, source| {
                 calls.push((asset.symbol, source));
                 match (asset.symbol, source) {
                     ("BTC", Source::Kraken) => None,
-                    ("BTC", _) => Some(10_000),
-                    ("ETH", Source::Coinbase) => Some(10_000),
-                    ("ETH", Source::Kraken) => Some(10_101),
-                    ("DOGE", Source::Coinbase) => Some(10_000),
+                    ("BTC", _) => Some(Observation { price: 10_000, timestamp_ms: 1 }),
+                    ("ETH", Source::Coinbase) => Some(Observation { price: 10_000, timestamp_ms: 1 }),
+                    ("ETH", Source::Kraken) => Some(Observation { price: 10_101, timestamp_ms: 2 }),
+                    ("DOGE", Source::Coinbase) => Some(Observation { price: 10_000, timestamp_ms: 1 }),
                     _ => None,
                 }
             },
         );
         assert_eq!(prices.len(), 1);
-        assert_eq!(prices["BTC"].1, vec![Source::Coinbase, Source::Binance]);
+        assert_eq!(prices["BTC"].1, vec![Source::Coinbase, Source::Bitstamp]);
+        assert!(!prices.contains_key("ETH"));
+        assert!(!prices.contains_key("NEAR"));
+        assert!(!prices.contains_key("DOGE"));
+        assert!(!calls.contains(&("ETH", Source::Bitstamp)));
         assert!(!calls.contains(&("ETH", Source::Binance)));
-        assert!(!calls.contains(&("NEAR", Source::Binance)));
+        assert!(!calls.contains(&("NEAR", Source::Bitstamp)));
         assert!(calls.contains(&("DOGE", Source::Binance)));
-        assert_eq!(calls.len(), 10);
     }
 
     #[test]
     fn parses_coinbase_timestamp_and_checks_both_freshness_boundaries() {
         let source_ms = 1_767_225_600_000; // 2026-01-01T00:00:00Z
-        let body = br#"{"price":"12.345","time":"2026-01-01T00:00:00.000Z"}"#;
+        let body = br#"{"bids":[["12.34","1",1]],"asks":[["12.35","1",1]],"auction_mode":false,"time":"2026-01-01T00:00:00.000Z"}"#;
         assert_eq!(
             parse_source(Source::Coinbase, asset("BTC"), body, source_ms),
-            Ok(1_234_500_000)
+            Ok(Observation { price: 1_234_500_000, timestamp_ms: source_ms })
         );
         assert!(parse_source(
             Source::Coinbase,
@@ -919,13 +993,37 @@ mod tests {
             source_ms - MAX_FUTURE_SKEW_MS - 1
         )
         .is_err());
-        for bad in [
-            br#"{"price":"1"}"#.as_slice(),
-            br#"{"price":"1","time":"bad"}"#.as_slice(),
-            br#"{"price":1,"time":"2026-01-01T00:00:00Z"}"#.as_slice(),
-            br#"{"price":"1","time":"1969-01-01T00:00:00Z"}"#.as_slice(),
+        for time in [serde_json::Value::Null, serde_json::json!("bad"), serde_json::json!("1969-01-01T00:00:00Z")] {
+            let mut bad: serde_json::Value = serde_json::from_slice(body).unwrap();
+            bad["time"] = time;
+            assert!(parse_source(Source::Coinbase, asset("BTC"), &serde_json::to_vec(&bad).unwrap(), source_ms).is_err());
+        }
+    }
+
+    #[test]
+    fn coinbase_book_rejects_indicative_empty_crossed_and_wide_quotes() {
+        let now = 1_767_225_600_000;
+        let valid = serde_json::json!({
+            "bids": [["100", "1", 1]], "asks": [["101", "1", 1]],
+            "auction_mode": false, "time": "2026-01-01T00:00:00Z",
+        });
+        assert_eq!(
+            parse_source(Source::Coinbase, asset("BCH"), &serde_json::to_vec(&valid).unwrap(), now),
+            Ok(Observation { price: 10_050_000_000, timestamp_ms: now }),
+        );
+        for (pointer, replacement) in [
+            ("/auction_mode", serde_json::json!(true)),
+            ("/bids", serde_json::json!([])),
+            ("/asks", serde_json::json!([["101", "1", 1], ["102", "1", 1]])),
+            ("/asks/0/0", serde_json::json!("99")),
+            ("/asks/0/0", serde_json::json!("101.00000001")),
+            ("/bids/0/0", serde_json::json!("0")),
+            ("/asks/0/1", serde_json::json!("0")),
+            ("/bids/0/2", serde_json::json!(0)),
         ] {
-            assert!(parse_source(Source::Coinbase, asset("BTC"), bad, source_ms).is_err());
+            let mut invalid = valid.clone();
+            *invalid.pointer_mut(pointer).unwrap() = replacement;
+            assert!(parse_source(Source::Coinbase, asset("BCH"), &serde_json::to_vec(&invalid).unwrap(), now).is_err());
         }
     }
 
@@ -939,12 +1037,12 @@ mod tests {
             ("LTC", "XLTCZUSD"),
         ] {
             let body = serde_json::to_vec(
-                &json!({"error": [], "result": {key: {"c": ["2.125", "1"], "a": ["999"]}}}),
+                &json!({"error": [], "result": {key: [["2.125", "1", 1767225600.125, "b", "m", "", 1]], "last": "1767225600125000000"}}),
             )
             .unwrap();
             assert_eq!(
-                parse_source(Source::Kraken, asset(symbol), &body, 0),
-                Ok(212_500_000)
+                parse_source(Source::Kraken, asset(symbol), &body, 1_767_225_600_125),
+                Ok(Observation { price: 212_500_000, timestamp_ms: 1_767_225_600_125 })
             );
         }
         for bad in [
@@ -966,11 +1064,10 @@ mod tests {
 
     #[test]
     fn parses_binance_and_converts_usdt_instead_of_assuming_peg() {
-        let body = br#"{"symbol":"TRXUSDT","price":"0.12345678"}"#;
-        let raw = parse_source(Source::Binance, asset("TRX"), body, 0).unwrap();
-        assert_eq!(raw, 12_345_678);
-        assert_eq!(usdt_to_usd(raw, 99_000_000), Ok(12_222_221));
-        assert!(parse_source(Source::Binance, asset("BTC"), body, 0).is_err());
+        let body = br#"[{"price":"0.12345678","time":1767225600000}]"#;
+        let raw = parse_source(Source::Binance, asset("TRX"), body, 1_767_225_600_000).unwrap();
+        assert_eq!(raw.price, 12_345_678);
+        assert_eq!(usdt_to_usd(raw.price, 99_000_000), Ok(12_222_221));
         assert!(parse_source(
             Source::Binance,
             asset("BTC"),
@@ -982,11 +1079,76 @@ mod tests {
         assert!(usdt_to_usd(0, SCALE).is_err());
         assert!(usdt_to_usd(SCALE, 0).is_err());
         assert!(usdt_to_usd(1, 1).is_err());
-        let fx = br#"{"error":[],"result":{"USDTZUSD":{"c":["0.99","1"]}}}"#;
+        let fx = br#"{"error":[],"result":{"USDTZUSD":[["0.99","1",1767225600,"b","m","",1]],"last":"1767225600000000000"}}"#;
         assert_eq!(
-            parse_source(Source::Kraken, USDT_USD, fx, 0),
-            Ok(99_000_000)
+            parse_source(Source::Kraken, USDT_USD, fx, 1_767_225_600_000),
+            Ok(Observation { price: 99_000_000, timestamp_ms: 1_767_225_600_000 })
         );
+    }
+
+    #[test]
+    fn signed_time_is_oldest_contributor_per_asset_not_execution_time() {
+        let prices = collect_prices(&[asset("BTC"), asset("ETH")], || 1_790_000_009_999, |asset, source| {
+            Some(Observation {
+                price: SCALE,
+                timestamp_ms: match (asset.symbol, source) {
+                    ("BTC", Source::Coinbase) => 1_790_000_003_999,
+                    ("BTC", _) => 1_790_000_001_999,
+                    ("ETH", Source::Coinbase) => 1_790_000_005_999,
+                    _ => 1_790_000_004_999,
+                },
+            })
+        });
+        let output = Output { timestamp_ms: 1_790_000_009_999, prices };
+        let payload: serde_json::Value = serde_json::from_str(&encode_prices_payload(&output).unwrap()).unwrap();
+        assert_eq!(payload["prices"]["BTC"]["publish_time"], 1_790_000_001u64);
+        assert_eq!(payload["prices"]["ETH"]["publish_time"], 1_790_000_004u64);
+    }
+
+    #[test]
+    fn stale_primary_is_replaced_before_quorum_instead_of_poisoning_the_asset() {
+        let now = 100_000;
+        let prices = collect_prices(&[asset("BTC")], || now, |_, source| Some(Observation {
+            price: SCALE,
+            timestamp_ms: match source {
+                Source::Coinbase => now - MAX_COLLECTION_AGE_MS - 1,
+                Source::Kraken => now - 2_000,
+                Source::Bitstamp | Source::Binance => now - 1_000,
+            },
+        }));
+        assert_eq!(prices["BTC"].0, SCALE.to_string());
+        assert_eq!(prices["BTC"].1, vec![Source::Kraken, Source::Bitstamp]);
+        assert_eq!(prices["BTC"].2, now - 2_000);
+    }
+
+    #[test]
+    fn slow_fallback_cannot_leave_an_expired_primary_in_the_quorum() {
+        let clock = std::cell::Cell::new(100_000);
+        let prices = collect_prices(&[asset("BTC")], || clock.get(), |_, source| match source {
+            Source::Coinbase => Some(Observation { price: SCALE, timestamp_ms: 100_000 }),
+            Source::Kraken => None,
+            Source::Bitstamp | Source::Binance => {
+                clock.set(100_000 + MAX_COLLECTION_AGE_MS + 1);
+                Some(Observation { price: SCALE, timestamp_ms: clock.get() })
+            }
+        });
+        assert!(!prices.contains_key("BTC"));
+    }
+
+    #[test]
+    fn timestamped_venues_reject_missing_stale_and_future_trades() {
+        let now = 1_767_225_600_000;
+        for timestamp in [0, now - MAX_SOURCE_AGE_MS - 1, now + MAX_FUTURE_SKEW_MS + 1] {
+            let binance = serde_json::to_vec(&json!([{"price":"1","time":timestamp}])).unwrap();
+            assert!(parse_source(Source::Binance, asset("BTC"), &binance, now).is_err());
+            let kraken = serde_json::to_vec(&json!({"error":[],"result":{
+                "XXBTZUSD":[["1","1",timestamp as f64 / 1000.0,"b","m","",1]],"last":"9999999999999999999"
+            }})).unwrap();
+            assert!(parse_source(Source::Kraken, asset("BTC"), &kraken, now).is_err());
+        }
+        for body in [r#"[{"price":"1"}]"#, r#"[]"#, r#"[{"price":"1","time":null}]"#] {
+            assert!(parse_source(Source::Binance, asset("BTC"), body.as_bytes(), now).is_err());
+        }
     }
 
     #[test]
@@ -998,6 +1160,7 @@ mod tests {
                 Price(
                     u128::MAX.to_string(),
                     vec![Source::Coinbase, Source::Kraken],
+                    1,
                 ),
             );
         }

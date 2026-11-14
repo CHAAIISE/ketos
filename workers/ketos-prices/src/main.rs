@@ -2,8 +2,8 @@
 mod worker {
     use ketos_prices::{
         collect_prices, encode_output, encode_signed_output, parse_request, parse_source,
-        usdt_to_usd, Asset, Output, ProtectedPriceSigner, Request, Source, MAX_RESPONSE_BYTES,
-        USDT_USD,
+        usdt_to_usd, Asset, Observation, Output, ProtectedPriceSigner, Request, Source, MAX_RESPONSE_BYTES,
+        USDT_USD, MAX_COLLECTION_AGE_MS,
     };
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     use wasi_http_client::Client;
@@ -27,7 +27,7 @@ mod worker {
         Ok(())
     }
 
-    fn fetch(asset: Asset, source: Source, execution_start: Instant) -> Result<u128, String> {
+    fn fetch(asset: Asset, source: Source, execution_start: Instant) -> Result<Observation, String> {
         let start = Instant::now();
         check_budget(start, execution_start)?;
         let url = source.url(asset);
@@ -73,7 +73,7 @@ mod worker {
         parse_source(source, asset, &body, now_ms()?).map_err(str::to_string)
     }
 
-    fn observed(asset: Asset, source: Source, execution_start: Instant) -> Option<u128> {
+    fn observed(asset: Asset, source: Source, execution_start: Instant) -> Option<Observation> {
         match fetch(asset, source, execution_start) {
             Ok(price) => Some(price),
             Err(error) => {
@@ -106,11 +106,12 @@ mod worker {
                 return Ok(());
             }
         };
-        // Capture before every source/FX fetch, not when slow network calls finish.
-        let timestamp_ms = now_ms()?;
+        let started_ms = now_ms()?;
         let execution_start = Instant::now();
-        let mut fx: Option<Option<u128>> = None;
-        let prices = collect_prices(&assets, |asset, source| {
+        let mut fx: Option<Option<Observation>> = None;
+        let mut prices = collect_prices(&assets,
+            || started_ms.saturating_add(execution_start.elapsed().as_millis() as u64),
+            |asset, source| {
             if source != Source::Binance {
                 return observed(asset, source, execution_start);
             }
@@ -120,14 +121,27 @@ mod worker {
                 *fx.get_or_insert_with(|| observed(USDT_USD, Source::Kraken, execution_start));
             let usd_per_usdt = usd_per_usdt?;
             let price_usdt = observed(asset, Source::Binance, execution_start)?;
-            match usdt_to_usd(price_usdt, usd_per_usdt) {
-                Ok(price) => Some(price),
+            match usdt_to_usd(price_usdt.price, usd_per_usdt.price) {
+                Ok(price) => Some(Observation {
+                    price,
+                    timestamp_ms: price_usdt.timestamp_ms.min(usd_per_usdt.timestamp_ms),
+                }),
                 Err(error) => {
                     eprintln!("{} binance omitted: {error}", asset.symbol);
                     None
                 }
             }
         });
+        let completed_ms = now_ms()?;
+        // Leave time for signature delivery and NEAR inclusion within the existing 15s bound.
+        if signer.is_some() {
+            prices.retain(|symbol, price| {
+                let fresh = price.2 <= completed_ms && completed_ms - price.2 <= MAX_COLLECTION_AGE_MS;
+                if !fresh { eprintln!("{symbol} omitted: source observation too old for signed delivery"); }
+                fresh
+            });
+        }
+        let timestamp_ms = prices.values().map(|price| price.2).min().unwrap_or(0);
         let prices = Output {
             timestamp_ms,
             prices,

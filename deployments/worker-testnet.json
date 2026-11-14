@@ -3,11 +3,11 @@
   "network": "testnet",
   "contract": "outlayer.testnet",
   "endpoint": "https://testnet-api.outlayer.ai/call/ketos.testnet/ketos-prices",
-  "wasm_url": "https://test.fastfs.io/ketos.testnet/outlayer.testnet/0780c89c20d8dce8dfe96f1d03bf0ca1b2c3968e8cb81bd98acbc701d25245e8.wasm",
-  "wasm_sha256": "0780c89c20d8dce8dfe96f1d03bf0ca1b2c3968e8cb81bd98acbc701d25245e8",
+  "wasm_url": "https://test.fastfs.io/ketos.testnet/outlayer.testnet/cb7881555d790224f06738cd0c95aeb8798b1acd99548affcd4ea737e71aa07f.wasm",
+  "wasm_sha256": "cb7881555d790224f06738cd0c95aeb8798b1acd99548affcd4ea737e71aa07f",
   "build_target": "wasm32-wasip2",
   "price_signer": "ed25519:3XbNrUzS7TFJbDn94weVDnJNubGSTkEYUdqu4f67JGDD",
-  "price_signer_attestation_url": "https://testnet-api.outlayer.ai/attestations/by-call/1a689502-67f1-4c9c-91e3-696d47fd1a62",
+  "price_signer_attestation_url": "https://testnet-api.outlayer.ai/attestations/by-call/8eb09c76-1615-4710-9332-c2695dd1e201",
   "signed_prices": {
     "domain": "ketos:prices:v1",
     "commands": [
