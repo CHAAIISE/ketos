@@ -16,6 +16,11 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Public deployment identifiers only; the app build prerenders against them.
+    env:
+      NEXT_PUBLIC_NEAR_NETWORK: testnet
+      NEXT_PUBLIC_KETOS_CONTRACT: ketos.testnet
+      NEXT_PUBLIC_USDC_CONTRACT: usdc.ketos.testnet
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
