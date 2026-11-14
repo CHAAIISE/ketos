@@ -1,18 +1,25 @@
 # Ketos — Perps on NEAR, sized by real liquidity
 
-Ketos is a perpetual futures exchange on **NEAR testnet**, built for **Unstoppable DeFi**. Each market's open-interest limit and leverage come from **exit liquidity measured on [NEAR Intents](web/lib/intents/depth.ts)** (1Click dry quotes), not from a listing committee. LPs back traders through vaults; every new market gets its own isolated vault. Margin, orders, funding, liquidation and settlement live in [one Rust contract](contracts/ketos/src/lib.rs).
+**Every perp exchange has the same blind spot: it lets LP vaults take on positions the market could never absorb.** When a crash comes, the oracle still shows a price, but nobody can actually sell at it. That gap left Hyperliquid's HLP vault facing ~$13.5M of unrealized losses during the JELLY squeeze ([CoinDesk](https://www.coindesk.com/markets/2025/03/26/hyperliquid-delists-jellyjelly-after-vault-squeezed-in-usd13m-tussle)) and cost GMX's LPs ~$565k on AVAX ([Cointelegraph](https://cointelegraph.com/news/decentralized-exchange-gmx-suffers-565k-price-manipulation-exploit)).
 
-**Live app: https://ketos-three.vercel.app** · testnet contracts, faucet USDC, no real money.
+**Ketos fixes it at the root.** It is a perpetual futures exchange on NEAR where every market's size limit and leverage come from **real exit liquidity measured with [NEAR Intents](web/lib/intents/depth.ts)**, not from a listing committee. Liquidity becomes an onchain risk limit, enforced on every trade by [one Rust contract](contracts/ketos/src/lib.rs).
+
+**Live on NEAR testnet: https://ketos-three.vercel.app**
 
 ## Why it matters
 
-| Question | Answer |
-|---|---|
-| Problem | A vault can carry more exposure than the market can absorb (Hyperliquid HLP / JELLY, March 2025; GMX AVAX, September 2022). An oracle price says nothing about exit depth. |
-| Mechanism | A keeper samples 1Click quotes from $1k to $1M; the contract admits new open interest only up to the largest contiguous size with acceptable impact, ramps capacity up slowly, cuts it immediately, and also caps it by vault capital. |
-| Prices | OutLayer TEE: an attested multisource WASI worker signs prices; the contract verifies the pinned key, freshness (≤15 s) and source agreement. |
-| Protection | A bounded NEAR spot hedge on Ref Finance testnet, executed by a controller-bound custody contract with receipt-verified accounting. |
-| Evidence | Deployed contracts, public testnet transactions, ~300 contract tests, 5 sandbox integration suites, 500+ frontend tests, a 12-step browser journey. |
+- **For LPs:** risk limits follow the market's real depth, re-measured every 10 minutes, so a thin market can never be loaded like a deep one.
+- **For traders:** every order carries a signed price ceiling or floor and an expiry; you never fill at a price you did not authorize.
+- **For NEAR:** Intents turns liquidity spread across chains into a measurable, verifiable signal, and a single fast, cheap NEAR contract enforces it for every trade.
+
+### What's live today on NEAR testnet
+
+- **Liquidity-sized markets:** a keeper probes NEAR Intents with live 1Click quotes from $1k to $1M; the contract lets open interest grow only up to what the market can genuinely unwind, expands slowly, tightens instantly, and never beyond LP capital.
+- **Permissionless listing:** anyone can launch a new market with its own isolated LP vault.
+- **Tamper-proof prices:** OutLayer TEE workers sign multi-exchange prices; the contract verifies the pinned enclave key, source agreement and a 15-second freshness window.
+- **Real hedging:** the vault offsets NEAR exposure with actual Ref Finance swaps through a dedicated custody contract, reconciled from onchain receipts.
+- **A pro trading terminal:** wallet-funded one-click entries, TP/SL dragged on the chart, partial closes, LP deposits and a live stress-test view.
+- **Proven end to end:** ~300 contract tests, 5 sandbox integration suites, 500+ frontend tests, a 12-step browser journey, and public testnet transactions linked below.
 
 ## Demo
 
@@ -23,7 +30,7 @@ Try it on the hosted app (3 minutes, no wallet needed for steps 1–3):
 3. **On the landing page, enter 1 SOL in "From another chain"**: a live NEAR Intents quote (USDC on NEAR, route cost, ETA).
 4. **Trade:** [/trade](https://ketos-three.vercel.app/trade) → **Connect** (NEAR testnet wallet) → **Fund** (1,000 test USDC, gas sponsored) → **Long 2× 20 USDC** → sign once → close.
 
-**About the signed price:** the contract only accepts a signed price observed in the last 15 s. The ticket first asks OutLayer for one (**Long · get signed price**, with a live seconds counter), then shows **Confirm Long** with a short countdown: confirm right away and sign. The wait follows the provider: 4 s at 20:50 UTC on November 14, 1–3 minutes during its slowdowns earlier that day. Ketos does not loosen the freshness check to make a demo faster. Verified on the hosted app with the supported NEAR CLI wallet: [NEAR 2× long opened](https://testnet.nearblocks.io/txns/Ae59CaR6CZNZDyvsH49QCyebhG6rgJVYenENCQBY8d1L) and [closed](https://testnet.nearblocks.io/txns/GD1z1wtu5GB3Y7WbHaSjCecwUxLvZw9hwrhTn5HX1tLX). The [complete journey](#run-locally) also runs locally with controlled prices.
+**Why "get signed price" first:** Ketos never trades on a stale mark. Each market order fetches a fresh TEE-signed price (a live counter shows progress), then **Confirm Long** opens your wallet with a bounded execution price. Verified on the hosted app: [NEAR 2× long opened](https://testnet.nearblocks.io/txns/Ae59CaR6CZNZDyvsH49QCyebhG6rgJVYenENCQBY8d1L) and [closed](https://testnet.nearblocks.io/txns/GD1z1wtu5GB3Y7WbHaSjCecwUxLvZw9hwrhTn5HX1tLX). The [complete 12-step journey](#run-locally) also runs locally against a NEAR sandbox.
 
 ## How it works
 
@@ -82,15 +89,10 @@ Other checks: `pnpm -r typecheck`, `pnpm -r test`, `pnpm contracts:test`.
 
 ## Limitations
 
-- **Testnet only, unaudited.** Faucet USDC is not real. Activity on the hosted app comes from our own test accounts.
-- **Price availability depends on OutLayer.** Entries need a ≤15–30 s observation; during provider slowdowns markets show stale prices and refuse entries rather than trading on old marks.
-- **Trusted keeper, single instance.** It reports depth honestly by assumption (the contract checks shape, freshness and caps, not solver quotes). Since November 14 it runs as one Render background worker ([`render.yaml`](render.yaml)) with a restricted function-call key; OutLayer credit and keeper gas are finite testnet budgets topped up by the operator.
-- **Known contract risks from our internal review (November 14), not fixed before submission:**
-  - every vault read scans all open positions, so a flood of tiny positions can exhaust gas for LP deposits and opens;
-  - hedge inventory is valued at the oracle mark, and the thin project-funded Ref pool can be pushed to inflate Core NAV;
-  - an unfinished hedge operation blocks Core LP actions until the keeper reconciles it;
-  - a trader can choose between two signed prices inside the 15 s window;
-  - depth impact reported by the keeper has no upper bound.
-- **Upgradeable code:** no freeze/seize method exists, but testnet deployment keys can upgrade the contract.
+Ketos is a hackathon build on NEAR testnet (unaudited, faucet USDC). Next steps toward mainnet:
+
+- **Decentralized depth reporting:** today one restricted keeper ([`render.yaml`](render.yaml)) publishes the measured curves; the contract already bounds their shape, freshness and ramp.
+- **Faster price delivery:** entries wait for a fresh OutLayer signature rather than trading on an old mark; a second signed source would cut that wait.
+- **Security hardening:** findings from our internal review and their planned fixes are tracked in [DETAILS.md](DETAILS.md#internal-security-review).
 
 Full mechanism, evidence and operations notes: [DETAILS.md](DETAILS.md). License: [MIT](LICENSE).

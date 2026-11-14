@@ -498,3 +498,16 @@ Wallet/RPC transport errors are not proof of transaction failure. Timeout and un
 - Maintenance requires the standalone keeper, sufficient contract/keeper NEAR and funded OutLayer API credit. The local launch agent runs only while this Mac is awake and logged in; it is not cloud high availability. Browsing is read-only and cannot run paid maintenance. HTTP maintenance rejects anonymous callers and is disabled by default; the workflow is manual-only. Select one operator path per restricted signer: the local ownership socket prevents duplicate local processes, not independently configured hosts. The restricted key cannot transfer tokens arbitrarily, but its authorized methods change depth, settle orders and liquidate. The November 11 refill used four existing `usdc.fakes.testnet` tokens, not mainnet funds; funding remains finite and must be monitored.
 - Histories are bounded, snapshots are not backfilled, spot chart prices can differ from oracle marks, and separate RPC reads are not an atomic snapshot. Stress results are estimates, not execution guarantees.
 - No administrator freeze/seizure method is implemented, but full-access testnet deployment keys remain. The code is not immutable.
+
+## Internal security review
+
+Read-only review of the contracts on November 14, 2026. No path was found for an outside attacker to steal funds alone; deposits/withdrawals, share math, signed-price verification and hedge returns held up. Open items and planned fixes:
+
+| Finding | Severity | Planned fix |
+|---|---|---|
+| Every vault read scans all open positions, so many tiny positions can exhaust gas for LP deposits/opens (closes and liquidations unaffected) | High | Maintain per-vault exposure aggregates incrementally; cap isolated positions per account |
+| Hedge inventory is valued at the oracle mark; the thin project-funded Ref pool can be pushed before a buy | Medium | Bound swap output by the oracle quote and value inventory at the lower of oracle and executed price |
+| An unfinished hedge operation blocks Core LP actions until reconciled | Medium | Permissionless timeout that writes the pending hedge down to zero |
+| `delist_dead_market` can remove the hedged NEAR market | Medium | Refuse delisting while a hedge references the market |
+| A trader can choose between two signed batches inside the 15 s window | Medium | Require batches newer than the account's last action |
+| Keeper-reported impact has no upper bound | Medium | Contract-side maximum impact per size tier |
