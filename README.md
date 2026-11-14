@@ -23,7 +23,7 @@ Try it on the hosted app (3 minutes, no wallet needed for steps 1–3):
 3. **On the landing page, enter 1 SOL in "From another chain"**: a live NEAR Intents quote (USDC on NEAR, route cost, ETA).
 4. **Trade:** [/trade](https://ketos-three.vercel.app/trade) → **Connect** (NEAR testnet wallet) → **Fund** (1,000 test USDC, gas sponsored) → **Long 2× 20 USDC** → sign once → close.
 
-**If the ticket shows "Refresh on trade" or "Fresh price unavailable":** the contract refuses entries without a price observed in the last 15–30 s, and the OutLayer testnet price service is currently slow (calls taking 1–2 minutes, executors restarting on November 14). Ketos does not loosen that check to make a demo work. The [complete journey](#run-locally) runs locally with controlled prices.
+**About "Review fresh price":** the contract only accepts a signed price observed in the last 15 s. The OutLayer testnet service currently queues requests for 1–3 minutes, so the review button waits for the job ("Observing price… up to 3 min"), then the ticket enables **Long/Short**: click it and sign right away. Ketos does not loosen the freshness check to make a demo faster. Verified on the hosted app on November 14 with the supported NEAR CLI wallet: [NEAR 2× long opened](https://testnet.nearblocks.io/txns/CWwJ6PpLWYv2aedTKdK1CdmX8Q2xoLaRTfRASCUmdQxF) after a 53 s review and [closed](https://testnet.nearblocks.io/txns/F5MCaiqycwJdtifWtAGwcf8JsFA2fDRNsXcfZRTR3KF3). The [complete journey](#run-locally) also runs locally with controlled prices.
 
 ## How it works
 
