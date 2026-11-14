@@ -20,6 +20,9 @@ services:
         value: ketos.testnet
       - key: NEXT_PUBLIC_USDC_CONTRACT
         value: usdc.ketos.testnet
+      # Datacenter IPs hit dRPC's public rate limit; FastNear sustained bursts in testing.
+      - key: KEEPER_RPC_URL
+        value: https://test.rpc.fastnear.com
       - key: KEEPER_HEDGE_JOURNAL
         value: /var/data/hedge-submissions.json
       # Restricted function-call key of keeper.ketos.testnet; never a deployment key.
