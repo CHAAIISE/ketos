@@ -93,6 +93,6 @@ Ketos is a hackathon build on NEAR testnet (unaudited, faucet USDC). Next steps 
 
 - **Decentralized depth reporting:** today one restricted keeper ([`render.yaml`](render.yaml)) publishes the measured curves; the contract already bounds their shape, freshness and ramp.
 - **Faster price delivery:** entries wait for a fresh OutLayer signature rather than trading on an old mark; a second signed source would cut that wait.
-- **Security hardening:** findings from our internal review and their planned fixes are tracked in [DETAILS.md](DETAILS.md#internal-security-review).
+- **Security hardening:** an internal review identified gas-scaling and hedge-valuation hardening work, planned before any mainnet launch.
 
-Full mechanism, evidence and operations notes: [DETAILS.md](DETAILS.md). License: [MIT](LICENSE).
+License: [MIT](LICENSE).
