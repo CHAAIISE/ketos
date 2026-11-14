@@ -6,16 +6,14 @@ import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { useClosePosition, useSwitchToCross } from "@/hooks/use-ketos-mutations";
+import { useSwitchToCross } from "@/hooks/use-ketos-mutations";
+import { useMarkets } from "@/hooks/use-ketos-queries";
 import { formatPrice, formatUnits, formatUsd, PRICE_DECIMALS, USDC_DECIMALS } from "@/lib/near/format";
 import { isLiquidatable, type Order, type Position } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
+import { BracketEditor } from "./bracket-editor";
+import { ClosePositionDialog } from "./close-position-dialog";
 
-/** Estimated proceeds before a new price is pulled; cross cash may stay behind surviving legs. */
-function closePayout(position: Pick<Position, "equity" | "close_fee">): bigint {
-  const owed = position.equity - position.close_fee;
-  return owed > 0n ? owed : 0n;
-}
 
 /** Unrealized PnL as a share of the posted margin, one decimal, e.g. "+12.4%". */
 function roe(position: Position): string {
@@ -44,11 +42,13 @@ const td = "px-2 text-right";
 
 /** Open positions: a table from tablet width, stacked cards on phones so Close stays in reach. */
 export function PositionsTable({ positions, orders, allowSwitchToCross = false }: { positions: readonly Position[]; orders: readonly Order[]; allowSwitchToCross?: boolean }) {
-  const close = useClosePosition();
   const switchMode = useSwitchToCross();
+  const markets = useMarkets();
+  const crossMarkets = new Set(markets.isSuccess ? markets.data.filter((market) => !market.isolated_only).map((market) => market.id) : []);
   const { track } = useTxToast();
   const [switchPosition, setSwitchPosition] = useState<Position | null>(null);
-  const [keepOnKetos, setKeepOnKetos] = useState(false);
+  const [closingPosition, setClosingPosition] = useState<Position | null>(null);
+  const [editingBrackets, setEditingBrackets] = useState<Position | null>(null);
   const triggers = new Map(orders.map((o) => [o.id, o.request.trigger_price]));
 
   const bracket = (id: number | null) => {
@@ -56,11 +56,13 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
     return price === undefined ? "—" : formatPrice(price);
   };
   const tpsl = (p: Position) => (
-    <span data-testid={`brackets-${p.id}`}>
+    <button type="button" data-testid={`brackets-${p.id}`} aria-label={`Edit TP/SL for ${p.market_id} position ${p.id}`}
+      onClick={() => setEditingBrackets(p)} disabled={switchMode.isPending}
+      className="rounded px-1 py-1 underline decoration-border underline-offset-4 hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
       <span className="text-success">{bracket(p.take_profit)}</span>
       <span className="text-tertiary"> / </span>
       <span className="text-destructive">{bracket(p.stop_loss)}</span>
-    </span>
+    </button>
   );
   // `funding_payment` is positive when the position pays; sub-cent amounts display as $0.00 and stay neutral.
   const fundingValue = (p: Position) => {
@@ -80,12 +82,12 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
       formatPrice(p.liquidation_price)
     );
   const modeLabel = (p: Position) => (p.margin_mode === "cross" ? "(Cross)" : "(Isolated)");
-  const marginMode = (p: Position) => allowSwitchToCross && p.margin_mode === "isolated" ? (
+  const marginMode = (p: Position) => allowSwitchToCross && p.margin_mode === "isolated" && crossMarkets.has(p.market_id) ? (
     <Button
       variant="link"
       size="xs"
       className="text-label"
-      disabled={switchMode.isPending || close.isPending}
+      disabled={switchMode.isPending}
       title="Move this position's collateral into the shared cross pool. This cannot be undone."
       onClick={() => setSwitchPosition(p)}
     >
@@ -93,27 +95,14 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
     </Button>
   ) : <span className="text-tertiary">{modeLabel(p)}</span>;
 
-  const closeButton = (p: Position) => {
-    const payout = closePayout(p);
-    return (
-      <Button
-        variant="link"
-        size="xs"
-        className="text-label"
-        disabled={close.isPending || switchMode.isPending}
-        title={p.margin_mode === "cross" ? "Cross cash backs surviving positions; released collateral follows your payout choice" : `Market close: about ${formatUsd(payout)} returns to ${keepOnKetos ? "Ketos margin" : "your wallet"}`}
-        onClick={() =>
-          track(() => close.mutateAsync({ positionId: p.id, toWallet: !keepOnKetos }), {
-            pending: `Closing ${p.side} ${p.market_id}…`,
-            success: (r) =>
-              `${p.side === "long" ? "Long" : "Short"} ${p.market_id} closed · ${formatUsd(r.payout ?? payout)} ${keepOnKetos ? "kept on Ketos" : "returned to wallet"}`,
-          })
-        }
-      >
-        {close.isPending && close.variables?.positionId === p.id ? "Closing…" : "Close"}
-      </Button>
-    );
-  };
+  const closeButton = (p: Position) => (
+    <Button variant="link" size="xs" className="text-label"
+      disabled={switchMode.isPending || p.mark_price <= 0n}
+      title="Review a partial reduction or full close"
+      onClick={() => setClosingPosition(p)}>
+      Close
+    </Button>
+  );
 
   const coin = (p: Position) => (
     <span className="flex items-center gap-2">
@@ -151,11 +140,6 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
 
   return (
     <>
-      <label className="flex items-center justify-end gap-2 border-b border-border px-3 py-2 text-label text-muted-foreground">
-        <input type="checkbox" checked={keepOnKetos} disabled={close.isPending} onChange={(event) => setKeepOnKetos(event.target.checked)} className="size-3.5 accent-foreground" />
-        Keep on Ketos
-        <Term hint="Off: released collateral returns to your wallet. On: keep it as free margin. Cross cash still backs surviving cross positions; only released funds can leave.">Payout</Term>
-      </label>
       <ul className="flex flex-col md:hidden">
         {positions.map((p) => (
           <li key={p.id} data-testid={`position-card-${p.id}`} className="flex flex-col gap-3 border-t border-border px-3 py-3 first:border-t-0">
@@ -203,7 +187,7 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
               <th scope="col" className={cn(th, "text-right")}>{fundingTerm}</th>
               <th scope="col" className={cn(th, "text-right")}>{tpslTerm}</th>
               <th scope="col" className={cn(th, "text-right")}>{feesTerm}</th>
-              <th scope="col" className={cn(th, "text-right")}>Close</th>
+              <th scope="col" className={cn(th, "sticky right-0 bg-card text-right")}>Close</th>
             </tr>
           </thead>
           <tbody>
@@ -222,12 +206,14 @@ export function PositionsTable({ positions, orders, allowSwitchToCross = false }
                 <td className={td}>{fundingValue(p)}</td>
                 <td className={td}>{tpsl(p)}</td>
                 <td className={td}>{formatUsd(p.borrow_fee + p.close_fee)}</td>
-                <td className={td}>{closeButton(p)}</td>
+                <td className={cn(td, "sticky right-0 bg-card")}>{closeButton(p)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {editingBrackets ? <BracketEditor position={editingBrackets} orders={orders} onClose={() => setEditingBrackets(null)} /> : null}
+      {closingPosition ? <ClosePositionDialog position={closingPosition} onClose={() => setClosingPosition(null)} /> : null}
       <Modal open={switchPosition !== null} onOpenChange={(open) => { if (!open && !switchMode.isPending) setSwitchPosition(null); }} title="Switch to Cross">
         <p className="text-ui text-muted-foreground">
           Move {switchPosition?.market_id}&apos;s collateral into your shared cross pool. All cross positions share gains and losses and can put each other&apos;s collateral at risk. Entry price and TP/SL stay unchanged. You cannot switch back to isolated.

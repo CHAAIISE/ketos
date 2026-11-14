@@ -20,7 +20,7 @@ export const marketName = (id: MarketId) => `${id}-USD`;
 
 function Stat({ label, children, className }: { label: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex min-w-0 flex-col gap-0.5 lg:shrink-0", className)}>
+    <div className={cn("flex shrink-0 flex-col gap-0.5", className)}>
       <dt className="text-label text-tertiary">{label}</dt>
       <dd className="text-label font-medium whitespace-nowrap text-foreground tabular-nums">{children}</dd>
     </div>
@@ -226,20 +226,16 @@ export function MarketHeader({
     <section
       aria-label={`${marketName(market.id)} market`}
       className={cn(
-        "flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card px-3 py-2 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-6",
+        "flex min-w-0 items-center gap-4 rounded-lg border border-border bg-card px-3 py-3",
         className,
       )}
     >
       <h1 className="sr-only">Trade {marketName(market.id)}</h1>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <MarketSelector markets={markets} market={market} onSelect={onSelect} />
-        <span className="flex shrink-0 flex-col items-end gap-1 lg:hidden">
-          <span className="text-lg font-medium tabular-nums text-foreground">{market.price > 0n ? formatPrice(market.price) : "—"}</span>
-          {!status.open ? <span title={status.label}><Badge variant="warning">{status.reason === "price" ? "Close-only" : status.reason === "stale" ? "Stale depth" : "Closed"}</Badge></span> : null}
-        </span>
       </div>
 
-      <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 lg:flex lg:flex-1 lg:flex-wrap lg:items-center lg:gap-x-6 lg:gap-y-2">
+      <dl className="flex min-w-0 flex-1 items-center gap-5 overflow-x-auto py-1">
         <Stat
           label={
             <Term hint="Price open positions are marked and liquidated at: the onchain oracle price.">Mark</Term>
@@ -308,7 +304,7 @@ export function MarketHeader({
         </Stat>
         <Stat label={marketLimitLabel(market)}>
           {status.open ? <Badge variant="success">Open</Badge> : (
-            <span title={status.label}><Badge variant="warning">{status.reason === "price" ? "Close-only" : status.reason === "stale" ? "Stale depth" : "Closed"}</Badge></span>
+            <span title={status.label}><Badge variant="warning">{status.reason === "price" ? status.label : status.reason === "stale" ? "Stale depth" : "Closed"}</Badge></span>
           )}
         </Stat>
       </dl>

@@ -102,6 +102,7 @@ export function LiveStrip() {
         </Cell>
       </dl>
       <div className="flex flex-col gap-2 text-label text-tertiary">
+        <p>Testnet activity includes project-operated demo accounts. It is not evidence of organic usage or investment returns.</p>
         <p className="tabular-nums">
           Activity and vault snapshot fetched {formatUtc(snapshot.fetchedAtMs, true)}{formatAge(snapshot.fetchedAtMs, nowMs) ? ` · ${formatAge(snapshot.fetchedAtMs, nowMs)}` : ""}.
           {" "}Shared cache: up to 60 seconds; this page requests an update every minute. The 24h window ends at that snapshot.
@@ -113,7 +114,7 @@ export function LiveStrip() {
         <details>
           <summary className="w-fit cursor-pointer rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">Details</summary>
           <p className="mt-2">
-            Volume counts entry and exit notional, including liquidations. Coverage: {snapshot.coverage.accountsScanned} accounts,
+            Volume counts entry and realized exit notional, including partial closes and liquidations. Coverage: {snapshot.coverage.accountsScanned} accounts,
             up to {snapshot.coverage.eventsPerAccountLimit} recent events per account.
             {lowerBound ? " The account or history limit was reached, so volume, trades and active traders are lower bounds." : " The scanned account histories cover the snapshot’s 24h window."}
             {" "}Open status describes cached prices; trading actions request a fresh price when needed and recheck limits at execution.

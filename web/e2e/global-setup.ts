@@ -11,7 +11,7 @@ const scriptsDir = join(webDir, "..", "scripts");
 async function waitForServer(url: string, isAlive: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!isAlive()) throw new Error("next dev exited before serving the app");
+    if (!isAlive()) throw new Error("The app or independent keeper exited before startup completed");
     try {
       const res = await fetch(url);
       if (res.ok) return;
@@ -24,8 +24,8 @@ async function waitForServer(url: string, isAlive: () => boolean, timeoutMs: num
 }
 
 /**
- * Local runs: starts the NEAR sandbox (contracts deployed and seeded), then `next dev` in E2E
- * mode against it. With BASE_URL set (smoke tests on a deployment) there is nothing to start.
+ * Local runs start the seeded NEAR sandbox, app and independent keeper.
+ * BASE_URL runs only inspect the existing deployment; no warmup service is started.
  */
 export default async function globalSetup(config: FullConfig): Promise<(() => Promise<void>) | undefined> {
   if (process.env.BASE_URL) return undefined;
@@ -48,18 +48,28 @@ export default async function globalSetup(config: FullConfig): Promise<(() => Pr
   });
   let running = true;
   server.once("exit", () => (running = false));
+  const keeper = spawn("pnpm", ["exec", "tsx", join(scriptsDir, "keeper.ts")], {
+    cwd: join(webDir, ".."),
+    env: { ...process.env, KEEPER_LOCK_PORT: "43818", KEEPER_HTTP_ENABLED: "0" },
+    stdio: ["ignore", "inherit", "inherit"],
+    detached: true,
+  });
+  let keeperRunning = true;
+  keeper.once("exit", () => (keeperRunning = false));
 
   const teardown = async () => {
-    if (running && server.pid) {
-      const exited = once(server, "exit");
-      process.kill(-server.pid, "SIGTERM");
-      await exited;
-    }
+    await Promise.all([server, keeper].map(async (service) => {
+      if (service.exitCode === null && service.signalCode === null && service.pid) {
+        const exited = once(service, "exit");
+        process.kill(-service.pid, "SIGTERM");
+        await exited;
+      }
+    }));
     stopSandbox();
   };
 
   try {
-    await waitForServer(baseURL, () => running, 180_000);
+    await waitForServer(baseURL, () => running && keeperRunning, 180_000);
   } catch (e) {
     await teardown();
     throw e;

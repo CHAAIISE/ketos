@@ -31,10 +31,11 @@ describe("windowVolume", () => {
       event("open", 500n, NOW - 1_000),
       event("order_fill", 500n, NOW - 1_000),
       event("funding", 3n, NOW - 500),
-      event("close", 500n, NOW - 500),
+      event("reduce", 200n, NOW - 600),
+      event("close", 300n, NOW - 500),
       event("liquidation", 200n, NOW - 100),
     ];
-    expect(windowVolume([history], NOW, 200)).toEqual({ volume: 1_200n, trades: 3, complete: true });
+    expect(windowVolume([history], NOW, 200)).toEqual({ volume: 1_200n, trades: 4, complete: true });
   });
 
   it("includes the window start and excludes older or future events", () => {

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel, FieldMessage, Input } from "@/components/ui/input";
 import { useWallet } from "@/hooks/near-provider";
 import { useDepositVault, useWithdrawVault } from "@/hooks/use-ketos-mutations";
-import { useAccount, useVaultAccount } from "@/hooks/use-ketos-queries";
+import { useAccount, useMarkets, useVaultAccount } from "@/hooks/use-ketos-queries";
 import { toNearActionError } from "@/lib/near/errors";
 import { USDC_UNIT, formatUsd, formatUsdc, parseUsdc } from "@/lib/near/format";
 import type { Vault, VaultAccount, VaultId } from "@/lib/near/types";
@@ -329,7 +329,12 @@ export function VaultTicket({
 }) {
   const wallet = useWallet();
   const position = useVaultAccount(vaultId);
-  const [mode, setMode] = useState<Mode>("deposit");
+  const [modeChoice, setMode] = useState<Mode>("deposit");
+  const markets = useMarkets();
+  const marketVault = vaultId.startsWith("market-");
+  const canDeposit = !marketVault || (markets.isSuccess && markets.data.some((market) => market.vault_id === vaultId));
+  const retired = marketVault && markets.isSuccess && !canDeposit;
+  const mode = canDeposit ? modeChoice : "withdraw";
   const signedIn = wallet.accountId !== null;
 
   return (
@@ -339,7 +344,7 @@ export function VaultTicket({
     >
       <Tabs.Root value={mode} onValueChange={(next: Mode) => setMode(next)} className="flex flex-col">
         <Tabs.List className="grid grid-cols-2 border-b border-border">
-          <Tabs.Tab value="deposit" className={tabClass}>
+          <Tabs.Tab value="deposit" className={tabClass} disabled={!canDeposit}>
             Deposit
           </Tabs.Tab>
           <Tabs.Tab value="withdraw" className={tabClass}>
@@ -347,6 +352,8 @@ export function VaultTicket({
           </Tabs.Tab>
         </Tabs.List>
         <div className="p-3">
+          {retired ? <p role="status" className="mb-3 text-label text-warning">Retired market vault. New deposits are disabled; your existing shares remain withdrawable.</p>
+            : marketVault && !canDeposit ? <p role="status" className="mb-3 text-label text-muted-foreground">Market registration could not yet be verified. Deposits are unavailable.</p> : null}
           {vault ? (
             <>
               <Tabs.Panel value="deposit">

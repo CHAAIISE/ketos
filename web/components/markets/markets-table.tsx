@@ -9,8 +9,8 @@ import { formatExitCapacity, isPriceFresh, marketDisplayStatus, marketLimitLabel
 import { OiBar } from "@/components/trade/oi-bar";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
-import { formatFundingRate, formatPrice, usd0 } from "@/lib/near/format";
-import type { Market, VaultId } from "@/lib/near/types";
+import { formatFundingRate, formatPrice, formatVaultName, usd0 } from "@/lib/near/format";
+import type { Market } from "@/lib/near/types";
 import type { Change24h } from "@/lib/prices/market-stats";
 import { cn } from "@/lib/utils";
 
@@ -19,8 +19,6 @@ export interface Sort {
   key: SortKey;
   dir: "asc" | "desc";
 }
-
-export const VAULT_LABEL: Record<VaultId, string> = { core: "Core", "long-tail": "Long-tail" };
 
 /**
  * Rows in display order; markets without a value for the sort key always go last. Ties go to the
@@ -122,7 +120,7 @@ function StatusCell({ market, nowMs }: { market: Market; nowMs: number }) {
   }
   const label = status.reason === "no-depth" ? "Measuring"
     : status.reason === "thin" ? "Thin liquidity"
-      : status.reason === "price" ? "Price refresh needed"
+      : status.reason === "price" ? status.label
         : status.reason === "capital" ? "Vault-limited"
           : "Stale depth";
   return (
@@ -269,7 +267,7 @@ export function MarketsTable({
                   </Term>
                 </td>
                 <td className="px-3 text-right">{m.max_leverage}×</td>
-                <td className="px-3 text-muted-foreground">{VAULT_LABEL[m.vault_id]}</td>
+                <td className="px-3 text-muted-foreground">{formatVaultName(m.vault_id, m.id)}</td>
               </tr>
             );
           })}

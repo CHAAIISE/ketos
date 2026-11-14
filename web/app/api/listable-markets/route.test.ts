@@ -51,11 +51,11 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("listable assets route and shared server loader", () => {
-  it("exposes real candidates but excludes stablecoins and wrapped copies of existing markets", async () => {
+  it("admits an authorized worker route but excludes arbitrary oracle routes, stablecoins and wrapped duplicates", async () => {
     const response = await GET();
     expect(response.status).toBe(200);
     const body = listableResponseSchema.parse(await response.json());
-    expect(body.assets.map((asset) => asset.symbol)).toEqual(["LINK", "UNI"]);
+    expect(body.assets.map((asset) => asset.symbol)).toEqual(["UNI"]);
     expect(body.fetchedAtMs).toBe(NOW);
     expect(body.oracleId).toBe("oracle.testnet");
     expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=60");

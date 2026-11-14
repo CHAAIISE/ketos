@@ -6,11 +6,17 @@ import { refreshSandboxPrices } from "./sandbox";
 const test = base.extend<{ browserErrors: void }>({
   browserErrors: [async ({ page }, use) => {
     const errors: string[] = [];
+    const paidRequests: string[] = [];
+    await page.route(/\/api\/(?:keeper\/tick|signed-prices)(?:[?#]|$)/, async (route) => {
+      paidRequests.push(route.request().url());
+      await route.abort();
+    });
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => {
       if (message.type() === "error") errors.push(message.text());
     });
     await use();
+    expect(paidRequests, "Read-only visits must not request maintenance or paid prices").toEqual([]);
     expect(errors, "No uncaught exceptions or console errors").toEqual([]);
   }, { auto: true }],
 });
@@ -18,19 +24,14 @@ const test = base.extend<{ browserErrors: void }>({
 // Read-only checks that run against any deployment: `BASE_URL=… playwright test --grep @smoke`.
 
 test.describe("deployment", { tag: "@smoke" }, () => {
-  test.beforeEach(async ({ page }) => {
-    // App pages normally request maintenance; a deployment smoke must never send transactions.
-    await page.route("**/api/keeper/tick", (route) => route.fulfill({
-      status: 200, contentType: "application/json", headers: { "Retry-After": "60" },
-      body: JSON.stringify({ ok: true, state: "throttled" }),
-    }));
-  });
-
-  test("markets admit entries on first load after scheduled maintenance", async ({ page }) => {
+  test("markets admit entries from independently maintained prices", { tag: "@availability" }, async ({ page }) => {
     if (!process.env.BASE_URL) await refreshSandboxPrices();
     await page.goto("/markets");
     const statuses = page.locator('[data-testid^="market-status-"]');
     await expect(statuses.first()).toBeVisible();
+    await expect(page.getByTestId("keeper-status")).toHaveText(
+      /^(Active risk prices fresh · \d+ markets|No open interest · prices refreshed on trade)$/,
+    );
     const open = (await statuses.allTextContents()).filter((status) => status === "Open").length;
     expect(open, "Run scheduled maintenance before smoke; stored marks must be fresh on first load").toBeGreaterThan(0);
     await expect(page.getByTestId("markets-count").locator("..")).toContainText(`· ${open} open`);
@@ -47,19 +48,28 @@ test.describe("deployment", { tag: "@smoke" }, () => {
   });
 
   test("markets lists the whole registry with live caps", async ({ page }) => {
+    const registryResponse = page.waitForResponse((response) =>
+      response.request().method() === "POST"
+      && response.request().postDataJSON()?.params?.method_name === "get_markets"
+      && response.ok());
     await page.goto("/markets");
+    const registry: { id: string }[] = JSON.parse(
+      Buffer.from((await (await registryResponse).json()).result.result).toString("utf8"),
+    );
+    await expect(page.getByTestId("markets-count")).toBeVisible();
     const closed = page.getByTestId("markets-closed-group");
     if (await closed.count()) await closed.locator("summary").click();
     const rows = page.locator('[data-testid^="market-row-"]');
-    await expect(rows.first()).toBeVisible();
-    expect(await rows.count()).toBeGreaterThanOrEqual(7);
+    await expect(rows).toHaveCount(registry.length);
+    expect(await rows.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-testid")).sort()))
+      .toEqual(registry.map((market) => `market-row-${market.id}`).sort());
     await expect(page.getByTestId("market-row-BTC")).toContainText(/\$[\d,.]+/);
+    await page.locator('aside a[href="/launch"]').click();
+    await expect(page).toHaveURL(/\/launch$/);
     await expect(page.getByTestId("list-market-panel")).toBeVisible();
   });
 
   test("trade shows the live price and exit-liquidity cap", async ({ page }) => {
-    await page.goto("/markets");
-    const marketsTitle = await page.title();
     await page.goto("/trade");
     await expect(page.getByTestId("mark-price")).toHaveText(/\$\d/);
     await expect(page.getByTestId("max-oi")).toHaveText(/^\$[\d,]+$/);
@@ -72,12 +82,18 @@ test.describe("deployment", { tag: "@smoke" }, () => {
     await page.getByTestId("market-tab-ETH").click();
     await expect(page).toHaveTitle(/^ETH-USD.*\$/);
     await expect.poll(() => page.title()).toContain(await page.getByTestId("mark-price").innerText());
-    await page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: "Propose a market", exact: true }).click();
-    await expect(page).toHaveTitle(marketsTitle);
+    const launch = page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: "Launch", exact: true });
+    if (await launch.isVisible()) await launch.click();
+    else {
+      await page.getByRole("button", { name: "Navigation menu", exact: true }).click();
+      await page.getByRole("navigation", { name: "More navigation" }).getByRole("link", { name: "Launch", exact: true }).click();
+    }
+    await expect(page).toHaveURL(/\/launch$/);
+    await expect(page.getByTestId("list-market-panel")).toBeVisible();
   });
 
   test("route preview returns a live quote without connecting a wallet", async ({ page }) => {
-    await page.goto("/trade");
+    await page.goto("/");
     await expect(page.getByTestId("wallet-account")).toHaveCount(0);
     const preview = page.getByTestId("public-route-preview");
     const response = page.waitForResponse((response) => {

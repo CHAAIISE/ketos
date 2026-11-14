@@ -2,6 +2,8 @@ import { nearConfig } from "@/lib/near/config";
 import { priceSigner, signedPriceAssets } from "@/lib/near/signed-prices";
 import { workerSignedPrices } from "@/lib/near/signed-prices-server";
 
+export const maxDuration = 60;
+
 /** Paid TEE execution stays server-side; the contract remains the final verifier. */
 export async function POST(request: Request) {
   let assets: string[] | null;

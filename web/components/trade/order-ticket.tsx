@@ -9,15 +9,17 @@ import { Term } from "@/components/vault/term";
 import { Button } from "@/components/ui/button";
 import { FieldMessage } from "@/components/ui/input";
 import { PanelTabs } from "@/components/ui/panel-tabs";
-import { useWallet } from "@/hooks/near-provider";
+import { useNear, useWallet } from "@/hooks/near-provider";
 import { useDepth, usePositions, type AccountSummary } from "@/hooks/use-ketos-queries";
 import { useOpenPosition, usePlaceOrder } from "@/hooks/use-ketos-mutations";
 import { toNearActionError } from "@/lib/near/errors";
 import { formatPrice, formatUnits, formatUsd, formatUsdc, parseUnits, parseUsdc, PRICE_DECIMALS } from "@/lib/near/format";
 import { entryFundingRequired, executionSlots, maxEntryMargin } from "@/lib/near/order-funding";
+import { executionLimits } from "@/lib/near/execution";
+import { signedPriceObservation, signedPricesFor } from "@/lib/near/signed-prices";
 import type { MarginMode, Market, Side } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
-import { marketDisplayStatus, marketLimitLabel, marketStatus } from "@/lib/near/market-status";
+import { isPriceFresh, marketDisplayStatus, marketLimitLabel, marketStatus } from "@/lib/near/market-status";
 import type { TradeStep } from "./onboarding";
 import { borrowRatePercent, entryTriggered, measuredImpactFee, MIN_POSITION_MARGIN, previewOrder, type EntryKind } from "./order-math";
 import { BracketFields, EMPTY_BRACKET, readBracket, TicketInput, type BracketDraft } from "./ticket-controls";
@@ -35,10 +37,11 @@ const ENTRY_TABS = [
 ] as const;
 const KIND_LABEL = { limit: "Limit", stop_market: "Stop Market" } as const;
 
-export function OrderTicket({ market, step, account, className }: {
-  market: Market; step: TradeStep | null; account: AccountSummary | undefined; className?: string;
+export function OrderTicket({ market, step, account, side, onSideChange, className }: {
+  market: Market; step: TradeStep | null; account: AccountSummary | undefined; side: Side; onSideChange: (side: Side) => void; className?: string;
 }) {
   const wallet = useWallet();
+  const { config } = useNear();
   const funding = useFundingDialog();
   const open = useOpenPosition();
   const place = usePlaceOrder();
@@ -47,16 +50,24 @@ export function OrderTicket({ market, step, account, className }: {
   const { track } = useTxToast();
   const nowMs = useNow();
   const [kind, setKind] = useState<EntryKind>("market");
-  const [side, setSide] = useState<Side>("long");
   const [sizeInput, setSizeInput] = useState("");
   const [triggerInput, setTriggerInput] = useState("");
   const [leverageChoice, setLeverageChoice] = useState(5);
-  const [marginMode, setMarginMode] = useState<MarginMode>("isolated");
+  const [marginModeChoice, setMarginMode] = useState<MarginMode>("isolated");
+  const marginMode: MarginMode = market.isolated_only ? "isolated" : marginModeChoice;
   const [sourceChoice, setSourceChoice] = useState<"wallet" | "margin" | null>(null);
   const [bracketsOn, setBracketsOn] = useState(false);
   const [takeProfit, setTakeProfit] = useState<BracketDraft>(EMPTY_BRACKET);
   const [stopLoss, setStopLoss] = useState<BracketDraft>(EMPTY_BRACKET);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [toleranceBps, setToleranceBps] = useState(50);
+  const [orderLifetimeMs, setOrderLifetimeMs] = useState(7 * 86_400_000);
+  const [reviewedPrice, setReviewedPrice] = useState<Pick<Market, "id" | "price" | "price_timestamp_ms"> | null>(null);
+  const [reviewingPrice, setReviewingPrice] = useState(false);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const reference = reviewedPrice?.id === market.id && reviewedPrice.price_timestamp_ms > market.price_timestamp_ms
+    ? reviewedPrice : market;
+  const referenceFresh = nowMs > 0 && isPriceFresh(reference, nowMs) && nowMs - reference.price_timestamp_ms <= 30_000;
 
   const isMarket = kind === "market";
   const mutation = isMarket ? open : place;
@@ -65,7 +76,10 @@ export function OrderTicket({ market, step, account, className }: {
   const sizeUnits = parseUsdc(sizeInput);
   const margin = sizeUnits === null ? null : sizeUnits / lev;
   const trigger = isMarket ? null : parseUnits(triggerInput, PRICE_DECIMALS);
-  const entryPrice = isMarket ? market.price : (trigger ?? 0n);
+  const entryPrice = isMarket ? (referenceFresh ? reference.price : 0n) : (trigger ?? 0n);
+  const boundPreview = entryPrice > 0n
+    ? executionLimits(entryPrice, side, false, kind === "limit" ? 0 : toleranceBps, nowMs + 120_000).limitPrice
+    : null;
   const size = (margin ?? 0n) * lev;
   const samples = depth.data?.history.at(-1)?.samples;
   const impactFee = measuredImpactFee(size, samples ?? []);
@@ -95,11 +109,11 @@ export function OrderTicket({ market, step, account, className }: {
     : preview.openFee >= (margin ?? 0n) ? "Fees would consume this margin. Lower the leverage or choose a deeper market." : null;
   const triggerError = isMarket || triggerInput.trim() === "" ? null
     : trigger === null || trigger === 0n ? "Enter a price above zero." : null;
-  const firesNow = !isMarket && trigger !== null && trigger > 0n && market.price > 0n && entryTriggered(kind, side, trigger, market.price);
+  const firesNow = !isMarket && trigger !== null && trigger > 0n && referenceFresh && entryTriggered(kind, side, trigger, reference.price);
   const refusal = mutation.error;
-  const ready = status.open && Boolean(margin) && !sizeError && !tp.error && !sl.error && (isMarket || (trigger !== null && trigger > 0n));
+  const ready = status.open && entryPrice > 0n && Boolean(margin) && !sizeError && !tp.error && !sl.error && (isMarket || (trigger !== null && trigger > 0n));
 
-  function resetResult() { open.reset(); place.reset(); }
+  function resetResult() { open.reset(); place.reset(); setPriceError(null); }
   function setSize(units: bigint) {
     setSizeInput(units > 0n ? formatUsdc(units, { grouping: false, maxFractionDigits: 6, minFractionDigits: 0 }) : "");
     resetResult();
@@ -107,9 +121,40 @@ export function OrderTicket({ market, step, account, className }: {
   function applyMaxSize(capUnits: bigint) {
     setSize((trading && maxSize < capUnits ? maxSize : capUnits) / lev * lev);
   }
+  async function refreshPrice() {
+    if (reviewingPrice) return;
+    setReviewingPrice(true);
+    setPriceError(null);
+    try {
+      const signed = await signedPricesFor(config, { kind: "markets", markets: [market.id] });
+      if (!signed) {
+        setPriceError("Fresh price unavailable. No trade was submitted. Try again when the price service recovers.");
+        return;
+      }
+      setReviewedPrice({ id: market.id, ...signedPriceObservation(signed, market.id) });
+      resetResult();
+    } catch {
+      setPriceError("Price review failed. No trade was submitted. Try again.");
+    } finally {
+      setReviewingPrice(false);
+    }
+  }
   async function submit() {
     if (!margin || !ready) return;
-    const base = { marketId: market.id, side, margin, leverage, marginMode, brackets, fundingSource };
+    const submittedAt = Date.now();
+    const restingExpiry = submittedAt + orderLifetimeMs;
+    if (isMarket && (!isPriceFresh(reference, submittedAt) || submittedAt - reference.price_timestamp_ms > 30_000)) {
+      await refreshPrice();
+      return;
+    }
+    setPriceError(null);
+    const execution = executionLimits(entryPrice, side, false, kind === "limit" ? 0 : toleranceBps,
+      isMarket ? submittedAt + 120_000 : restingExpiry);
+    const bracketBounds = brackets ? {
+      takeProfit: tp.price ? executionLimits(tp.price, side, true, 0, restingExpiry) : null,
+      stopLoss: sl.price ? executionLimits(sl.price, side, true, toleranceBps, restingExpiry) : null,
+    } : undefined;
+    const base = { marketId: market.id, side, margin, leverage, marginMode, brackets, fundingSource, execution, bracketBounds };
     const sideLabel = side === "long" ? "Long" : "Short";
     const done = isMarket || trigger === null
       ? await track(() => open.mutateAsync(base), {
@@ -136,28 +181,35 @@ export function OrderTicket({ market, step, account, className }: {
     {(connectError ?? wallet.error) ? <FieldMessage tone="error">{connectError ?? wallet.error?.message}</FieldMessage> : null}
   </>;
   else if (step === "fund" && account) action = <FundButton account={account} prominent className="h-10 w-full" />;
+  else if (isMarket && !referenceFresh) action = <Button data-primary="" data-testid="review-entry-price" className="h-10 w-full"
+    disabled={!status.open || reviewingPrice || mutation.isPending} onClick={() => void refreshPrice()}>
+    {reviewingPrice ? "Observing price…" : "Review fresh price"}
+  </Button>;
   else action = <Button data-primary="" data-testid="open-position" variant={side} className="h-10 w-full"
     disabled={!ready || mutation.isPending} onClick={submit}>
     {mutation.isPending ? "Placing order…" : `${side === "long" ? "Long" : "Short"}${isMarket ? "" : ` · ${KIND_LABEL[kind]}`}`}
   </Button>;
 
-  return <section id="order-ticket" tabIndex={-1} aria-label="Open a position" className={cn("flex min-w-0 scroll-mt-4 flex-col gap-3 rounded-md border border-border bg-card p-3 focus-visible:outline-2 focus-visible:outline-ring", className)}>
-    <fieldset disabled={!status.open || mutation.isPending} aria-describedby={!status.open ? "entry-unavailable" : undefined} className="contents">
+  return <section id="order-ticket" tabIndex={-1} aria-label="Open a position" className={cn("flex min-h-0 min-w-0 scroll-mt-4 flex-col gap-2 rounded-lg border border-border bg-card p-3 focus-visible:outline-2 focus-visible:outline-ring lg:min-h-fit", className)}>
+    <div className="flex min-h-0 flex-col gap-2 overflow-y-auto [&>*]:shrink-0 lg:contents">
+    <fieldset disabled={!status.open || mutation.isPending || reviewingPrice} aria-describedby={!status.open ? "entry-unavailable" : undefined} className="contents">
       <div role="radiogroup" aria-label="Margin mode" className="grid grid-cols-2 gap-2">
         {(["isolated", "cross"] as const).map((mode) => <label key={mode}
-          className={cn("flex h-8 cursor-pointer items-center justify-center rounded-md border border-border text-ui capitalize text-muted-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring", marginMode === mode && "bg-muted text-foreground")}>
+          className={cn("flex h-8 cursor-pointer items-center justify-center rounded-md border border-border text-ui capitalize text-muted-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring", marginMode === mode && "bg-muted text-foreground", market.isolated_only && mode === "cross" && "cursor-not-allowed opacity-40")}>
           <input type="radio" name="entry-margin-mode" value={mode} checked={marginMode === mode} data-testid={`margin-mode-${mode}`} className="sr-only"
+            disabled={market.isolated_only && mode === "cross"}
             onChange={() => { setMarginMode(mode); resetResult(); }} />{mode}
         </label>)}
       </div>
+      {market.isolated_only ? <p className="text-label text-muted-foreground">Isolated margin only · this market has dedicated LP capital.</p> : null}
       <PanelTabs tabs={ENTRY_TABS} value={isMarket ? "market" : "limit"} onChange={(next) => {
         setKind(next);
-        if (next !== "market" && triggerInput === "" && market.price > 0n) setTriggerInput(formatUnits(market.price, PRICE_DECIMALS, { grouping: false, maxFractionDigits: 6 }));
+        if (next !== "market" && triggerInput === "" && referenceFresh) setTriggerInput(formatUnits(reference.price, PRICE_DECIMALS, { grouping: false, maxFractionDigits: 6 }));
         resetResult();
       }} label="Order type" idPrefix="order-type" className="-mx-3" />
       <div role="radiogroup" aria-label="Side" className="grid grid-cols-2 rounded-md bg-muted p-1">
         {(["long", "short"] as const).map((s) => <label key={s} data-testid={`side-${s}`} className={cn("flex h-8 cursor-pointer items-center justify-center rounded-md text-ui text-muted-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring", side === s && (s === "long" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"))}>
-          <input type="radio" name="entry-side" value={s} checked={side === s} className="sr-only" onChange={() => { setSide(s); resetResult(); }} />
+          <input type="radio" name="entry-side" value={s} checked={side === s} className="sr-only" onChange={() => { onSideChange(s); resetResult(); }} />
           {s === "long" ? "Long" : "Short"}
         </label>)}
       </div>
@@ -166,7 +218,7 @@ export function OrderTicket({ market, step, account, className }: {
           <span data-testid="free-margin">{account ? `${formatUsdc(available)} USDC` : "—"}</span>
         </Row>
         <Row label={side === "long" ? "Open Longs" : "Open Shorts"}>{heldAsset === undefined ? "—" : `${formatUnits(heldAsset, 6, { maxFractionDigits: 4 })} ${market.id}`}</Row>
-        <Row label={<Term hint={market.price_timestamp_ms ? `Stored oracle mark. Updated ${new Date(market.price_timestamp_ms).toUTCString()}; the action fetches a fresh entry price.` : "No oracle price stored yet."}>Mark Price</Term>}>{market.price > 0n ? formatPrice(market.price) : "—"}</Row>
+        <Row label={<Term hint={market.price_timestamp_ms ? `Stored oracle mark. Updated ${new Date(market.price_timestamp_ms).toUTCString()}; this is not a current execution quote.` : "No oracle price stored yet."}>Stored Mark</Term>}>{market.price > 0n ? formatPrice(market.price) : "—"}</Row>
       </dl>
       <div className="flex flex-col gap-1">
         <label htmlFor="order-leverage" className="flex items-center justify-between text-label text-tertiary">
@@ -183,7 +235,7 @@ export function OrderTicket({ market, step, account, className }: {
           {[...new Set([1, ...[2, 5, 10].filter((n) => n < market.max_leverage), market.max_leverage])].map((n) => <button type="button" key={n} onClick={() => { setLeverageChoice(n); resetResult(); }} className="rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">{n}×</button>)}
         </div>
       </div>
-      <dl><Row label={<Term hint="Estimated from the stored price and opening fees. Cross liquidation depends on the whole pool, not one price.">Est. Liq. Price</Term>}>
+      <dl><Row label={<Term hint="Estimated from the reviewed entry reference and opening fees. Cross liquidation depends on the whole pool, not one price.">Est. Liq. Price</Term>}>
         {marginMode === "cross" ? "Shared (cross)" : preview.size > 0n && preview.liquidationPrice > 0n ? formatPrice(preview.liquidationPrice) : "—"}
       </Row></dl>
       <div id="order-type-panel" role="tabpanel" aria-labelledby={`order-type-tab-${isMarket ? "market" : "limit"}`} className="flex flex-col gap-2">
@@ -202,7 +254,7 @@ export function OrderTicket({ market, step, account, className }: {
           </select>
         </label> : null}
         <div className="flex flex-col gap-1 rounded-md border border-border bg-input px-3 py-2 focus-within:border-ring">
-          <div className="flex justify-between text-label text-tertiary"><label htmlFor="order-size">Amount</label>
+          <div className="flex justify-between text-label text-tertiary"><label htmlFor="order-size">Position size</label>
             <button type="button" disabled={!trading || maxSize === 0n} onClick={() => setSize(maxSize)} className="text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-40">Max</button>
           </div>
           <div className="flex items-center gap-2"><input id="order-size" name="order-size" inputMode="decimal" autoComplete="off" placeholder="0" value={sizeInput} aria-invalid={Boolean(sizeError)}
@@ -214,23 +266,36 @@ export function OrderTicket({ market, step, account, className }: {
         {sizeError ? <FieldMessage tone="error" role="status">{sizeError}</FieldMessage> : null}
         <BracketFields enabled={bracketsOn} onToggle={(v) => { setBracketsOn(v); resetResult(); }} side={side} reference={entryPrice} size={preview.size}
           takeProfit={takeProfit} stopLoss={stopLoss} onTakeProfit={(v) => { setTakeProfit(v); resetResult(); }} onStopLoss={(v) => { setStopLoss(v); resetResult(); }} />
+        {kind !== "limit" || bracketsOn ? <label className="flex items-center justify-between text-label text-tertiary">Price tolerance
+          <select aria-label="Price tolerance" value={toleranceBps} onChange={(event) => { setToleranceBps(Number(event.target.value)); resetResult(); }} className="rounded-md border border-border bg-input px-2 py-1 text-foreground">
+            {[10, 50, 100, 200].map((bps) => <option key={bps} value={bps}>{bps / 100}%</option>)}
+          </select>
+        </label> : null}
+        {!isMarket || bracketsOn ? <label className="flex items-center justify-between text-label text-tertiary">Order / TP/SL expiry
+          <select aria-label="Order expiry" value={orderLifetimeMs} onChange={(event) => { setOrderLifetimeMs(Number(event.target.value)); resetResult(); }} className="rounded-md border border-border bg-input px-2 py-1 text-foreground">
+            <option value={3_600_000}>1 hour</option><option value={86_400_000}>24 hours</option><option value={7 * 86_400_000}>7 days</option>
+          </select>
+        </label> : null}
       </div>
     </fieldset>
     <dl className="flex flex-col gap-1">
-      <Row label={<Term hint="Execution uses the refreshed oracle price, not a swap. There is no user-set slippage bound or guaranteed fill price.">Slippage</Term>}>Not bounded</Row>
+      <Row label={<Term hint="Onchain maximum for buys or minimum for sells, excluding fees. Limit orders never fill worse than their limit. A market authorization expires two minutes after submission.">Execution {side === "long" ? "ceiling" : "floor"}</Term>}>{boundPreview === null ? "—" : formatPrice(boundPreview)}</Row>
       <Row label="Order Value">{formatUsd(preview.size)}</Row>
       <Row label="Margin Required">{formatUsd(margin ?? 0n)}</Row>
       <Row label="Est. Entry Price">{entryPrice > 0n ? formatPrice(entryPrice) : "—"}</Row>
       <Row label={<Term hint="Trading fee plus measured impact fee, paid from margin. Based on the latest stored depth; execution rechecks it.">Fees</Term>}>{size > 0n ? formatUsd(preview.openFee) : "—"}</Row>
       {slots > 0 ? <Row label={<Term hint="Separate collateral: 5 bps of order value, minimum 0.10 USDC per entry/TP/SL. Wallet entries reserve all rewards now. A resting order using Ketos margin reserves its TP/SL rewards only at fill; keep that margin available. Unused reservations are refundable.">Keeper budget</Term>}>{formatUsd(rewardReserve)}</Row> : null}
     </dl>
-    {action}
+    <div className="flex flex-col gap-2 lg:order-2">
     {step === "connect" ? <p data-testid="step-hint" className="text-label text-muted-foreground">Sign in, fund your wallet, then trade in one confirmation.</p>
       : step === "fund" ? <p data-testid="step-hint" className="text-label text-muted-foreground">Get 1,000 USDC plus gas if needed. Funding needs no wallet signature.</p>
       : <p className="text-label text-tertiary">{fundingSource === "wallet" ? "One confirmation · USDC moves directly from your wallet. Unused funds return automatically." : "One confirmation · uses your existing Ketos margin."}</p>}
-    {!isMarket || bracketsOn ? <p data-testid="keeper-note" className="text-label text-tertiary">Executed at oracle price by the keeper. No price guarantee; capacity is checked again at execution.</p> : null}
+    {!isMarket || bracketsOn ? <p data-testid="keeper-note" className="text-label text-tertiary">Bounded execution · finite expiry. Price gaps can reject TP/SL; a fill is never guaranteed.</p>
+      : <p className="text-label text-tertiary">Expires in 2 minutes · fees excluded from price tolerance.</p>}
     {!status.open ? <FieldMessage tone="error" role="status"><span id="entry-unavailable" data-testid="entry-unavailable">{status.label}: order entry is disabled. Choose another market or wait for capacity to recover. Existing positions can still be closed.</span></FieldMessage>
-      : !displayStatus.open ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">Close-only at the stored price. Submitting fetches a fresh price; entry requires a price no older than 30 seconds.</p> : null}
+      : isMarket && !referenceFresh ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">Review a fresh signed price before placing this market order. The request is sponsored; it does not submit a trade.</p>
+      : !displayStatus.open ? <p role="status" data-testid="close-only-notice" className="text-label text-warning">Execution requires a fresh observation no older than 30 seconds.</p> : null}
+    {priceError && !referenceFresh ? <FieldMessage tone="error" role="status"><span data-testid="price-review-error">{priceError}</span></FieldMessage> : null}
     {refusal ? <div role="status" data-testid="order-error" className="flex flex-col gap-2 rounded-md border border-destructive/50 p-3">
       <p className="text-ui text-destructive">{refusal.message}</p>
       {refusal.capUsdc !== undefined && refusal.capUsdc > 0n ? <Button variant="outline" size="sm" className="w-fit" onClick={() => applyMaxSize(refusal.capUsdc!)}>Use max size ({formatUsd(refusal.capUsdc, { maxFractionDigits: 0 })})</Button> : null}
@@ -241,5 +306,8 @@ export function OrderTicket({ market, step, account, className }: {
       <p className="mt-2">{samples ? "Impact fees follow the latest measured curve." : "Depth unavailable: fee estimate uses the conservative 1% fallback."} Amount is the position&apos;s USDC order value; margin is amount ÷ leverage. Wallet and Ketos margin cannot be combined in one order.</p>
       <button type="button" onClick={() => funding.open("deposit")} className="mt-2 underline underline-offset-4 hover:text-foreground">Advanced: move wallet USDC to Ketos margin</button>
     </details>
+    </div>
+    </div>
+    <div className="shrink-0 border-t border-border pt-2 lg:order-1 lg:border-0 lg:pt-0">{action}</div>
   </section>;
 }

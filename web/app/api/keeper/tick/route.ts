@@ -8,19 +8,22 @@ export const maxDuration = 300;
 
 const gate = new TickGate();
 
-/** Scheduled callers authenticate; browser fallback also honours the latest on-chain measurement. */
+/** Explicit operator fallback only; normal surveillance belongs to the standalone runner. */
 export async function POST(request: Request) {
   const authorization = request.headers.get("authorization");
-  if (authorization !== null) {
-    const secret = process.env.CRON_SECRET?.trim();
-    if (!secret || !timingSafeEqual(
-      createHash("sha256").update(authorization).digest(),
-      createHash("sha256").update(`Bearer ${secret}`).digest(),
-    )) {
-      return Response.json({ ok: false, reason: "invalid keeper authorization" }, {
-        status: 401, headers: { "Cache-Control": "no-store" },
-      });
-    }
+  const secret = process.env.CRON_SECRET?.trim();
+  if (!authorization || !secret || !timingSafeEqual(
+    createHash("sha256").update(authorization).digest(),
+    createHash("sha256").update(`Bearer ${secret}`).digest(),
+  )) {
+    return Response.json({ ok: false, reason: "invalid keeper authorization" }, {
+      status: 401, headers: { "Cache-Control": "no-store" },
+    });
+  }
+  if (process.env.KEEPER_HTTP_ENABLED !== "1") {
+    return Response.json({ ok: false, reason: "maintenance is owned by the standalone runner" }, {
+      status: 409, headers: { "Cache-Control": "no-store" },
+    });
   }
   const privateKey = process.env.KEEPER_PRIVATE_KEY?.trim();
   if (!privateKey) {
@@ -28,18 +31,13 @@ export async function POST(request: Request) {
   }
 
   let chain;
-  let lastTickMs: number | null = null;
   try {
     chain = await keeperChain(privateKey);
-    if (authorization === null) {
-      const markets = await chain.markets();
-      lastTickMs = Math.max(0, ...markets.map((m) => m.depth_measured_at_ms)) || null;
-    }
   } catch (e) {
     return Response.json({ ok: false, reason: `NEAR RPC unavailable: ${errorMessage(e)}` }, { status: 502, headers: { "Cache-Control": "no-store" } });
   }
 
-  const entry = gate.enter(Date.now(), lastTickMs);
+  const entry = gate.enter(Date.now(), null);
   if (!entry.ok) {
     const seconds = Math.ceil(entry.retryAfterMs / 1000);
     return Response.json(
@@ -49,7 +47,7 @@ export async function POST(request: Request) {
   }
   try {
     const summary = await runTick(chain, oneClickDepthSource(process.env.ONECLICK_JWT?.trim() || undefined));
-    return Response.json(summary, { status: summary.ok ? 200 : 503, headers: { "Cache-Control": "no-store" } });
+    return Response.json(summary, { status: summary.ok && !summary.degraded ? 200 : 503, headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return Response.json({ ok: false, reason: errorMessage(e) }, { status: 500, headers: { "Cache-Control": "no-store" } });
   } finally {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { nearConfig } from "./near/config";
 import { marketDisplayStatus } from "./near/market-status";
-import { historyKindSchema, VAULT_IDS } from "./near/types";
+import { historyKindSchema, VAULT_IDS, vaultIdSchema } from "./near/types";
 import { ACCOUNT_HISTORY_LEN, KetosViews, LEADERBOARD_MAX } from "./near/views";
 import { windowVolume } from "./near/volume";
 import { statsResponseSchema, type StatsResponse } from "./stats";
@@ -21,7 +21,7 @@ const marketsSchema = z.array(z.object({
   price_timestamp_ms: timestamp,
   close_only: z.boolean(),
 }));
-const vaultsSchema = z.array(z.object({ id: z.enum(VAULT_IDS), nav: amount }));
+const vaultsSchema = z.array(z.object({ id: vaultIdSchema, nav: amount }));
 const cohortSchema = z.array(z.object({ account_id: z.string().min(2) })).max(LEADERBOARD_MAX);
 const historySchema = z.array(z.object({
   sequence: timestamp,
@@ -35,7 +35,7 @@ export type StatsViews = Pick<KetosViews, "markets" | "vaults" | "leaderboard" |
 /**
  * The leaderboard indexes only the 500 most recently active accounts; each account
  * retains 200 history events. Full indexes/rings make 24h activity a lower bound.
- * Trades match the UI's entry/exit count: open, close and liquidation. order_fill
+ * Trades match the UI's entry/exit count: open, reduce, close and liquidation. order_fill
  * annotates an already recorded entry/exit and must not be counted a second time.
  */
 export async function collectStats(views: StatsViews, now: () => number = Date.now): Promise<StatsResponse> {
@@ -54,8 +54,8 @@ export async function collectStats(views: StatsViews, now: () => number = Date.n
   cohortSchema.parse(cohort);
   if (new Set(markets.map((market) => market.id)).size !== markets.length
     || new Set(cohort.map((entry) => entry.account_id)).size !== cohort.length
-    || vaults.length !== VAULT_IDS.length
-    || new Set(vaults.map((vault) => vault.id)).size !== VAULT_IDS.length) {
+    || VAULT_IDS.some((id) => !vaults.some((vault) => vault.id === id))
+    || new Set(vaults.map((vault) => vault.id)).size !== vaults.length) {
     throw new Error("Incomplete or duplicate onchain statistics sources");
   }
 

@@ -24,7 +24,7 @@ export function nearConfig(): NearConfig {
     })
     .safeParse({
       network: process.env.NEXT_PUBLIC_NEAR_NETWORK ?? "testnet",
-      rpcUrl: process.env.NEXT_PUBLIC_RPC_URL ?? "https://test.rpc.fastnear.com",
+      rpcUrl: process.env.NEXT_PUBLIC_RPC_URL ?? "https://near-testnet.drpc.org",
       ketosContract: process.env.NEXT_PUBLIC_KETOS_CONTRACT,
       usdcContract: process.env.NEXT_PUBLIC_USDC_CONTRACT,
     });

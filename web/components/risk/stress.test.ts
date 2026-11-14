@@ -33,6 +33,7 @@ function market(overrides: Partial<Market> = {}): Market {
     measured_cap_is_grid_max: false,
     close_only: false,
     is_open: true,
+    isolated_only: false, launch_state: null,
     funding_rate_per_hour: 0n,
     ...overrides,
   };
@@ -72,8 +73,11 @@ function position(overrides: Partial<Position> = {}): Position {
 function vault(overrides: Partial<Vault> = {}): Vault {
   return {
     id: "core",
+    market_id: null, created_at_ms: null, last_snapshot_at_ms: null,
     balance: 10_000n * USD,
     nav: 10_000n * USD,
+    hedge_assets: 0n,
+    hedge_valuation_ready: true,
     total_shares: 10_000n * USD,
     share_price: USD,
     reserved: 500n * USD,

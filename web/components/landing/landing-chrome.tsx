@@ -4,11 +4,11 @@ import { buttonVariants } from "@/components/ui/button";
 import { Container } from "@/components/ui/page-shell";
 import { networkName } from "@/lib/near/config";
 
-const linkClass = "rounded-sm text-label text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:text-ui";
+const linkClass = "inline-flex min-h-11 items-center rounded-sm text-label text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:min-h-0 md:text-ui";
 const navLinks = [
   { href: "/#markets", label: "Markets" },
   { href: "/#vaults", label: "Earn" },
-  { href: "/#how-it-works", label: "How it works" },
+  { href: "/launch", label: "Launch" },
   { href: "/#risk", label: "Risk" },
 ] as const;
 
@@ -19,6 +19,9 @@ export function LandingNav() {
         <Link href="/" aria-label="Ketos home" className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
           <Logo height={20} />
         </Link>
+        <span data-testid="network-disclosure" className="shrink-0 rounded-sm border border-border px-2 py-1 text-label text-muted-foreground">
+          Testnet · No real funds
+        </span>
         <nav aria-label="Site" className="order-3 flex w-full items-center justify-between gap-3 md:order-none md:ml-auto md:w-auto md:justify-start md:gap-8">
           {navLinks.map((link) => <Link key={link.href} href={link.href} className={linkClass}>{link.label}</Link>)}
         </nav>
@@ -36,6 +39,7 @@ export function LandingFooter() {
           <Link href="/trade" className={linkClass}>Trade</Link>
           <Link href="/markets" className={linkClass}>Markets</Link>
           <Link href="/vaults" className={linkClass}>Earn</Link>
+          <Link href="/portfolio" className={linkClass}>Portfolio</Link>
           <Link href="/risk" className={linkClass}>Risk</Link>
         </nav>
         <p className="text-label text-tertiary">Built at NEAR HACKATHON · {networkName()}</p>

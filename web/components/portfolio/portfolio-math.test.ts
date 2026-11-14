@@ -140,7 +140,7 @@ describe("cumulativePnl", () => {
       event({ sequence: 3, kind: "funding", realized_pnl: -9n * USD, funding_paid: 9n * USD }),
       event({
         sequence: 4,
-        kind: "close",
+        kind: "reduce",
         timestamp_ms: 2000,
         pnl: 20n * USD,
         realized_pnl: 7n * USD,

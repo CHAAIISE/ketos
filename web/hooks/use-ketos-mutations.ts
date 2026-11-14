@@ -4,8 +4,10 @@ import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-quer
 import { z } from "zod";
 import {
   addCrossMarginTx,
+  amendBracketsTx,
   cancelOrderTx,
   closePositionTx,
+  reducePositionTx,
   depositMarginTx,
   depositVaultTx,
   listMarketTx,
@@ -19,6 +21,8 @@ import {
   type OpenPositionArgs,
   type PlaceOrderArgs,
   type ClosePositionArgs,
+  type ReducePositionArgs,
+  type AmendBracketsArgs,
 } from "@/lib/near/calls";
 import type { NearConfig } from "@/lib/near/config";
 import { NearActionError, toNearActionError } from "@/lib/near/errors";
@@ -36,7 +40,7 @@ const toAmount = (value: unknown): bigint | null =>
   typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : null;
 
 const PRICED_ACTION_METHODS: Record<string, true> = {
-  open_position: true, close_position: true, place_order: true, execute_orders: true,
+  open_position: true, close_position: true, reduce_position: true, place_order: true, amend_brackets: true, execute_orders: true,
   liquidate: true, liquidate_cross: true, withdraw_vault: true, pull_market_price: true,
 };
 
@@ -118,6 +122,7 @@ const tradingKeys = (accountId: string | null): QueryKey[] => [
 
 const vaultKeys = (accountId: string | null): QueryKey[] => [
   ketosKeys.account(accountId),
+  ketosKeys.markets(),
   ketosKeys.vaults(),
   ketosKeys.anyVault(),
   ketosKeys.vaultAccounts(),
@@ -215,6 +220,22 @@ export function useClosePosition() {
   return useTxMutation<ClosePositionArgs, TxReceipt & { payout: bigint | null }>({
     build: closePositionTx,
     parse: (result) => ({ txHash: result.txHash, payout: toAmount(result.value) }),
+    invalidate: tradingKeys,
+  });
+}
+
+export function useReducePosition() {
+  return useTxMutation<ReducePositionArgs, TxReceipt & { payout: bigint | null }>({
+    build: reducePositionTx,
+    parse: (result) => ({ txHash: result.txHash, payout: toAmount(result.value) }),
+    invalidate: tradingKeys,
+  });
+}
+
+export function useAmendBrackets() {
+  return useTxMutation<AmendBracketsArgs, TxReceipt & { released: bigint | null }>({
+    build: amendBracketsTx,
+    parse: (result) => ({ txHash: result.txHash, released: toAmount(result.value) }),
     invalidate: tradingKeys,
   });
 }

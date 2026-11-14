@@ -6,6 +6,7 @@ const screens = [
   ["landing", "/"],
   ["trade", "/trade?market=ETH"],
   ["markets", "/markets"],
+  ["launch", "/launch"],
   ["vaults", "/vaults"],
   ["vault-core", "/vaults/core"],
   ["vault-long-tail", "/vaults/long-tail"],
@@ -14,19 +15,13 @@ const screens = [
   ["leaderboard", "/leaderboard"],
 ] as const;
 
-async function singlePrimary(page: Page) {
-  const primary = page.locator("[data-primary]:visible");
-  await expect(primary).toHaveCount(1);
-  await expect(primary).not.toHaveText(/Loading/);
-  return primary;
-}
 
 async function capture(page: Page, name: string) {
   const phase = process.env.UX_CAPTURE_PHASE;
   const dir = process.env.UX_CAPTURE_DIR;
   if (!dir || (phase !== "avant" && phase !== "apres")) return;
   await mkdir(dir, { recursive: true });
-  await page.screenshot({ path: join(dir, `ux-v3-${name}-${phase}.png`), fullPage: true });
+  await page.screenshot({ path: join(dir, `ux-v3-${name}-${phase}.png`), fullPage: true, caret: "initial" });
 }
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -34,34 +29,39 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   test.describe(`guided UX at ${viewport.width}px`, () => {
     test.use({ viewport });
 
-    test("one main action on every demo screen, signed out and funded", async ({ page }) => {
+    test("navigation and wallet funding work across responsive layouts", async ({ page }) => {
       test.setTimeout(240_000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      // This navigation check must not race a background keeper transaction.
-      await page.route("**/api/keeper/tick", (route) => route.fulfill({
-        status: 200, contentType: "application/json", headers: { "Retry-After": "60" },
-        body: JSON.stringify({ ok: true, state: "throttled" }),
-      }));
+      const maintenanceRequests: string[] = [];
+      page.on("request", (request) => {
+        if (new URL(request.url()).pathname === "/api/keeper/tick") maintenanceRequests.push(request.url());
+      });
 
       for (const [name, path] of screens) {
         await test.step(`fresh visitor: ${name}`, async () => {
           await page.goto(path);
-          await singlePrimary(page);
           if (name === "trade") {
             await expect(page.getByTestId("onboarding-steps")).toBeVisible();
             await expect(page.getByTestId("onboarding-steps").locator('[aria-current="step"]')).toContainText("Connect");
             if (size === "mobile") {
-              const shortcut = page.getByRole("link", { name: "Order ticket ↓", exact: true });
-              await expect(shortcut).toBeInViewport();
-              await shortcut.click();
-              await expect(page.getByRole("region", { name: "Open a position" })).toBeInViewport();
-              await expect(page.getByRole("region", { name: "Open a position" })).toBeFocused();
+              const long = page.getByRole("button", { name: "Long", exact: true });
+              await expect(long).toBeInViewport();
+              await expect(page.getByRole("button", { name: "Short", exact: true })).toBeInViewport();
+              await long.click();
+              await expect(page.getByRole("dialog", { name: "ETH-USD · Long", exact: true })).toBeVisible();
+              await page.keyboard.press("Escape");
+              await expect(long).toBeFocused();
+              await page.getByRole("button", { name: "Short", exact: true }).click();
+              await expect(page.getByRole("radio", { name: "Short", exact: true })).toBeChecked();
             }
           }
-          if (name === "markets") {
+          if (name === "launch") {
+            await expect(page.getByTestId("listable-AAVE")).toBeVisible();
             await expect(page.getByTestId("listable-AURORA")).toHaveCount(0);
             await expect(page.getByTestId("listable-RHEA")).toHaveCount(0);
+          }
+          if (name === "markets") {
             await page.getByTestId("markets-search").fill("ETH");
             await expect(page.getByTestId("market-row-ETH")).toBeVisible();
             await page.getByTestId("markets-search").clear();
@@ -80,23 +80,24 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
         await page.getByTestId("connect-button").click();
         await page.getByTestId("wallet-option-e2e").click();
         await expect(page.getByTestId("wallet-account")).toBeVisible();
-        const primary = await singlePrimary(page);
+        if (size === "mobile") await page.getByRole("button", { name: "Long", exact: true }).click();
         if (await page.getByTestId("ticket-fund-button").isVisible()) {
-          await primary.click();
+          await page.getByTestId("ticket-fund-button").click();
           await expect(page.getByTestId("tx-toast").filter({ hasText: "1,000 USDC added" })).toBeVisible();
         }
-        await expect(page.getByTestId("open-position")).toBeVisible();
+        await expect(page.getByTestId("open-position").or(page.getByTestId("review-entry-price"))).toBeVisible();
         await expect(page.getByTestId("free-margin")).toContainText("USDC");
       });
 
       for (const [name, path] of screens.filter(([name]) => name !== "landing")) {
         await test.step(`funded wallet: ${name}`, async () => {
           await page.goto(path);
-          await singlePrimary(page);
+          if (name === "trade" && size === "mobile") await page.getByRole("button", { name: "Long", exact: true }).click();
           await capture(page, `${name}-${size}-funded`);
         });
       }
       expect(errors).toEqual([]);
+      expect(maintenanceRequests).toEqual([]);
     });
   });
 }

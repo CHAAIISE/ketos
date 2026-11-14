@@ -16,11 +16,13 @@ export function findLiquidatable(positions: readonly Position[], markets: readon
     });
 }
 
-/** Cached prices only nominate candidates; each contract execution pulls and rechecks its market. */
-export function findTriggeredOrders(orders: readonly Order[], positions: readonly Position[], markets: readonly Market[]): Order[] {
+/** Expired authorizations need refunds; only authorized live orders nominate price triggers. */
+export function findTriggeredOrders(orders: readonly Order[], positions: readonly Position[], markets: readonly Market[], nowMs: number): Order[] {
   const priceAt = new Map(markets.map((m) => [m.id, m]));
   const positionAt = new Map(positions.map((p) => [p.id, p]));
   return orders.filter((order) => {
+    if (!order.execution) return false;
+    if (nowMs > order.execution.expires_at_ms) return true;
     const request = order.request;
     const target = "position_id" in request ? positionAt.get(request.position_id) : request;
     if (!target) return false;

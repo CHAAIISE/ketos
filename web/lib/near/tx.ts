@@ -81,7 +81,11 @@ export function settleOutcome(raw: unknown): TxResult {
     const refundReason = (outcome.receipts_outcome ?? [])
       .flatMap((receipt) => receipt.outcome.logs ?? [])
       .find((line) => /^(wallet (?:entry|order) rejected|price action cancelled): ERR_/.test(line));
-    return { txHash, value: decodeSuccessValue(status.SuccessValue), ...(refundReason ? { refundReason } : {}) };
+    const value = decodeSuccessValue(status.SuccessValue);
+    if (value !== null && typeof value === "object" && "error" in value && typeof value.error === "string") {
+      throw new TxFailureError({ ExecutionError: value.error }, txHash);
+    }
+    return { txHash, value, ...(refundReason ? { refundReason } : {}) };
   }
   for (const receipt of outcome.receipts_outcome ?? []) {
     const receiptStatus = receipt.outcome.status;

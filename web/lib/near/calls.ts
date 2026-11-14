@@ -5,6 +5,7 @@ import { signedPricesArg, signedPricesFor, type PriceContracts } from "./signed-
 import type { MarginMode, MarketId, PriceSource, Side, VaultId } from "./types";
 import { KetosViews } from "./views";
 import { entryFundingRequired, executionSlots } from "./order-funding";
+import { executionArg, bracketLimitsArg, type ExecutionLimits, type BracketLimits } from "./execution";
 
 const TGAS = 10n ** 12n;
 /** Enough for `ft_transfer_call` → `ft_on_transfer` → `ft_resolve_transfer` and for withdraw callbacks. */
@@ -90,11 +91,22 @@ export interface OpenPositionArgs {
   marginMode?: MarginMode;
   /** Take profit / stop loss placed with the position, executed by the keeper at the oracle price. */
   brackets?: Brackets;
+  execution: ExecutionLimits;
+  bracketBounds?: BracketLimits;
   /** Wallet transfers are the default; existing Ketos collateral remains an advanced option. */
   fundingSource?: "wallet" | "margin";
 }
 
+async function requireBoundedExecution(c: PriceContracts): Promise<void> {
+  const views = new KetosViews(c.rpcUrl, c.ketosContract, c.usdcContract);
+  const schema = await views.provider.callFunction({
+    contractId: c.ketosContract, method: "get_schema_version", args: {},
+  });
+  if (schema !== 6) throw new Error("This app requires the schema-6 hedge-accounting deployment. Trading is unavailable until the contract upgrade is confirmed.");
+}
+
 export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, accountId: string): Promise<NearTransaction> {
+  await requireBoundedExecution(c);
   const prices = await signedPricesFor(c, {
     kind: "open", market: args.marketId, accountId, marginMode: args.marginMode ?? "isolated",
   });
@@ -102,6 +114,7 @@ export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, 
     const request = {
       market_id: args.marketId, side: args.side, margin: args.margin.toString(), leverage: args.leverage,
       margin_mode: args.marginMode ?? "isolated", brackets: bracketsArg(args.brackets), ...signedPricesArg(prices),
+      execution: executionArg(args.execution), bracket_bounds: bracketLimitsArg(args.bracketBounds),
     };
     const tx = transferCallTx(c,
       entryFundingRequired(args.margin, args.leverage, executionSlots(false, args.brackets)),
@@ -119,6 +132,8 @@ export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, 
     leverage: args.leverage,
     brackets: bracketsArg(args.brackets),
     margin_mode: args.marginMode ?? "isolated",
+    execution: executionArg(args.execution),
+    bracket_bounds: bracketLimitsArg(args.bracketBounds),
     ...signedPricesArg(prices),
   }, await requestDeposit(c, "get_open_price_request_deposit", {
     market: args.marketId, account_id: accountId, margin_mode: args.marginMode ?? "isolated",
@@ -128,13 +143,63 @@ export async function openPositionTx(c: PriceContracts, args: OpenPositionArgs, 
 export interface ClosePositionArgs {
   positionId: number;
   toWallet?: boolean;
+  execution: ExecutionLimits;
 }
 
-export async function closePositionTx(c: PriceContracts, { positionId, toWallet = true }: ClosePositionArgs): Promise<NearTransaction> {
+export async function closePositionTx(c: PriceContracts, { positionId, toWallet = true, execution }: ClosePositionArgs): Promise<NearTransaction> {
+  await requireBoundedExecution(c);
   return call(c.ketosContract, "close_position", {
     position_id: positionId, to_wallet: toWallet,
+    execution: executionArg(execution),
     ...signedPricesArg(await signedPricesFor(c, { kind: "position", positionId })),
   }, await requestDeposit(c, "get_position_price_request_deposit", { position_id: positionId }), PULL_GAS);
+}
+
+export interface ReducePositionArgs extends ClosePositionArgs {
+  expectedSize: bigint;
+  size: bigint;
+  marginMode: MarginMode;
+}
+
+export async function reducePositionTx(c: PriceContracts, args: ReducePositionArgs, accountId: string): Promise<NearTransaction> {
+  await requireBoundedExecution(c);
+  const cross = args.marginMode === "cross";
+  const deposit = await requestDeposit(c, cross ? "get_cross_price_request_deposit" : "get_position_price_request_deposit",
+    cross ? { account_id: accountId } : { position_id: args.positionId });
+  const prices = await signedPricesFor(c, cross ? { kind: "cross", accountId } : { kind: "position", positionId: args.positionId });
+  return call(c.ketosContract, "reduce_position", {
+    request: { position_id: args.positionId, expected_size: args.expectedSize.toString(), size: args.size.toString() },
+    execution: executionArg(args.execution), to_wallet: args.toWallet ?? true,
+    ...signedPricesArg(prices),
+  }, deposit, PULL_GAS);
+}
+
+export interface AmendBracketsArgs {
+  positionId: number;
+  expected: { takeProfit: number | null; stopLoss: number | null };
+  brackets: Brackets;
+  execution: BracketLimits;
+  toWallet?: boolean;
+}
+
+/** Replaces reviewed exits atomically; clearing both does not request an oracle price. */
+export async function amendBracketsTx(c: PriceContracts, args: AmendBracketsArgs): Promise<NearTransaction> {
+  await requireBoundedExecution(c);
+  const needsPrice = args.brackets.takeProfit != null || args.brackets.stopLoss != null;
+  const deposit = needsPrice
+    ? await requestDeposit(c, "get_position_price_request_deposit", { position_id: args.positionId }) : 0n;
+  const prices = needsPrice
+    ? await signedPricesFor(c, { kind: "position", positionId: args.positionId }) : null;
+  return call(c.ketosContract, "amend_brackets", {
+    request: {
+      position_id: args.positionId,
+      expected: { take_profit: args.expected.takeProfit, stop_loss: args.expected.stopLoss },
+      brackets: bracketsArg(args.brackets) ?? { take_profit: null, stop_loss: null },
+      execution: bracketLimitsArg(args.execution),
+    },
+    to_wallet: args.toWallet ?? true,
+    ...signedPricesArg(prices),
+  }, deposit, needsPrice ? PULL_GAS : GAS);
 }
 
 /** Funds adapter batches for the order markets, including position-backed exits. */
@@ -163,9 +228,10 @@ export async function liquidateCrossTx(c: PriceContracts, accountId: string): Pr
  */
 export type PlaceOrderArgs =
   | (OpenPositionArgs & { kind: "limit" | "stop_market"; triggerPrice: bigint })
-  | { kind: "take_profit" | "stop_loss"; positionId: number; triggerPrice: bigint };
+  | { kind: "take_profit" | "stop_loss"; positionId: number; triggerPrice: bigint; execution: ExecutionLimits };
 
 export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Promise<NearTransaction> {
+  await requireBoundedExecution(c);
   const request =
     "positionId" in args
       ? { kind: args.kind, position_id: args.positionId, trigger_price: args.triggerPrice.toString() }
@@ -182,7 +248,7 @@ export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Pro
   if (!("positionId" in args) && args.fundingSource !== "margin") {
     return transferCallTx(c,
       entryFundingRequired(args.margin, args.leverage, executionSlots(true, args.brackets)),
-      `order:${JSON.stringify(request)}`, PULL_GAS);
+      `order:${JSON.stringify({ ...request, execution: executionArg(args.execution), bracket_bounds: bracketLimitsArg(args.bracketBounds) })}`, PULL_GAS);
   }
   // Entry orders only reserve margin; position-backed exits validate the current price.
   const deposit = "positionId" in args
@@ -190,7 +256,11 @@ export async function placeOrderTx(c: PriceContracts, args: PlaceOrderArgs): Pro
     : 0n;
   const prices = "positionId" in args
     ? await signedPricesFor(c, { kind: "position", positionId: args.positionId }) : null;
-  return call(c.ketosContract, "place_order", { request, ...signedPricesArg(prices) }, deposit, "positionId" in args ? PULL_GAS : GAS);
+  return call(c.ketosContract, "place_order", {
+    request, execution: executionArg(args.execution),
+    bracket_bounds: bracketLimitsArg("positionId" in args ? undefined : args.bracketBounds),
+    ...signedPricesArg(prices),
+  }, deposit, "positionId" in args ? PULL_GAS : GAS);
 }
 
 /** Cancels a pending order and returns its released collateral to the wallet. */
@@ -249,9 +319,9 @@ export interface ListMarketArgs {
 }
 
 /**
- * Lists a market in the Long-tail vault by paying the 25 USDC fee from the USDC wallet. The
- * market stays closed ("measuring") until the keeper publishes its first depth sample. An
- * initial price request follows the observed successful listing, funded by its creator.
+ * Creates an empty isolated vault; the 25 USDC listing fee goes to Long-tail, not LP capital.
+ * The market needs separate LP funding and a keeper depth sample before entry is admitted.
+ * An initial price request follows the observed successful listing, funded by its creator.
  */
 export async function listMarketTx(c: PriceContracts, args: ListMarketArgs): Promise<NearTransaction[]> {
   const request = {

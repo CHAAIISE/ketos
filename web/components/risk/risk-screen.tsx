@@ -10,6 +10,8 @@ import type { Market } from "@/lib/near/types";
 import { CapacityHeatmap, CapacityHistory } from "./capacity-panels";
 import { StressPanel } from "./stress-panel";
 import { STRESS_MODEL_LIMITATIONS } from "./stress";
+import { HedgePanel } from "./hedge-panel";
+import { HedgeReplayPanel } from "./hedge-replay-panel";
 
 export function RiskScreen() {
   const markets = useMarkets();
@@ -41,6 +43,8 @@ export function RiskScreen() {
           </div>
         </div>
       ) : !markets.isError ? <EmptyState>No markets registered yet. Reload once a market has been listed.</EmptyState> : null}
+      <HedgePanel markets={markets.data ?? []} now={now} />
+      <HedgeReplayPanel />
       <Methodology market={now ? market : undefined} />
     </>
   );

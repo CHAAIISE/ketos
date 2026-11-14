@@ -13,11 +13,13 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useCandles } from "@/hooks/use-candles";
+import { useOrders, usePositions } from "@/hooks/use-ketos-queries";
 import { formatUtc } from "@/components/landing/live-time";
 import { formatPrice, PRICE_DECIMALS } from "@/lib/near/format";
-import type { Market } from "@/lib/near/types";
+import type { Market, Position } from "@/lib/near/types";
 import { CANDLE_SOURCE, type CandleInterval } from "@/lib/prices/candles";
 import { cn } from "@/lib/utils";
+import { BracketEditor, type BracketProposal } from "./bracket-editor";
 
 const INTERVALS: ReadonlyArray<{ id: CandleInterval; label: string }> = [
   { id: "5m", label: "5m" },
@@ -52,6 +54,9 @@ export function PriceChart({ market, className }: { market: Market; className?: 
   const candles = useCandles(market.id, interval);
   const container = useRef<HTMLDivElement>(null);
   const handles = useRef<ChartHandles | null>(null);
+  const positions = usePositions();
+  const orders = useOrders();
+  const [editing, setEditing] = useState<{ position: Position; proposal: BracketProposal } | null>(null);
   const oraclePrice = market.price > 0n ? Number(market.price) / 10 ** PRICE_DECIMALS : null;
 
   useEffect(() => {
@@ -145,6 +150,99 @@ export function PriceChart({ market, className }: { market: Market; className?: 
     }
   }, [oraclePrice]);
 
+  useEffect(() => {
+    const h = handles.current;
+    const el = container.current;
+    if (!h || !el) return;
+    const lines: IPriceLine[] = [];
+    const exits: { line: IPriceLine; price: number; position: Position; kind: BracketProposal["kind"] }[] = [];
+    const addLine = (price: bigint, title: string, color: string) => {
+      const value = Number(price) / 10 ** PRICE_DECIMALS;
+      const line = h.candles.createPriceLine({
+        price: value, title, color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true,
+      });
+      lines.push(line);
+      return { line, price: value };
+    };
+    for (const position of positions.data ?? []) {
+      if (position.market_id !== market.id) continue;
+      addLine(position.entry_price, `Entry #${position.id}`, "#B6BBC7");
+      if (position.margin_mode === "isolated" && position.liquidation_price > 0n) {
+        addLine(position.liquidation_price, `Liq #${position.id}`, "#F5B83D");
+      }
+      for (const [kind, id] of [["takeProfit", position.take_profit], ["stopLoss", position.stop_loss]] as const) {
+        const order = orders.data?.find((order) => order.id === id);
+        if (!order) continue;
+        exits.push({ ...addLine(order.request.trigger_price, `${kind === "takeProfit" ? "TP" : "SL"} #${position.id}`, kind === "takeProfit" ? UP : DOWN), position, kind });
+      }
+    }
+    let drag: { exit: typeof exits[number]; price: number; pointerId: number } | null = null;
+    const nearest = (event: PointerEvent) => {
+      const bounds = el.getBoundingClientRect();
+      if (event.clientX >= bounds.right - 70) return undefined;
+      const y = event.clientY - bounds.top;
+      return exits.map((exit) => ({ exit, y: h.candles.priceToCoordinate(exit.price) }))
+        .filter((item) => item.y !== null && Math.abs(item.y - y) <= 7)
+        .sort((a, b) => Math.abs(a.y! - y) - Math.abs(b.y! - y))[0]?.exit;
+    };
+    const reset = () => {
+      if (!drag) return;
+      if (handles.current === h) {
+        drag.exit.line.applyOptions({ price: drag.exit.price,
+          title: `${drag.exit.kind === "takeProfit" ? "TP" : "SL"} #${drag.exit.position.id}`,
+          color: drag.exit.kind === "takeProfit" ? UP : DOWN, lineStyle: LineStyle.Dashed });
+        h.chart.applyOptions({ handleScroll: true, handleScale: true });
+      }
+      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
+      el.style.cursor = "";
+      drag = null;
+    };
+    const down = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const exit = nearest(event);
+      if (!exit) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      drag = { exit, price: exit.price, pointerId: event.pointerId };
+      exit.line.applyOptions({ title: "Preview — confirm to apply", color: "#F5B83D", lineStyle: LineStyle.Dotted });
+      el.setPointerCapture(event.pointerId);
+      el.style.cursor = "grabbing";
+      h.chart.applyOptions({ handleScroll: false, handleScale: false });
+    };
+    const move = (event: PointerEvent) => {
+      if (!drag) { el.style.cursor = nearest(event) ? "grab" : ""; return; }
+      event.preventDefault();
+      const price = h.candles.coordinateToPrice(event.clientY - el.getBoundingClientRect().top);
+      if (price === null || price <= 0 || !Number.isSafeInteger(Math.round(price * 10 ** PRICE_DECIMALS))) return;
+      drag.price = price;
+      drag.exit.line.applyOptions({ price });
+    };
+    const up = () => {
+      if (!drag) return;
+      const { exit, price } = drag;
+      reset();
+      const scaled = Math.round(price * 10 ** PRICE_DECIMALS);
+      if (Number.isSafeInteger(scaled) && scaled > 0) {
+        setEditing({ position: exit.position, proposal: { kind: exit.kind, price: BigInt(scaled) } });
+      }
+    };
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") reset(); };
+    el.addEventListener("pointerdown", down, true);
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", reset);
+    window.addEventListener("keydown", key);
+    return () => {
+      reset();
+      el.removeEventListener("pointerdown", down, true);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", reset);
+      window.removeEventListener("keydown", key);
+      if (handles.current === h) lines.forEach((line) => h.candles.removePriceLine(line));
+    };
+  }, [positions.data, orders.data, market.id]);
+
   const last = candles.data?.candles.at(-1);
   const spotPrice = last
     ? last.close.toLocaleString("en-US", { minimumFractionDigits: precisionFor(last.close), maximumFractionDigits: precisionFor(last.close) })
@@ -196,6 +294,9 @@ export function PriceChart({ market, className }: { market: Market; className?: 
         <span className="text-muted-foreground">Spot ({CANDLE_SOURCE}) <span className="text-foreground">{spotPrice === null ? "—" : `$${spotPrice}`}</span></span>
         <span className="text-warning" title={markSummary}>Mark {oraclePrice === null ? "—" : formatPrice(market.price)} <span className="text-tertiary">(stored oracle)</span></span>
       </div>
+      {positions.data?.some((position) => position.market_id === market.id) ? (
+        <p className="px-3 py-1 text-label text-tertiary">Drag a visible TP/SL line to review a change. Keyboard: edit TP/SL in Positions. Nothing changes before confirmation.</p>
+      ) : null}
       <div className="relative min-h-0 flex-1">
         <div
           ref={container}
@@ -215,6 +316,7 @@ export function PriceChart({ market, className }: { market: Market; className?: 
           </p>
         ) : null}
       </div>
+      {editing ? <BracketEditor position={editing.position} orders={orders.data ?? []} proposal={editing.proposal} onClose={() => setEditing(null)} /> : null}
     </div>
   );
 }

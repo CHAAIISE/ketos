@@ -18,12 +18,19 @@ const payloadSchema = z.object({
   prices: z.record(symbolSchema, z.object({
     price: z.string().regex(/^[1-9]\d{0,38}$/).refine((price) => BigInt(price) < 2n ** 128n),
     publish_time: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER / 1000),
-    sources: z.array(z.enum(["coinbase", "kraken", "binance"])).min(2).max(3)
+    sources: z.array(z.enum(["coinbase", "kraken", "binance", "bitstamp"])).min(2).max(3)
       .refine((sources) => new Set(sources).size === sources.length),
   })),
 });
 export type SignedPrices = z.infer<typeof envelopeSchema>;
 export type PriceContracts = Pick<NearConfig, "rpcUrl" | "ketosContract" | "usdcContract"> & Partial<Pick<NearConfig, "network">>;
+
+/** Decode an observation after the caller has verified the envelope against the onchain signer. */
+export function signedPriceObservation(signed: SignedPrices, asset: MarketId) {
+  const observation = payloadSchema.parse(JSON.parse(signed.payload)).prices[asset];
+  if (!observation) throw new Error(`Missing signed observation for ${asset}.`);
+  return { price: BigInt(observation.price), price_timestamp_ms: observation.publish_time * 1000 };
+}
 
 /** Canonical keys bound both request cost and the per-instance cache. */
 export function signedPriceAssets(input: unknown): string[] | null {
@@ -31,8 +38,8 @@ export function signedPriceAssets(input: unknown): string[] | null {
   return parsed.success ? [...new Set(parsed.data)].sort() : null;
 }
 
-/** Validate the exact signed bytes, never a reserialized or retimestamped payload. */
-export function verifySignedPrices(input: unknown, signer: string, assets: readonly string[], nowMs = Date.now()): SignedPrices | null {
+/** Validate original signed bytes; expose only requested observations still inside the age bound. */
+export function verifySignedObservations(input: unknown, signer: string, assets: readonly string[], nowMs = Date.now()): { signedPrices: SignedPrices; assets: string[] } | null {
   try {
     const envelope = envelopeSchema.parse(input);
     if (envelope.public_key !== signer) return null;
@@ -44,14 +51,20 @@ export function verifySignedPrices(input: unknown, signer: string, assets: reado
     if (btoa(String.fromCharCode(...signature)) !== envelope.signature || !key.verify(bytes, signature)) return null;
     const { prices } = payloadSchema.parse(JSON.parse(envelope.payload));
     if (Object.keys(prices).length > MAX_SIGNED_PRICE_ASSETS || assets.length === 0) return null;
-    for (const asset of assets) {
+    const available = assets.filter((asset) => {
       const price = prices[asset];
-      if (!price || price.publish_time * 1000 > nowMs || nowMs - price.publish_time * 1000 > SIGNED_PRICE_MAX_AGE_MS) return null;
-    }
-    return envelope;
+      return price && price.publish_time * 1000 <= nowMs && nowMs - price.publish_time * 1000 <= SIGNED_PRICE_MAX_AGE_MS;
+    });
+    return available.length > 0 ? { signedPrices: envelope, assets: available } : null;
   } catch {
     return null;
   }
+}
+
+/** User actions require their entire requested set; a partial keeper refresh cannot authorize them. */
+export function verifySignedPrices(input: unknown, signer: string, assets: readonly string[], nowMs = Date.now()): SignedPrices | null {
+  const observations = verifySignedObservations(input, signer, assets, nowMs);
+  return observations?.assets.length === assets.length ? observations.signedPrices : null;
 }
 
 export async function priceSigner(c: PriceContracts, views = new KetosViews(c.rpcUrl, c.ketosContract, c.usdcContract)): Promise<string | null> {
@@ -89,10 +102,13 @@ async function requestedAssets(views: KetosViews, request: SignedPriceRequest): 
     case "open": return [request.market, ...(request.marginMode === "cross" ? await crossMarkets(request.accountId) : [])];
     case "position": return positionMarket(request.positionId);
     case "cross": return crossMarkets(request.accountId);
-    case "vault": return (await views.markets()).filter((market) => market.vault_id === request.vaultId).map((market) => market.id);
+    case "vault": return (await views.markets()).filter((market) => market.vault_id === request.vaultId
+      && (!market.isolated_only || market.oi_long > 0n || market.oi_short > 0n)).map((market) => market.id);
     case "orders": {
       const ids = new Set(request.ids);
-      const orders = (await views.allOpenOrders()).filter((order) => ids.has(order.id));
+      const nowMs = Date.now();
+      const orders = (await views.allOpenOrders()).filter((order) =>
+        ids.has(order.id) && order.execution !== null && nowMs <= order.execution.expires_at_ms);
       const accounts = new Map<string, Promise<string[]>>();
       const markets = await Promise.all(orders.map(async (order) => {
         const entry = order.request;
@@ -117,7 +133,7 @@ const fetchSignedPrices: SignedPriceLoader = async (assets) => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ assets }),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(50_000),
   });
   return response.ok ? envelopeSchema.parse(await response.json()) : null;
 };

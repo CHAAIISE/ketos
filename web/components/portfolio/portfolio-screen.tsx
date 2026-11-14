@@ -12,8 +12,8 @@ import { Button } from "@/components/ui/button";
 import { PanelTabs } from "@/components/ui/panel-tabs";
 import { Term } from "@/components/vault/term";
 import { useAccountId } from "@/hooks/near-provider";
-import { useAccount, useAccountStats, useCrossAccount, useHistory, useOrders, usePositions, useVaultAccount } from "@/hooks/use-ketos-queries";
-import { formatUsd } from "@/lib/near/format";
+import { useAccount, useAccountStats, useCrossAccount, useHistory, useOrders, usePositions, useVaultAccounts, useVaults } from "@/hooks/use-ketos-queries";
+import { formatUsd, formatVaultName } from "@/lib/near/format";
 import type { HistoryEvent } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { PnlChart } from "./pnl-chart";
@@ -59,20 +59,20 @@ function AccountPortfolio() {
   const cross = useCrossAccount();
   const stats = useAccountStats();
   const history = useHistory();
-  const core = useVaultAccount("core");
-  const longTail = useVaultAccount("long-tail");
+  const vaults = useVaults();
+  const claims = useVaultAccounts(vaults.data?.map((vault) => vault.id) ?? []);
   const funding = useFundingDialog();
   const now = useNow();
   const [tab, setTab] = useState<Tab>("positions");
-  const equityQueries = [account, positions, cross, core, longTail];
+  const equityQueries = [account, positions, cross, vaults, ...claims];
   const equityReady = equityQueries.every((query) => query.isSuccess && !query.isError);
   const equityError = equityQueries.find((query) => query.isError);
-  const totals = equityReady && account.data && positions.data && cross.data && core.data && longTail.data ? portfolioTotals({
+  const totals = equityReady && account.data && positions.data && cross.data ? portfolioTotals({
     freeMargin: account.data.margin,
     reservedMargin: account.data.reservedMargin,
     positions: positions.data,
     cross: cross.data,
-    vaultValues: [core.data.value, longTail.data.value],
+    vaultValues: claims.map((query) => query.data!.value),
   }) : undefined;
   const realized = stats.isSuccess ? stats.data?.realized_pnl ?? 0n : undefined;
   const events = history.data ?? [];
@@ -103,8 +103,8 @@ function AccountPortfolio() {
     content = openOrders.length ? <OpenOrdersTable orders={openOrders} positions={openPositions} /> :
       <EmptyState action={<Link href="/trade" className="text-foreground underline underline-offset-4">Place an order →</Link>}>No open orders. Place a Limit or Stop order, or attach take profit / stop loss when opening a position.</EmptyState>;
   } else if (tab === "trades") {
-    content = events.some((e) => e.kind === "open" || e.kind === "close" || e.kind === "liquidation") ? <TradeHistoryTable events={events} /> :
-      <EmptyState action={<Link href="/trade" className="text-foreground underline underline-offset-4">Start trading →</Link>}>No trades yet. Your opens, closes and liquidations will appear here.</EmptyState>;
+    content = events.some((e) => e.kind === "open" || e.kind === "close" || e.kind === "reduce" || e.kind === "liquidation") ? <TradeHistoryTable events={events} /> :
+      <EmptyState action={<Link href="/trade" className="text-foreground underline underline-offset-4">Start trading →</Link>}>No trades yet. Entries, reductions and exits will appear here.</EmptyState>;
   } else if (tab === "funding") {
     content = events.some((e) => e.kind === "funding") ? <FundingHistoryTable events={events} /> :
       <EmptyState>No funding settled yet. Funding is recorded when a position closes; running funding is shown under Positions.</EmptyState>;
@@ -125,7 +125,7 @@ function AccountPortfolio() {
     <div className="grid min-w-0 gap-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <section aria-label="Portfolio performance" className={panel}>
         <dl className="grid grid-cols-2 gap-4 border-b border-border p-4 md:grid-cols-4">
-          <Stat label={<Term hint="Trading equity plus the current value of your Core and Long-tail vault shares. Wallet USDC is excluded. Equity is marked before closing fees and may be negative.">Total Equity</Term>} value={totals?.totalEquity} testId="portfolio-equity" />
+          <Stat label={<Term hint="Trading equity plus the current value of all your shared and isolated vault shares, including retired-market holdings. Wallet USDC is excluded. Equity is marked before closing fees and may be negative.">Total Equity</Term>} value={totals?.totalEquity} testId="portfolio-equity" />
           <Stat label={<Term hint="All-time trading PnL booked by the contract, including opening and closing fees, borrow and settled funding. Transfers are not PnL.">Realized PnL</Term>} value={realized} signed testId="portfolio-realized" />
           <Stat label={<Term hint="Price-only profit or loss on open positions, before borrow, funding and closing fees. Trading equity already includes accrued borrow and funding.">Unrealized PnL</Term>} value={totals?.unrealizedPnl} signed testId="portfolio-unrealized" />
           <Stat label="Volume · all-time" value={stats.isSuccess ? stats.data?.volume ?? 0n : undefined} testId="portfolio-volume" />
@@ -139,8 +139,12 @@ function AccountPortfolio() {
           <Balance label="Trading equity" value={totals?.tradingEquity} />
           <Balance label="Available to withdraw" value={account.isSuccess ? account.data.margin : undefined} testId="portfolio-available" />
           <Balance label="Reserved for orders" value={account.isSuccess ? account.data.reservedMargin : undefined} />
-          <Balance label={<Link href="/vaults/core" className="hover:text-foreground">Core vault ↗</Link>} value={core.isSuccess ? core.data.value : undefined} />
-          <Balance label={<Link href="/vaults/long-tail" className="hover:text-foreground">Long-tail vault ↗</Link>} value={longTail.isSuccess ? longTail.data.value : undefined} />
+          {vaults.data?.map((vault, index) => {
+            const claim = claims[index];
+            if (vault.market_id && claim.isSuccess && claim.data.shares === 0n) return null;
+            return <Balance key={vault.id} label={<Link href={`/vaults/${vault.id}`} className="hover:text-foreground">{formatVaultName(vault.id, vault.market_id)} vault ↗</Link>}
+              value={claim.isSuccess ? claim.data.value : undefined} />;
+          })}
           <div className="border-t border-border pt-3"><Balance label="Wallet USDC · excluded" value={account.isSuccess ? account.data.usdcBalance : undefined} /></div>
         </dl>
         <div className="mt-4 border-t border-border pt-3">

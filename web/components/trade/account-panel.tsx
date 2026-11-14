@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useFundingDialog } from "@/components/app/funding";
+import { useNow } from "@/components/landing/live-time";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { Button } from "@/components/ui/button";
 import { PanelTabs } from "@/components/ui/panel-tabs";
@@ -118,6 +119,7 @@ function QueryState({
 
 /** Balances, positions, orders and history under the chart, like most perps screens. */
 export function AccountPanel({ className }: { className?: string }) {
+  const nowMs = useNow();
   const accountId = useAccountId();
   const positions = usePositions();
   const orders = useOrders();
@@ -177,8 +179,8 @@ export function AccountPanel({ className }: { className?: string }) {
       <QueryState
         query={history}
         what="Trade history is"
-        empty="No trades yet. Opens, closes and liquidations show here."
-        isEmpty={!events.some((e) => e.kind === "open" || e.kind === "close" || e.kind === "liquidation")}
+        empty="No trades yet. Entries, reductions and exits show here."
+        isEmpty={!events.some((e) => e.kind === "open" || e.kind === "close" || e.kind === "reduce" || e.kind === "liquidation")}
       >
         {() => <TradeHistoryTable events={events} />}
       </QueryState>
@@ -195,7 +197,7 @@ export function AccountPanel({ className }: { className?: string }) {
       </QueryState>
     );
   } else {
-    const rows = orderHistoryRows(events, orders.data ?? [], positions.data ?? []);
+    const rows = orderHistoryRows(events, orders.data ?? [], positions.data ?? [], nowMs);
     panel = (
       <QueryState
         query={history}

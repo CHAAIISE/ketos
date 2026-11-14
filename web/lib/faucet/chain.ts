@@ -15,7 +15,7 @@ export interface FaucetServerConfig {
 export function faucetServerConfig(): FaucetServerConfig {
   const network = process.env.FAUCET_NETWORK ?? process.env.NEXT_PUBLIC_NEAR_NETWORK ?? "testnet";
   const rpcUrl = process.env.FAUCET_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL
-    ?? (network === "testnet" ? "https://test.rpc.fastnear.com" : "");
+    ?? (network === "testnet" ? "https://near-testnet.drpc.org" : "");
   const usdcContract = process.env.FAUCET_USDC_CONTRACT ?? process.env.NEXT_PUBLIC_USDC_CONTRACT;
   const faucetId = network === "testnet" ? "faucet.ketos.testnet" : process.env.FAUCET_ACCOUNT_ID;
   const privateKey = process.env.FAUCET_PRIVATE_KEY?.trim();

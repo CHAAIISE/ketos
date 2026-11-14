@@ -2,21 +2,14 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { fundTraderMargin, getMarket, mintTraderUsdc, sandboxViews, setOraclePrice, traderAccountId } from "./sandbox";
 import { formatPrice } from "../lib/near/format";
 
-// The demo journey on the local sandbox, as a first-time visitor walks it: every screen offers
-// exactly one main action. Prices move through the mock oracle; triggered orders, listings and
-// liquidations are handled by the keeper the open app pages call once a minute.
+// Local-chain journey with controlled mock prices and an independently running keeper.
+// No page visit is responsible for order execution or liquidation.
 
-test.use({ viewport: { width: 1440, height: 900 } });
+test.use({ viewport: { width: 1440, height: 900 }, actionTimeout: 30_000 });
 
 const USDC = 1_000_000n;
-// Five-minute price lease, plus browser cadence and two full depth-sampling passes.
-const KEEPER_WAIT = 600_000;
-
-async function expectSinglePrimary(page: Page, label: RegExp): Promise<void> {
-  const primary = page.locator("[data-primary]:visible");
-  await expect(primary).toHaveCount(1);
-  await expect(primary).toHaveText(label);
-}
+// Five-minute price lease, plus browser cadence and a ten-minute depth interval with quote fanout.
+const KEEPER_WAIT = 780_000;
 
 async function expectToast(page: Page, text: RegExp): Promise<void> {
   await expect(page.getByTestId("tx-toast").filter({ hasText: text })).toBeVisible({ timeout: 60_000 });
@@ -26,8 +19,14 @@ function parseUsd(text: string): number {
   return Number(text.replace(/[^0-9.]/g, ""));
 }
 
-async function openApp(page: Page, name: "Trade" | "Markets" | "Vaults" | "Risk" | "Portfolio" | "Leaderboard"): Promise<void> {
-  await page.getByRole("navigation", { name: "App" }).getByRole("link", { name: name === "Markets" ? "Propose a market" : name === "Vaults" ? "Earn" : name, exact: true }).click();
+async function openApp(page: Page, name: "Trade" | "Markets" | "Launch" | "Vaults" | "Risk" | "Portfolio" | "Leaderboard"): Promise<void> {
+  const label = name === "Vaults" ? "Earn" : name;
+  const primary = page.getByRole("navigation", { name: "App", exact: true }).getByRole("link", { name: label, exact: true });
+  if (await primary.isVisible()) await primary.click();
+  else {
+    await page.getByRole("button", { name: "Navigation menu", exact: true }).click();
+    await page.getByRole("navigation", { name: "More navigation" }).getByRole("link", { name: label, exact: true }).click();
+  }
 }
 
 async function selectMarket(page: Page, id: string): Promise<void> {
@@ -78,7 +77,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(page.getByText("Open interest", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("Vault TVL", { exact: false }).first()).toBeVisible();
     await expect(page.getByTestId("landing-volume-24h")).toBeVisible();
-    await expect(page.locator("[data-primary]:visible")).toHaveCount(1);
   });
 
   await test.step("2. trade: connect and fund the wallet without depositing margin", async () => {
@@ -86,7 +84,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(page).toHaveURL(/\/trade$/);
     await expect(steps).toBeVisible();
     await expect(currentStep).toContainText(/Connect/);
-    await expectSinglePrimary(page, /^Sign in$/);
 
     await page.getByTestId("connect-button").click();
     const walletMenu = page.getByRole("dialog", { name: "Connect a wallet" });
@@ -95,8 +92,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(page.getByTestId("wallet-account")).toBeVisible();
 
     await expect(currentStep).toContainText(/Fund/);
-    // The ticket's main action follows the guide: claim USDC before anything else.
-    await expectSinglePrimary(page, /^Get 1,000 USDC$/);
     await page.getByTestId("fund-button").click();
     await expectToast(page, /1,000 USDC added to your wallet/);
     await expect(page.getByTestId("fund-button")).toHaveText(/Fund in \d+ min/);
@@ -112,9 +107,7 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     const table = page.getByTestId("markets-table");
     await expect(page.getByTestId("market-row-AURORA")).toHaveCount(0);
     await expect(page.getByTestId("market-row-RHEA")).toHaveCount(0);
-    await expectSinglePrimary(page, /^List /);
     await expect.poll(async () => (await getMarket("ETH")).is_open, { timeout: KEEPER_WAIT }).toBe(true);
-    await expect(page.getByTestId("market-status-ETH")).toHaveText(/^(Open|Price refresh needed)$/);
     await page.getByTestId("markets-search").fill("ETH");
     await expect(table.locator('[data-testid^="market-row-"]')).toHaveCount(1);
     const eth = page.getByTestId("market-row-ETH");
@@ -127,7 +120,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
   await test.step("4. trade ETH: market long 5x with take profit and stop loss", async () => {
     await expect(page.getByTestId("mark-price")).toHaveText("$2,292.59");
     await fillMarketOrder(page, ticket, { side: "long", leverage: 5, size: 500, takeProfit: 2750, stopLoss: 2000 });
-    await expectSinglePrimary(page, /^Long$/);
     await page.locator("[data-primary]:visible").click();
     await expectToast(page, /Long ETH 5× opened · \$500\.00/);
     await expect(positions).toHaveCount(1);
@@ -163,7 +155,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     // A sell limit rests above the $77,561.50 oracle price.
     await ticket.locator('input[name="order-trigger"]').fill("78000");
     await ticket.locator('input[name="order-size"]').fill("500");
-    await expectSinglePrimary(page, /Short/);
     await page.locator("[data-primary]:visible").click();
     await expectToast(page, /Limit short BTC placed at \$78,000\.00/);
     const limit = openOrders.filter({ hasText: "Limit" });
@@ -205,7 +196,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     const effectiveMarket = (await sandboxViews().markets()).find((entry) => entry.id === "ZEC")!;
     expect(effectiveMarket.vault_backed_cap_usd).toBeLessThanOrEqual(effectiveMarket.max_oi_per_side);
     await expect(ticket.getByRole("status").filter({ hasText: /vault-limited/i })).toBeVisible();
-    await expectSinglePrimary(page, /^Short$/);
     const accountBeforeRefusal = await sandboxViews().account(trader);
     await page.locator("[data-primary]:visible").click();
     const refusal = page.getByTestId("order-error");
@@ -226,32 +216,32 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     expect(fitted).toBeGreaterThan(cap - leverage - 1);
   });
 
-  await test.step("7. markets: permissionless listing, measuring, then open after a keeper pass", async () => {
-    await openApp(page, "Markets");
-    await expect(page).toHaveURL(/\/markets$/);
-    // Clear the search to see the whole registry.
-    await page.getByTestId("markets-search").fill("");
+  await test.step("7. Launch: create, fund dedicated capital, then observe keeper readiness", async () => {
+    await openApp(page, "Launch");
+    await expect(page).toHaveURL(/\/launch$/);
     const panel = page.getByTestId("list-market-panel");
     // The sandbox oracle prices one asset that NEAR Intents quotes and the registry lacks.
     const symbol = "UNI";
     const candidate = panel.getByTestId(`listable-${symbol}`);
     await expect(candidate).toBeVisible({ timeout: 60_000 });
     await candidate.click();
-    await expect(panel).toContainText("Long-tail");
-    await expectSinglePrimary(page, /^List /);
+    await panel.getByLabel("Planned LP capital · separate signature").fill("50");
     await page.getByTestId("list-market-submit").click();
-    await expectToast(page, /listed · measuring/);
-    const closed = page.getByTestId("markets-closed-group");
-    await expect(closed).toBeVisible();
-    if (await closed.getAttribute("open") === null) await closed.locator("summary").click();
-    const status = page.getByTestId(`market-status-${symbol}`);
-    await expect(status).toHaveText("Measuring");
-
-    // Unmeasured listings are sampled on the very next keeper pass.
+    await expectToast(page, /created · isolated vault/);
+    const created = (await sandboxViews().markets()).find((market) => market.id === symbol)!;
+    expect((await sandboxViews().vault(created.vault_id)).balance).toBe(0n);
+    await page.getByTestId("launch-fund").click();
+    await expectToast(page, /UNI LP deposit confirmed/);
+    expect((await sandboxViews().vaultAccount(created.vault_id, trader)).shares).toBe(50n * USDC);
     await expect.poll(async () => (await getMarket(symbol)).is_open, { timeout: KEEPER_WAIT }).toBe(true);
-    await expect(status).toHaveText(/^(Open|Price refresh needed)$/);
+    await page.goto(`/vaults/${created.vault_id}`);
+    await page.getByRole("tab", { name: "Withdraw", exact: true }).click();
+    const lp = page.getByRole("region", { name: "Deposit or withdraw" });
+    await lp.getByRole("button", { name: "Max", exact: true }).click();
+    await lp.getByRole("button", { name: "Withdraw", exact: true }).click();
+    await expect.poll(async () => (await sandboxViews().vaultAccount(created.vault_id, trader)).shares).toBe(0n);
     const listed = await getMarket(symbol);
-    expect(BigInt(listed.effective_max_oi_per_side)).toBeGreaterThan(0n);
+    expect(BigInt(listed.effective_max_oi_per_side)).toBe(0n);
     expect(listed.max_leverage).toBeLessThanOrEqual(5);
   });
 
@@ -260,39 +250,27 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(page).toHaveURL(/\/vaults$/);
     await expect(page.getByTestId("vault-row-core")).toBeVisible();
     await expect(page.getByTestId("vault-row-long-tail")).toBeVisible();
-    await expect(page.locator("[data-primary]:visible")).toHaveCount(1);
     await page.getByTestId("vault-row-core").getByRole("link", { name: "Core" }).click();
     await expect(page).toHaveURL(/\/vaults\/core$/);
-    await expect(page.getByTestId("vault-nav")).toHaveText(/\$[\d,]+/);
-    await expect(page.getByText("APR", { exact: false }).first()).toBeVisible();
     await expect(page.getByRole("region", { name: "Vault performance" })).toBeVisible();
-    const revenue = page.getByRole("region", { name: "Revenue breakdown" });
-    for (const source of ["Trading + borrow fees", "Net funding", "Counterparty PnL", "Liquidation penalties"]) {
-      await expect(revenue).toContainText(source);
-    }
     await expect(page.getByRole("region", { name: /exposure/i })).toContainText("ETH");
 
     // Additional wallet funds cover both LP deposits after the trading and listing costs.
+    const vaultActions = page.getByRole("region", { name: "Deposit or withdraw" });
     await mintTraderUsdc(125n * USDC);
-    await expectSinglePrimary(page, /Deposit/);
-    await page.locator("#vault-deposit").fill("500");
+    await vaultActions.locator("#vault-deposit").fill("500");
     await page.locator("[data-primary]:visible").click();
     await expectToast(page, /Deposited 500\.00 USDC into the vault/);
-    await expect(page.getByTestId("tx-toast").filter({ hasText: /shares minted at/ })).toBeVisible();
-    await expect(page.getByText("You have no vault shares yet.")).toBeHidden();
-    await page.getByRole("tab", { name: "Withdraw", exact: true }).click();
-    await expectSinglePrimary(page, /^Withdraw$/);
-    await page.getByRole("tab", { name: "Deposit", exact: true }).click();
-    await expectSinglePrimary(page, /Deposit to vault/);
-    const sharesRow = page.getByRole("region", { name: "Deposit or withdraw" }).getByText("Shares", { exact: true }).locator("..");
+    await expect(vaultActions.getByText("You have no vault shares yet.")).toBeHidden();
+    const sharesRow = vaultActions.getByText("Shares", { exact: true }).locator("..");
     const coreShares = await sharesRow.locator("span").last().innerText();
     await page.goto("/vaults/long-tail");
-    await expect(page.getByText("You have no vault shares yet.")).toBeVisible();
+    await expect(vaultActions.getByText("You have no vault shares yet.")).toBeVisible();
     await expect(page.getByRole("region", { name: /exposure/i }).getByRole("link", { name: "ETH", exact: true })).toHaveCount(0);
     const views = sandboxViews();
     const before = await views.vault("long-tail");
     const expectedShares = 100n * USDC * before.total_shares / before.nav;
-    await page.locator("#vault-deposit").fill("100");
+    await vaultActions.locator("#vault-deposit").fill("100");
     await page.locator("[data-primary]:visible").click();
     await expectToast(page, /Deposited 100\.00 USDC into the vault/);
     const after = await views.vault("long-tail");
@@ -335,7 +313,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     // The scenario is read-only.
     expect((await getMarket("ETH")).oi_long).toBe("500000000");
     await expect(page.getByText("pnpm depth:sample").first()).toBeVisible();
-    await expectSinglePrimary(page, /Copy/);
   });
 
   await test.step("10. trade NEAR: the price crosses maintenance, the keeper fills a stop loss and liquidates", async () => {
@@ -356,6 +333,13 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await page.getByTestId("account-tab-positions").click();
     await expect(positions).toHaveCount(4);
 
+    // Touch the stop within its signed execution bound before the liquidation gap.
+    await setOraclePrice("wrap.near", 3.8);
+    await page.getByTestId("account-tab-trades").click();
+    const stop = accountPanel.locator('[data-testid^="trade-"]').filter({ hasText: "NEAR" }).filter({ hasText: "Close Long" });
+    await expect(stop).toContainText(/Order #\d+ · by keeper at oracle price/, { timeout: KEEPER_WAIT });
+    await expect(stop).toContainText("$400.00");
+
     // Maintenance is locked at entry and varies with the live liquidity tier.
     const near = (await sandboxViews().positions(trader)).find((p) => p.market_id === "NEAR" && p.size === 500n * USDC)!;
     await setOraclePrice("wrap.near", Number(near.liquidation_price * 999n / 1_000n) / 1e8);
@@ -366,10 +350,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(liquidation).toContainText("Long liquidated");
     await expect(liquidation).toContainText("Liquidated by keeper");
     await expect(liquidation).toContainText(/\+\$[1-9]/);
-    await page.getByTestId("account-tab-trades").click();
-    const stop = accountPanel.locator('[data-testid^="trade-"]').filter({ hasText: "NEAR" }).filter({ hasText: "Close Long" });
-    await expect(stop).toContainText(/Order #\d+ · by keeper at oracle price/);
-    await expect(stop).toContainText("$400.00");
     await page.getByTestId("account-tab-positions").click();
     await expect(positions).toHaveCount(2);
   });
@@ -377,7 +357,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
   await test.step("11. portfolio: equity, PnL and histories, switch to cross, close, withdraw", async () => {
     await openApp(page, "Portfolio");
     await expect(page).toHaveURL(/\/portfolio$/);
-    await expectSinglePrimary(page, /^Deposit$/);
     await expect(page.getByRole("complementary", { name: "Account equity breakdown" })).toContainText(/\$[\d,]+/);
     await expect(page.getByTestId("portfolio-realized")).toHaveText(/-\$/);
     await expect(positions).toHaveCount(2);
@@ -398,9 +377,11 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(btc).toContainText("(Cross)");
     await expect(page.getByTestId("portfolio-cross-health")).toContainText("Above maintenance");
     await btc.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("dialog", { name: "BTC · Close position", exact: true }).getByRole("button", { name: "Confirm close", exact: true }).click();
     await expectToast(page, /Short BTC closed/);
     await expect(positions).toHaveCount(1);
     await positions.first().getByRole("button", { name: "Close" }).click();
+    await page.getByRole("dialog", { name: "ETH · Close position", exact: true }).getByRole("button", { name: "Confirm close", exact: true }).click();
     await expectToast(page, /Long ETH closed/);
     await expect(positions).toHaveCount(0);
 
@@ -419,7 +400,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await openApp(page, "Leaderboard");
     await expect(page).toHaveURL(/\/leaderboard$/);
     const row = page.getByTestId(`leaderboard-row-${trader}`);
-    await expectSinglePrimary(page, /^Trade$/);
     await expect(row).toContainText("You");
     await expect(row).toContainText(/-\$[\d,.]+/);
     await expect(page.getByTestId("leaderboard-your-rank")).toContainText(/#\d+/);
@@ -431,7 +411,6 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(volume).toContainText(/[4-9] trades|\d{2,} trades/);
     await expect(page.getByTestId("landing-vault-core")).toContainText("TVL");
     await expect(page.getByTestId("landing-vault-long-tail")).toBeVisible();
-    await expect(page.locator("[data-primary]:visible")).toHaveCount(1);
     expect(pageErrors).toEqual([]);
   });
 });

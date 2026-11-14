@@ -2,6 +2,7 @@
 
 import { skipToken, useQueries, useQuery } from "@tanstack/react-query";
 import type { HistoryKind, LeaderboardSort, MarketId, VaultId } from "@/lib/near/types";
+import type { HedgeRecord } from "@/lib/near/types";
 import { useAccountId, useNear } from "./near-provider";
 
 /** Live data (prices, positions) polls every 5 s; slower-moving views every 10–15 s. */
@@ -16,6 +17,10 @@ export const ketosKeys = {
   config: () => ["ketos", "config"] as const,
   markets: () => ["ketos", "markets"] as const,
   prices: () => ["ketos", "prices"] as const,
+  hedge: () => ["ketos", "hedge"] as const,
+  hedgeFills: () => ["ketos", "hedge-fills"] as const,
+  hedgeEvidence: (custody: string | null, record: HedgeRecord) =>
+    ["ketos", "hedge-evidence", custody, record.fill.nonce, record.reported_transaction_hash] as const,
   account: (accountId: string | null) => ["ketos", "account", accountId] as const,
   positions: (accountId: string | null) => ["ketos", "positions", accountId] as const,
   orders: (accountId: string | null) => ["ketos", "orders", accountId] as const,
@@ -46,6 +51,25 @@ export function useConfig() {
 export function useMarkets() {
   const { views } = useNear();
   return useQuery({ queryKey: ketosKeys.markets(), queryFn: () => views.markets(), refetchInterval: LIVE_MS });
+}
+
+export function useHedge() {
+  const { views } = useNear();
+  return useQuery({ queryKey: ketosKeys.hedge(), queryFn: () => views.hedge(), refetchInterval: LIVE_MS });
+}
+
+export function useHedgeFills() {
+  const { views } = useNear();
+  return useQuery({ queryKey: ketosKeys.hedgeFills(), queryFn: () => views.hedgeFills(), refetchInterval: SLOW_MS });
+}
+
+export function useHedgeEvidence(records: readonly HedgeRecord[], custody: string | null) {
+  const { views } = useNear();
+  return useQueries({ queries: records.map((record) => ({
+    queryKey: ketosKeys.hedgeEvidence(custody, record),
+    queryFn: custody && record.reported_transaction_hash ? () => views.hedgeEvidence(record, custody) : skipToken,
+    staleTime: Infinity, retry: 1,
+  })) });
 }
 
 export function usePrices() {
@@ -166,7 +190,7 @@ export function useLeaderboard(sort: LeaderboardSort = "pnl", limit = 100) {
   });
 }
 
-/** Core and Long-tail vaults. */
+/** Legacy shared pools and every isolated market vault, including retired LP claims. */
 export function useVaults() {
   const { views } = useNear();
   return useQuery({ queryKey: ketosKeys.vaults(), queryFn: () => views.vaults(), refetchInterval: SLOW_MS });
@@ -199,6 +223,18 @@ export function useVaultAccount(vaultId: VaultId) {
     queryKey: ketosKeys.vaultAccount(vaultId, accountId),
     queryFn: accountId ? () => views.vaultAccount(vaultId, accountId) : skipToken,
     refetchInterval: SLOW_MS,
+  });
+}
+
+export function useVaultAccounts(vaultIds: readonly VaultId[]) {
+  const { views } = useNear();
+  const accountId = useAccountId();
+  return useQueries({
+    queries: vaultIds.map((vaultId) => ({
+      queryKey: ketosKeys.vaultAccount(vaultId, accountId),
+      queryFn: accountId ? () => views.vaultAccount(vaultId, accountId) : skipToken,
+      refetchInterval: SLOW_MS,
+    })),
   });
 }
 

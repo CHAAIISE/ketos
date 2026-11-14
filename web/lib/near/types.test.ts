@@ -15,6 +15,7 @@ import {
   positionSchema,
   priceSchema,
   vaultAccountSchema,
+  vaultIdSchema,
   vaultSchema,
   vaultSnapshotSchema,
 } from "./types";
@@ -46,6 +47,8 @@ const market = {
   measured_cap_is_grid_max: false,
   close_only: false,
   is_open: true,
+  isolated_only: false,
+  launch_state: null,
   funding_rate_per_hour: "-500000000",
 };
 
@@ -137,12 +140,14 @@ describe("order schemas", () => {
           margin_mode: "isolated",
         },
         created_at_ms: 1793816883516,
+        execution: { limit_price: "133333333", expires_at_ms: 1793817000000 },
       },
       {
         id: 2,
         account_id: "trader.sandbox",
         request: { kind: "take_profit", position_id: 1, trigger_price: "200000000" },
         created_at_ms: 1793816883147,
+        execution: null,
       },
     ]);
     const [limit, takeProfit] = orders.map((order) => order.request);
@@ -152,16 +157,28 @@ describe("order schemas", () => {
 
   it("rejects an unknown order kind", () => {
     const request = { kind: "trailing_stop", position_id: 1, trigger_price: "1" };
-    expect(orderSchema.safeParse({ id: 1, account_id: "a", request, created_at_ms: 1 }).success).toBe(false);
+    expect(orderSchema.safeParse({ id: 1, account_id: "a", request, created_at_ms: 1, execution: null }).success).toBe(false);
   });
 });
 
 describe("vault schemas", () => {
+  it("accepts canonical market IDs while safely rejecting aliases and overflowing storage IDs", () => {
+    for (const id of ["core", "long-tail", "market-0", "market-4294967295"]) {
+      expect(vaultIdSchema.parse(id)).toBe(id);
+    }
+    for (const id of ["market-01", "market--1", "market-1.5", "market-no", "market-4294967296", "market-999999999999999999999999"]) {
+      expect(vaultIdSchema.safeParse(id).success).toBe(false);
+    }
+  });
+
   it("keeps U128 values beyond 2^53 exact and parses signed revenue", () => {
     const parsed = vaultSchema.parse({
       id: "long-tail",
+      market_id: null, created_at_ms: null, last_snapshot_at_ms: null,
       balance: "340282366920938463463374607431768211455",
       nav: "10055000000",
+      hedge_assets: "0",
+      hedge_valuation_ready: true,
       total_shares: "10050000000",
       share_price: "1000497",
       reserved: "0",

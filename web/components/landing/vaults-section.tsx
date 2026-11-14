@@ -7,14 +7,10 @@ import { Container, Eyebrow } from "@/components/ui/page-shell";
 import { totalRevenue } from "@/components/vault/vault-history";
 import { useMarkets, useVaults } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
-import { formatBps, formatUsd } from "@/lib/near/format";
+import { formatBps, formatUsd, formatVaultName } from "@/lib/near/format";
 import type { Market, Vault } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 
-const ABOUT: Record<Vault["id"], { name: string; role: string }> = {
-  core: { name: "Core", role: "Counterparty to the majors." },
-  "long-tail": { name: "Long-tail", role: "Counterparty to extended and newly listed markets; earns listing fees." },
-};
 
 function Stat({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
@@ -26,7 +22,12 @@ function Stat({ label, children, className }: { label: string; children: React.R
 }
 
 function VaultRow({ vault, markets }: { vault: Vault; markets: Market[] | undefined }) {
-  const about = ABOUT[vault.id];
+  const about = {
+    name: formatVaultName(vault.id, vault.market_id),
+    role: vault.market_id ? `Dedicated counterparty capital for ${vault.market_id}.`
+      : vault.id === "core" ? "Legacy shared pool for the majors."
+        : "Legacy shared pool for extended markets; earns listing fees.",
+  };
   const pnl = totalRevenue(vault.revenue);
   const assigned = markets?.filter((m) => m.vault_id === vault.id).map((m) => m.id);
   return (

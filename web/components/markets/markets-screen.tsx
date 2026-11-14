@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Search } from "lucide-react";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
 import { formatUtc, useNow } from "@/components/landing/live-time";
@@ -15,14 +16,14 @@ import { useMarketStats } from "@/hooks/use-market-feeds";
 import { networkName } from "@/lib/near/config";
 import { usd0 } from "@/lib/near/format";
 import { CANDLE_SOURCE } from "@/lib/prices/candles";
-import { ListMarketPanel } from "./list-market-panel";
 import { MarketsTable, sortMarkets, type Sort, type SortKey } from "./markets-table";
 
-type Filter = "all" | "favorites" | "core" | "long-tail";
+type Filter = "all" | "favorites" | "isolated" | "core" | "long-tail";
 
 const FILTERS = [
   { id: "all", label: "All" },
   { id: "favorites", label: "Favorites", testId: "markets-filter-favorites" },
+  { id: "isolated", label: "Isolated markets" },
   { id: "core", label: "Core vault" },
   { id: "long-tail", label: "Long-tail vault" },
 ] as const;
@@ -42,7 +43,7 @@ export function MarketsScreen() {
     all.filter(
       (m) =>
         (filter === "all" ||
-          (filter === "favorites" ? favorites.includes(m.id) : m.vault_id === filter)) &&
+          (filter === "favorites" ? favorites.includes(m.id) : filter === "isolated" ? m.isolated_only : m.vault_id === filter)) &&
         (!needle || m.id.includes(needle)),
     ),
     sort,
@@ -170,7 +171,11 @@ export function MarketsScreen() {
             {stats.isError ? " (unavailable, retrying)" : ""}.
           </p>
         </section>
-        <ListMarketPanel markets={all} className="lg:self-start" />
+        <aside className="rounded-md border border-border bg-card p-4 lg:self-start">
+          <h2 className="text-subtitle">Launch a market</h2>
+          <p className="mt-2 text-ui text-muted-foreground">Create a supported market with dedicated LP capital. Listing fees never count as vault funding.</p>
+          <Link href="/launch" className="mt-4 inline-flex h-11 items-center text-ui underline">Open Launch →</Link>
+        </aside>
       </div>
     </>
   );

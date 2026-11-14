@@ -1,3 +1,11 @@
+import type { VaultId } from "./types";
+
+export function formatVaultName(id: VaultId, marketId?: string | null): string {
+  if (id === "core") return "Core";
+  if (id === "long-tail") return "Long-tail";
+  return marketId ? `${marketId} isolated` : `Market vault ${id.slice(7)}`;
+}
+
 /** tUSDC and every USDC amount on the perps contract use 6 decimals. */
 export const USDC_DECIMALS = 6;
 /** Oracle and position prices use 8 decimals. */

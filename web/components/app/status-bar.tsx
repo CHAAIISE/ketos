@@ -1,36 +1,20 @@
 "use client";
 
 import { formatAge, formatUtc, STALE_AFTER_MS, useNow } from "@/components/landing/live-time";
-import { useKeeperTick, type KeeperStatus } from "@/hooks/use-keeper-tick";
 import { useMarkets } from "@/hooks/use-ketos-queries";
 import { cn } from "@/lib/utils";
 
-function keeperText(status: KeeperStatus): string {
-  switch (status.state) {
-    case "ran":
-      return `Last keeper pass ${formatUtc(status.atMs)}${status.liquidated > 0 ? ` · liquidated ${status.liquidated}` : ""}`;
-    case "running":
-      return `Keeper checking positions…${status.lastPassMs ? ` · last pass ${formatUtc(status.lastPassMs)}` : ""}`;
-    case "unavailable":
-      return `Keeper unavailable: ${status.reason}`;
-    default:
-      return status.lastPassMs ? `Last keeper pass ${formatUtc(status.lastPassMs)}` : "Last keeper pass unavailable · scheduled checks + browser fallback";
-  }
-}
-
-/**
- * Thin bar pinned to the bottom of every app page: RPC health, the keeper pass this page asks for
- * while visible, and the explicitly scoped newest exit-liquidity measurement.
- */
 export function StatusBar() {
   const markets = useMarkets();
-  const keeper = useKeeperTick();
   const nowMs = useNow();
   const online = markets.isSuccess && !markets.isError;
   const measured = markets.data ? Math.max(0, ...markets.data.map((m) => m.depth_measured_at_ms)) : 0;
+  const active = markets.data?.filter((market) => market.oi_long > 0n || market.oi_short > 0n) ?? [];
+  const stale = active.filter((market) => market.price <= 0n || market.price_timestamp_ms <= 0
+    || market.price_timestamp_ms > nowMs || nowMs - market.price_timestamp_ms > 30_000);
 
   return (
-    <footer className="sticky bottom-0 z-30 flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border bg-background px-3 text-label whitespace-nowrap text-tertiary">
+    <footer className="sticky bottom-0 z-20 flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border bg-background px-3 text-label whitespace-nowrap text-tertiary">
       <span
         data-testid="rpc-status"
         className={cn(
@@ -49,10 +33,13 @@ export function StatusBar() {
             markets.isPending ? "bg-tertiary" : online ? "bg-success" : "bg-destructive",
           )}
         />
-        {markets.isPending ? "Connecting" : online ? "Online" : "Offline"}
+        {markets.isPending ? "RPC connecting" : online ? "RPC connected" : "RPC unavailable"}
       </span>
-      <span data-testid="keeper-status" className={cn("truncate", keeper.state === "unavailable" && "text-warning")}>
-        {keeperText(keeper)}
+      <span data-testid="keeper-status" className={cn("truncate", stale.length > 0 && "text-warning")}>
+        {!online || !nowMs ? "Risk observations unavailable"
+          : stale.length > 0 ? `Stale risk prices · ${stale.map((market) => market.id).join(", ")}`
+          : active.length > 0 ? `Active risk prices fresh · ${active.length} markets`
+          : "No open interest · prices refreshed on trade"}
       </span>
       {measured > 0 ? (
         <span className={cn("hidden truncate sm:inline", nowMs > 0 && nowMs - measured > STALE_AFTER_MS && "text-warning")}>

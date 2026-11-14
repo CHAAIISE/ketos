@@ -107,6 +107,20 @@ function fromPanic(panic: string, details: string): NearActionError {
       return make(
         `This market is closed to new positions${arg ? ` (${arg})` : ""}. Open positions can still be closed; try again once liquidity recovers.`,
       );
+    case "ERR_EXECUTION_PRICE_LIMIT":
+      return make("The price moved beyond your authorized execution limit. No trade was executed; review the price before submitting again.");
+    case "ERR_EXECUTION_EXPIRED":
+      return make("Your execution authorization expired. No trade was executed; submit again with a new price limit and expiry.");
+    case "ERR_ZERO_EXECUTION_LIMIT":
+      return make("Execution requires a price limit greater than zero.");
+    case "ERR_BRACKET_EXECUTION_REQUIRED":
+      return make("Each take-profit and stop-loss needs its own execution price limit and expiry.");
+    case "ERR_BRACKETS_CHANGED":
+      return make("These TP/SL orders changed while you were reviewing them. Reopen the editor to review the current exits.");
+    case "ERR_ACTION_ALREADY_SETTLED":
+      return make("This action has already settled. Check your positions and transaction before placing another trade.");
+    case "ERR_ACTION_PRICE_UNAVAILABLE":
+      return make("A fresh price was unavailable. The action was not applied; any transferred USDC is returned.");
     case "ERR_STALE_PRICE":
       return make("This action needs a newer oracle price. Wait for a price refresh and retry. After a 10-minute outage, positions can close at the last price with an adverse spread.");
     case "ERR_NO_PRICE":
@@ -183,6 +197,14 @@ function fromPanic(panic: string, details: string): NearActionError {
       return make("The stop loss must be below the current price for a long and above it for a short.");
     case "ERR_EXIT_ORDER_EXISTS":
       return make("This position already has that exit order. Cancel it first to set a new price.");
+    case "ERR_POSITION_CHANGED":
+      return make("This position changed after your review. Reopen Close and review its current size.");
+    case "ERR_REDUCTION_SIZE":
+      return make("Choose a positive close size no larger than the position.");
+    case "ERR_REDUCTION_DUST":
+      return make("This would leave a position below the minimum. Close less, or choose 100%.");
+    case "ERR_REDUCTION_UNDERMARGINED":
+      return make("The remaining position would be below maintenance. A partial close cannot release its collateral.");
     case "ERR_INVALID_LEVERAGE":
       return make("Leverage must be a whole number between 1x and the market's limit.");
     case "ERR_ALREADY_CROSS":
@@ -256,9 +278,9 @@ const PATTERNS: Array<{ re: RegExp; code: string; message: string }> = [
     message: "The transaction ran out of gas. Retry; if it keeps failing, the contract may be under load.",
   },
   {
-    re: /failed to fetch|network ?error|fetch failed|ECONNREFUSED|timed? ?out|TimeoutError|ETIMEDOUT/i,
+    re: /failed to fetch|network ?error|fetch failed|ECONNREFUSED|time(?:d)?[\s_-]*out|ETIMEDOUT/i,
     code: "NETWORK",
-    message: "Could not reach the NEAR network. Check your connection and retry.",
+    message: "The network did not confirm the outcome. The transaction may still have executed. Check your wallet activity, balances and positions before submitting again.",
   },
 ];
 
@@ -275,7 +297,7 @@ export function toNearActionError(error: unknown): NearActionError {
   }
   return new NearActionError({
     code: "UNKNOWN",
-    message: "Something went wrong and the transaction did not go through. Please retry.",
+    message: "The action's outcome could not be confirmed. Check your wallet activity, balances and positions before submitting again.",
     details,
   });
 }

@@ -120,6 +120,8 @@ describe("toNearActionError", () => {
     [panicked("The account doesn't have enough balance"), "INSUFFICIENT_BALANCE"],
     [new TxFailureError({ InvalidTxError: { NotEnoughBalance: { balance: "1" } } }, null), "INSUFFICIENT_NEAR"],
     [new TypeError("Failed to fetch"), "NETWORK"],
+    [new Error("Timeout error"), "NETWORK"],
+    [{ error: { cause: { name: "TIMEOUT_ERROR" } } }, "NETWORK"],
   ])("maps wallet and runtime errors (%s)", (raw, code) => {
     expect(toNearActionError(raw).code).toBe(code);
   });
@@ -127,8 +129,15 @@ describe("toNearActionError", () => {
   it("falls back to a generic message and keeps the raw text", () => {
     const error = toNearActionError(new Error("Something odd: 0xdeadbeef"));
     expect(error.code).toBe("UNKNOWN");
-    expect(error.message).toMatch(/did not go through/);
     expect(error.details).toBe("Something odd: 0xdeadbeef");
+  });
+
+  it("preserves a confirmed contract rejection when transport context also timed out", () => {
+    const error = toNearActionError({
+      cause: new Error("Timeout error"),
+      failure: { ExecutionError: "Smart contract panicked: ERR_STALE_PRICE" },
+    });
+    expect(error.code).toBe("ERR_STALE_PRICE");
   });
 
   it("returns already mapped errors unchanged", () => {

@@ -14,7 +14,12 @@ export const marginModeSchema = z.enum(["isolated", "cross"]);
 export type MarginMode = z.infer<typeof marginModeSchema>;
 
 export const VAULT_IDS = ["core", "long-tail"] as const;
-export const vaultIdSchema = z.enum(VAULT_IDS);
+export const vaultIdSchema = z.union([
+  z.enum(VAULT_IDS),
+  z.string().refine((id) => /^market-(0|[1-9]\d{0,9})$/.test(id)
+    && BigInt(id.slice(7)) <= 4_294_967_295n, "Invalid market vault ID")
+    .transform((id) => id as `market-${number}`),
+]);
 export type VaultId = z.infer<typeof vaultIdSchema>;
 
 /** `tee`: OutLayer price oracle; `outlayer_worker`: our pinned OutLayer worker; `signed`: signed price feed. */
@@ -70,6 +75,8 @@ export const marketSchema = z.object({
   /** Stored mark is too old for entry; an action must fetch a fresh price first. */
   close_only: z.boolean(),
   is_open: z.boolean(),
+  isolated_only: z.boolean(),
+  launch_state: z.enum(["measuring", "funded", "ready"]).nullable(),
   /** Signed hourly rate, RATE_PRECISION scale: positive means longs pay shorts. */
   funding_rate_per_hour: i128,
 });
@@ -185,8 +192,13 @@ export type Revenue = z.infer<typeof revenueSchema>;
 
 export const vaultSchema = z.object({
   id: vaultIdSchema,
+  market_id: marketIdSchema.nullable(),
+  created_at_ms: z.number().nullable(),
+  last_snapshot_at_ms: z.number().nullable(),
   balance: u128,
   nav: u128,
+  hedge_assets: u128,
+  hedge_valuation_ready: z.boolean(),
   total_shares: u128,
   share_price: u128,
   reserved: u128,
@@ -226,10 +238,13 @@ export const entryOrderSchema = z.object({
   brackets: bracketsSchema.nullable(),
 });
 
+const executionBoundsSchema = z.object({ limit_price: u128, expires_at_ms: z.number().int().nonnegative() });
+
 export const orderSchema = z.object({
   id: z.number(),
   account_id: z.string(),
   created_at_ms: z.number(),
+  execution: executionBoundsSchema.nullable(),
   request: z.discriminatedUnion("kind", [
     entryOrderSchema.extend({ kind: z.literal("limit") }),
     entryOrderSchema.extend({ kind: z.literal("stop_market") }),
@@ -270,7 +285,7 @@ export const vaultSnapshotSchema = z.object({
 });
 export type VaultSnapshot = z.infer<typeof vaultSnapshotSchema>;
 
-export const historyKindSchema = z.enum(["open", "close", "liquidation", "order_fill", "funding", "deposit", "withdrawal"]);
+export const historyKindSchema = z.enum(["open", "close", "reduce", "liquidation", "order_fill", "funding", "deposit", "withdrawal"]);
 export type HistoryKind = z.infer<typeof historyKindSchema>;
 
 export const historyEventSchema = z.object({
@@ -316,3 +331,56 @@ export const leaderboardEntrySchema = z.object({
   roi_bps: i128,
 });
 export type LeaderboardEntry = z.infer<typeof leaderboardEntrySchema>;
+
+const hedgeSideSchema = z.enum(["Buy", "Sell"]);
+const hedgeKindSchema = z.enum(["Fund", "Trade", "Return"]);
+const hedgeCounter = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const hedgeCommandSchema = z.object({
+  nonce: hedgeCounter, side: hedgeSideSchema, amount_in: u128, min_out: u128,
+  price: u128, price_timestamp_ms: hedgeCounter, deadline_ms: hedgeCounter,
+});
+export const hedgeFillSchema = z.object({
+  nonce: hedgeCounter, side: hedgeSideSchema, amount_in: u128, amount_out: u128,
+  reference_price: u128, reference_timestamp_ms: hedgeCounter,
+  started_at_ms: hedgeCounter, confirmed_at_ms: hedgeCounter,
+  execution_cost: i128, realized_pnl: i128, recovered: z.boolean(),
+});
+export const custodySchema = z.object({
+  config: z.object({ controller: z.string(), usdc: z.string(), wrapped_near: z.string(),
+    exchange: z.string(), pool_id: hedgeCounter }),
+  nonce: hedgeCounter, cash: u128, inventory: u128, cost_basis: u128,
+  total_funded: u128, total_returned: u128, realized_pnl: i128, execution_cost: i128,
+  pending: z.object({
+    nonce: hedgeCounter, kind: hedgeKindSchema, command: hedgeCommandSchema.nullable(),
+    amount: u128, output: u128, deposited: u128,
+    phase: z.enum(["Preflight", "Funding", "Depositing", "Swapping", "Withdrawing", "Checking", "Returning", "Uncertain"]),
+    started_at_ms: hedgeCounter, swapped: z.boolean(), recovered: z.boolean(),
+    wallet_before: z.tuple([u128, u128]), venue_before: z.tuple([u128, u128]),
+  }).nullable(),
+  last_fill: hedgeFillSchema.nullable(),
+});
+export const hedgeSchema = z.object({
+  market_id: marketIdSchema, vault_id: vaultIdSchema,
+  config: z.object({ custody_id: z.string(), exchange_id: z.string(), wrapped_near_id: z.string(), pool_id: hedgeCounter }),
+  next_nonce: hedgeCounter, confirmed: custodySchema.nullable(),
+  pending: z.object({
+    nonce: hedgeCounter, kind: hedgeKindSchema, amount: u128, command: hedgeCommandSchema.nullable(),
+    call_complete: z.boolean(), funding_transferred: z.boolean().nullable(),
+    return_received: u128, started_at_ms: hedgeCounter, observed: custodySchema.nullable(),
+  }).nullable(),
+  observed_at_ms: hedgeCounter.nullable(),
+  plan: z.object({
+    trader_delta: i128, target_inventory: u128, confirmed_inventory: u128, residual_delta: i128,
+    side: hedgeSideSchema.nullable(), amount_in: u128,
+    hold_reason: z.enum(["Pending", "StalePrice", "Cooldown", "WithinThreshold", "NoCash", "NoSpotShort"]).nullable(),
+  }),
+  recognized_value: u128, valuation_ready: z.boolean(), capital_limit: u128,
+  per_trade_limit: u128, shortfall_limit_bps: hedgeCounter, cooldown_ms: hedgeCounter,
+});
+export const hedgeRecordSchema = z.object({
+  fill: hedgeFillSchema,
+  /** Keeper-supplied locator, not proof that this transaction executed the fill. */
+  reported_transaction_hash: z.string().nullable(),
+});
+export type Hedge = z.infer<typeof hedgeSchema>;
+export type HedgeRecord = z.infer<typeof hedgeRecordSchema>;

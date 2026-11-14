@@ -1,5 +1,7 @@
 import { JsonRpcProvider } from "near-api-js";
 import { z } from "zod";
+import { verifyHedgeEvidence } from "./hedge-evidence";
+import type { HedgeRecord } from "./types";
 import {
   accountSchema,
   accountStatsSchema,
@@ -7,6 +9,8 @@ import {
   crossAccountSchema,
   depthViewSchema,
   historyEventSchema,
+  hedgeSchema,
+  hedgeRecordSchema,
   leaderboardEntrySchema,
   liquidationSchema,
   marketSchema,
@@ -62,6 +66,25 @@ export class KetosViews {
     return this.view(configSchema, this.ketosContract, "get_config");
   }
 
+  hedge() {
+    return this.view(hedgeSchema.nullable(), this.ketosContract, "get_hedge");
+  }
+
+  hedgeFills(limit = 10) {
+    return this.view(z.array(hedgeRecordSchema), this.ketosContract, "get_hedge_fills", { limit });
+  }
+
+  async hedgeEvidence(record: HedgeRecord, custodyId: string) {
+    const txHash = record.reported_transaction_hash;
+    if (!txHash) return null;
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(txHash)) throw new Error("Invalid hedge transaction locator");
+    const config = await this.config();
+    const outcome = await this.provider.viewTransactionStatusWithReceipts({
+      txHash, accountId: config.keeper_id, waitUntil: "FINAL",
+    });
+    return verifyHedgeEvidence(outcome, record, this.ketosContract, config.keeper_id, custodyId);
+  }
+
   /** Every asset id the price oracle supports, whether or not its last price is still fresh. */
   async oracleAssetIds(oracleId: string) {
     const data = await this.view(oraclePriceDataSchema, oracleId, "get_price_data", {});
@@ -77,6 +100,10 @@ export class KetosViews {
       from_index: fromIndex,
       limit,
     });
+  }
+
+  market(marketId: MarketId) {
+    return this.view(marketSchema.nullable(), this.ketosContract, "get_market", { market_id: marketId });
   }
 
   /** Every listed market, including permissionless listings beyond the first page. */
@@ -178,8 +205,16 @@ export class KetosViews {
     return this.view(vaultSchema, this.ketosContract, "get_vault", { vault_id: vaultId });
   }
 
-  vaults() {
-    return this.view(z.array(vaultSchema), this.ketosContract, "get_vaults");
+  async vaults() {
+    const vaults: z.infer<typeof vaultSchema>[] = [];
+    const limit = 100;
+    for (let fromIndex = 0; ; fromIndex += limit) {
+      const page = await this.view(z.array(vaultSchema), this.ketosContract, "get_vaults", {
+        from_index: fromIndex, limit,
+      });
+      vaults.push(...page);
+      if (page.length < limit) return vaults;
+    }
   }
 
   vaultAccount(vaultId: VaultId, accountId: string) {

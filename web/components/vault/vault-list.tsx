@@ -1,15 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { ErrorState, Skeleton } from "@/components/app/states";
 import { useWallet } from "@/hooks/near-provider";
+import { PanelTabs } from "@/components/ui/panel-tabs";
 import {
   useMarkets,
   useVaultAccount,
   useVaults,
 } from "@/hooks/use-ketos-queries";
-import { formatBps, formatUsd } from "@/lib/near/format";
+import { formatBps, formatUsd, formatVaultName } from "@/lib/near/format";
 import type { Market, Vault } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { HeaderStat, ReadAt } from "./vault-summary";
@@ -29,7 +31,7 @@ function VaultRow({
   const wallet = useWallet();
   const account = useVaultAccount(vault.id);
   const pnl = totalRevenue(vault.revenue);
-  const core = vault.id === "core";
+  const isolated = vault.market_id !== null;
   return (
     <tr
       className="border-t border-border text-ui tabular-nums hover:bg-muted/40"
@@ -40,13 +42,11 @@ function VaultRow({
           href={`/vaults/${vault.id}`}
           className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"
         >
-          {core ? "Core" : "Long-tail"}{" "}
+          {formatVaultName(vault.id, vault.market_id)}{" "}
           <ArrowUpRight className="size-3.5 text-tertiary" />
         </Link>
         <p className="mt-1 text-label text-tertiary">
-          {core
-            ? "BTC, ETH, NEAR and SOL"
-            : "Extended and newly listed markets"}
+          {isolated ? "Dedicated market capital" : "Legacy shared pool · existing capital preserved"}
         </p>
       </th>
       <td className={cell}>{formatUsd(vault.nav)}</td>
@@ -94,6 +94,7 @@ function VaultRow({
 export function VaultList() {
   const vaults = useVaults();
   const markets = useMarkets();
+  const [filter, setFilter] = useState<"all" | "isolated" | "shared">("all");
   const totalNav = vaults.data?.reduce((sum, vault) => sum + vault.nav, 0n);
   const pnl = vaults.data?.reduce(
     (sum, vault) => sum + totalRevenue(vault.revenue),
@@ -147,6 +148,8 @@ export function VaultList() {
             Deposit to Core <ArrowUpRight className="size-3.5" />
           </Link>
         </div>
+        <PanelTabs tabs={[{ id: "all", label: "All vaults" }, { id: "isolated", label: "Isolated markets" }, { id: "shared", label: "Legacy shared pools" }]}
+          value={filter} onChange={setFilter} label="Vault capital type" idPrefix="vault-kind" />
         {vaults.data ? (
           <p className="border-b border-border px-4 py-2 text-label text-muted-foreground sm:hidden">
             Swipe to compare returns and shares. Vault stays in view.
@@ -188,7 +191,7 @@ export function VaultList() {
               </thead>
               <tbody>
                 {vaults.data
-                  ? vaults.data.map((vault) => (
+                  ? vaults.data.filter((vault) => filter === "all" || (filter === "isolated" ? vault.market_id !== null : vault.market_id === null)).map((vault) => (
                       <VaultRow
                         key={vault.id}
                         vault={vault}

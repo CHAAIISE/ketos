@@ -21,10 +21,6 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
-/** Oracle price moved down by the measured impact: the average price a sell of that size got. */
-function exitPrice(price: bigint, impactBps: number): bigint {
-  return (price * BigInt(10_000 - Math.round(impactBps))) / 10_000n;
-}
 
 /** Same log-size / impact axes as the full measured curve, kept compact for the terminal. */
 function MiniImpactCurve({ record, marketId }: { record: DepthRecord; marketId: string }) {
@@ -121,8 +117,8 @@ function ExitLadder({ market }: { market: Market }) {
       <div role="table" aria-label={`${market.id} exit liquidity by sell size`} className="min-h-0 overflow-y-auto text-label tabular-nums">
         <div role="row" className="grid h-6 grid-cols-3 items-center px-3 text-tertiary">
           <span role="columnheader">
-            <Term hint="Oracle price lowered by the measured impact: the average price a sell of this size would get.">
-              Avg. Exit
+            <Term hint="Whether NEAR Intents returned a nonbinding dry quote at the measurement time. This is not an executable price or reserved liquidity.">
+              Quote
             </Term>
           </span>
           <span role="columnheader" className="text-right">Size (USD)</span>
@@ -146,11 +142,7 @@ function ExitLadder({ market }: { market: Market }) {
                   style={{ width: `${none ? 100 : (s.size_usd / maxSize) * 100}%` }}
                 />
                 <span role="cell" className={cn("relative", tone)}>
-                  {s.impact_bps === null
-                    ? "No liquidity"
-                    : market.price > 0n
-                      ? formatPrice(exitPrice(market.price, s.impact_bps))
-                      : "—"}
+                  {s.impact_bps === null ? "No quote" : "Available"}
                 </span>
                 <span role="cell" className="relative text-right text-foreground">{formatSizeUsd(s.size_usd)}</span>
                 <span role="cell" className={cn("relative text-right", none ? "text-destructive" : within ? "text-foreground" : "text-warning")}>

@@ -65,6 +65,12 @@ describe("settleOutcome", () => {
     expect(settleOutcome(raw)).toEqual({ txHash: "9fGkPq3Zs1", value: "97500000" });
   });
 
+  it("reports a consumed action's rejection instead of treating the successful receipt as a fill", () => {
+    const raw = outcome({ SuccessValue: b64(JSON.stringify({ error: "ERR_EXECUTION_PRICE_LIMIT" })) });
+    expect(() => settleOutcome(raw)).toThrow("ERR_EXECUTION_PRICE_LIMIT");
+    expect(() => settleOutcome(raw)).toThrow(TxFailureError);
+  });
+
   it("preserves an explicit action cancellation after oracle failure", () => {
     const raw = outcome({ SuccessValue: b64("null") }, [
       { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Oracle unavailable" } } } } },

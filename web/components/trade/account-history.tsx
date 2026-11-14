@@ -93,6 +93,7 @@ export function OpenOrdersTable({ orders, positions }: { orders: readonly Order[
           <th scope="col" className={cn(th, "text-right")}>
             <Term hint={KEEPER_HINT}>Trigger Price</Term>
           </th>
+          <th scope="col" className={cn(th, "text-right")}>Execution limit / expiry</th>
           <th scope="col" className={cn(th, "text-right")}>Margin Reserved</th>
           <th scope="col" className={cn(th, "text-right")}>Cancel</th>
         </>
@@ -114,6 +115,11 @@ export function OpenOrdersTable({ orders, positions }: { orders: readonly Order[
             </td>
             <td className="px-3 text-right">{target.size === null ? "—" : formatUsd(target.size)}</td>
             <td className="px-3 text-right">{formatPrice(order.request.trigger_price)}</td>
+            <td className="px-3 text-right">
+              {order.execution ? <><span>{formatPrice(order.execution.limit_price)}</span><span className="block text-tertiary">
+                {nowMs > order.execution.expires_at_ms ? "Expired · refund pending" : new Date(order.execution.expires_at_ms).toUTCString()}
+              </span></> : <span className="text-warning">Legacy · cancel and resubmit</span>}
+            </td>
             <td className="px-3 text-right">{target.reserved === null ? "—" : formatUsd(target.reserved)}</td>
             <td className="px-3 text-right">
               <Button
@@ -147,13 +153,13 @@ function fillsByTrade(events: readonly HistoryEvent[]): Map<string, HistoryEvent
   return fills;
 }
 
-const TRADE_LABEL = { open: "Open", close: "Close", liquidation: "Liquidated" } as const;
+const TRADE_LABEL = { open: "Open", close: "Close", reduce: "Reduce", liquidation: "Liquidated" } as const;
 
-/** Opens, closes and liquidations, newest first; trades made by a triggered order say so. */
+/** Entries, full/partial exits and liquidations; trades made by a triggered order say so. */
 export function TradeHistoryTable({ events }: { events: readonly HistoryEvent[] }) {
   const nowMs = useNow();
   const fills = fillsByTrade(events);
-  const trades = events.filter((e) => e.kind === "open" || e.kind === "close" || e.kind === "liquidation");
+  const trades = events.filter((e) => e.kind === "open" || e.kind === "close" || e.kind === "reduce" || e.kind === "liquidation");
 
   return (
     <Table
@@ -267,6 +273,7 @@ export function orderHistoryRows(
   events: readonly HistoryEvent[],
   orders: readonly Order[],
   positions: readonly Position[],
+  nowMs: number,
 ): OrderHistoryRow[] {
   const byId = new Map(positions.map((p) => [p.id, p]));
   const trades = new Map<string, HistoryEvent>();
@@ -287,7 +294,7 @@ export function orderHistoryRows(
       side: target.side,
       size: target.size,
       price: <>Trigger {formatPrice(order.request.trigger_price)}</>,
-      status: <Badge variant="outline">Open</Badge>,
+      status: <Badge variant="outline">{!order.execution ? "Cancel-only" : nowMs > order.execution.expires_at_ms ? "Expired" : "Open"}</Badge>,
     };
   });
 

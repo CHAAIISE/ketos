@@ -19,17 +19,19 @@ beforeEach(() => {
   secret = randomUUID();
   vi.stubEnv("CRON_SECRET", secret);
   vi.stubEnv("KEEPER_PRIVATE_KEY", "test signer supplied by chain seam");
+  vi.stubEnv("KEEPER_HTTP_ENABLED", "1");
   publishedAt = NOW - 20_000;
   chain = {
     markets: async () => [{ id: "NEAR", depth_measured_at_ms: publishedAt,
       oi_long: 0n, oi_short: 0n, price: 0n, funding: { last_accrual_ms: NOW },
     } as Market],
     ketosBalanceYocto: async () => MIN_KETOS_BALANCE_YOCTO,
+    hedge: async () => null,
+    rebalanceHedge: async () => ({ status: "disabled" }),
     openPositions: async () => [], openOrders: async () => [],
     setDepth: async (_market, _samples, at) => { publishedAt = at; return "tx-depth"; },
-    lastSnapshotMs: async () => NOW,
+    vaults: async () => [{ id: "core", last_snapshot_at_ms: NOW }, { id: "long-tail", last_snapshot_at_ms: NOW }],
     crossAccount: async () => { throw new Error("unexpected cross read"); },
-    lastPriceRequestMs: async () => { throw new Error("unexpected price read"); },
     refreshPrices: async () => { throw new Error("unexpected price request"); },
     executeOrders: async () => { throw new Error("unexpected order execution"); },
     liquidate: async () => { throw new Error("unexpected liquidation"); },
@@ -67,22 +69,19 @@ describe("keeper route access", () => {
     expect(mocks.keeperChain).not.toHaveBeenCalled();
   });
 
-  it("returns a normal waiting response for a recent on-chain browser tick", async () => {
+  it.each([NOW - 20_000, NOW - 600_000])("rejects anonymous visitors regardless of depth age", async (measurement) => {
+    publishedAt = measurement;
     const { POST } = await import("./route");
-    const response = await POST(request());
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Retry-After")).toBe("40");
-    expect(await response.json()).toMatchObject({ state: "throttled", retryAfterMs: 40_000 });
-    expect(publishedAt).toBe(NOW - 20_000);
+    expect((await POST(request())).status).toBe(401);
+    expect(mocks.keeperChain).not.toHaveBeenCalled();
+    expect(publishedAt).toBe(measurement);
   });
 
-  it("allows a browser pass at the on-chain minute boundary", async () => {
-    publishedAt = NOW - 60_000;
+  it("does not let an authenticated caller compete with standalone ownership", async () => {
+    vi.stubEnv("KEEPER_HTTP_ENABLED", "");
     const { POST } = await import("./route");
-    const response = await POST(request());
-    expect(response.status).toBe(200);
-    expect((await response.json()).ok).toBe(true);
-    expect(publishedAt).toBe(NOW);
+    expect((await POST(request(`Bearer ${secret}`))).status).toBe(409);
+    expect(mocks.keeperChain).not.toHaveBeenCalled();
   });
 
   it("lets a valid scheduler pass a recent measurement but does not overlap runs", async () => {
@@ -108,10 +107,11 @@ describe("keeper route access", () => {
     expect(publishedAt).toBe(NOW);
   });
 
-  it("fails closed for anonymous callers when on-chain freshness cannot be read", async () => {
-    chain.markets = async () => { throw new Error("RPC unavailable"); };
+  it("reports degraded maintenance as unavailable rather than a successful tick", async () => {
+    mocks.oneClickDepthSource.mockReturnValue({ sample: async () => { throw new Error("depth offline"); } });
     const { POST } = await import("./route");
-    expect((await POST(request())).status).toBe(502);
-    expect(publishedAt).toBe(NOW - 20_000);
+    const response = await POST(request(`Bearer ${secret}`));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ degraded: true, errors: [{ step: "depth", error: "depth offline" }] });
   });
 });

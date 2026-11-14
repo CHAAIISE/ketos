@@ -6,6 +6,7 @@ export const DAY_MS = 24 * 60 * 60_000;
 const ADDS_VOLUME: Record<HistoryKind, boolean> = {
   open: true,
   close: true,
+  reduce: true,
   liquidation: true,
   order_fill: false,
   funding: false,

@@ -39,7 +39,7 @@ export function marketDisplayStatus(market: Market, nowMs: number):
   return !market.close_only && isPriceFresh(market, nowMs)
     && (nowMs === 0 || nowMs - market.price_timestamp_ms <= 30_000)
     ? status
-    : { open: false, reason: "price", label: "Close-only · price refresh needed" };
+    : { open: false, reason: "price", label: "Refresh on trade" };
 }
 
 export function marketLimitLabel(market: Market): "Vault-limited" | "Liquidity-limited" | "Protocol-limited" {

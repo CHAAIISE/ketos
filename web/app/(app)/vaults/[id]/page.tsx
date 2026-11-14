@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { VaultView } from "@/components/vault/vault-view";
 import { VAULT_IDS, vaultIdSchema } from "@/lib/near/types";
+import { formatVaultName } from "@/lib/near/format";
 import { Skeleton } from "@/components/app/states";
 
 export function generateStaticParams() {
@@ -13,7 +14,8 @@ export async function generateMetadata({
   params,
 }: PageProps<"/vaults/[id]">): Promise<Metadata> {
   const { id } = await params;
-  return { title: id === "core" ? "Core Vault" : "Long-tail Vault" };
+  const vaultId = vaultIdSchema.safeParse(id);
+  return { title: vaultId.success ? `${formatVaultName(vaultId.data)} Vault` : "Vault not found" };
 }
 
 async function VaultContent({ params }: Pick<PageProps<"/vaults/[id]">, "params">) {

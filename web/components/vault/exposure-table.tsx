@@ -111,7 +111,7 @@ export function ExposureTable({ query, vaultId, className }: { query: UseQueryRe
                           {!status.open ? (
                             <Term hint={status.reason === "price" ? `${status.label}. Actions pull a fresh execution price.` : status.label}>
                               <Badge variant={status.reason === "thin" ? "warning" : "default"}>
-                                {status.reason === "no-depth" ? "Measuring" : status.reason === "thin" ? "Thin" : status.reason === "price" ? "Price refresh" : status.reason === "capital" ? "Vault-limited" : "Stale depth"}
+                                {status.reason === "no-depth" ? "Measuring" : status.reason === "thin" ? "Thin" : status.reason === "price" ? status.label : status.reason === "capital" ? "Vault-limited" : "Stale depth"}
                               </Badge>
                             </Term>
                           ) : null}

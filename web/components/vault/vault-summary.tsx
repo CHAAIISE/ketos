@@ -8,7 +8,7 @@ import { formatAge, formatUtc, useNow } from "@/components/landing/live-time";
 import { useWallet } from "@/hooks/near-provider";
 import { useVaultAccount } from "@/hooks/use-ketos-queries";
 import { networkName } from "@/lib/near/config";
-import { formatBps, formatUsd } from "@/lib/near/format";
+import { formatBps, formatUsd, formatVaultName } from "@/lib/near/format";
 import type { Vault, VaultId } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 import { Term } from "./term";
@@ -57,7 +57,7 @@ export function VaultHeader({ query, vaultId }: { query: UseQueryResult<Vault>; 
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between md:gap-6">
         <div className="flex min-w-0 flex-col gap-1">
           <Link href="/vaults" className="mb-1 text-label text-muted-foreground hover:text-foreground">← All vaults</Link>
-          <h1 className="text-heading text-foreground">{vaultId === "core" ? "Core" : "Long-tail"} Vault</h1>
+          <h1 className="text-heading text-foreground">{formatVaultName(vaultId, vault?.market_id)} Vault</h1>
           <p className="text-ui text-muted-foreground">
             Provide USDC and earn trading fees. You take the other side of traders.
           </p>

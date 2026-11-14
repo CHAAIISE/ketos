@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { Account, JsonRpcProvider, teraToGas } from "near-api-js";
 import { KetosViews } from "../lib/near/views";
+import { executionArg, executionLimits } from "../lib/near/execution";
 
 // Direct calls to the local sandbox for what the app deliberately cannot do: move the mock oracle
 // price and mint test USDC beyond the faucet. Accounts and keys come from web/.env.e2e, loaded by
@@ -123,7 +124,10 @@ export async function clearTraderTrading(): Promise<void> {
     await call(trader, ketos, "cancel_order", { order_id: order.id, to_wallet: true });
   }
   for (const position of await views.positions(trader.accountId)) {
-    await call(trader, ketos, "close_position", { position_id: position.id, to_wallet: true });
+    await call(trader, ketos, "close_position", {
+      position_id: position.id, to_wallet: true,
+      execution: executionArg(executionLimits(position.mark_price, position.side, true, 50, Date.now() + 120_000)),
+    });
   }
   const margin = (await views.account(trader.accountId))?.margin ?? 0n;
   if (margin > 0n) await call(trader, ketos, "withdraw_margin", { amount: margin.toString() }, 1n);

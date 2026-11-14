@@ -13,7 +13,7 @@ function AppShell({
     <div data-slot="app-shell" className="flex min-h-dvh flex-1 flex-col bg-background">
       <TopNav actions={navActions} />
       <main
-        className={cn("flex flex-1 flex-col gap-1 p-1 text-sm", className)}
+        className={cn("flex min-w-0 flex-1 flex-col gap-2 p-2 text-sm lg:px-6", className)}
         {...props}
       >
         {children}

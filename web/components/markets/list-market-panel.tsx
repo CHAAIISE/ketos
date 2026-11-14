@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
 import { ConnectButton } from "@/components/app/connect-button";
 import { EmptyState, ErrorState, Skeleton } from "@/components/app/states";
@@ -9,14 +10,16 @@ import { marketName } from "@/components/trade/market-header";
 import { PanelHeading } from "@/components/vault/panel-heading";
 import { Term } from "@/components/vault/term";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { FieldMessage } from "@/components/ui/input";
-import { useAccountId } from "@/hooks/near-provider";
-import { useListMarket } from "@/hooks/use-ketos-mutations";
-import { useAccount } from "@/hooks/use-ketos-queries";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { FieldMessage, Input } from "@/components/ui/input";
+import { useAccountId, useNear } from "@/hooks/near-provider";
+import { useDepositVault, useListMarket } from "@/hooks/use-ketos-mutations";
+import { useAccount, useVaults } from "@/hooks/use-ketos-queries";
 import { listableMarketsKey, useListableMarkets } from "@/hooks/use-market-feeds";
 import { LISTING_FEE } from "@/lib/near/calls";
-import { formatUsdc } from "@/lib/near/format";
+import { formatUsdc, formatUsd, parseUsdc } from "@/lib/near/format";
+import { txExplorerUrl } from "@/lib/near/explorer";
+import { formatUtc } from "@/components/landing/live-time";
 import { isMeasuring, type Market } from "@/lib/near/types";
 import { cn } from "@/lib/utils";
 
@@ -32,17 +35,27 @@ function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
 const MEASURING_SHOWN = 6;
 
 /**
- * Permissionless listing: pick an asset the price oracle and NEAR Intents both know, pay the
- * 25 USDC fee, and the market appears as "measuring" until the keeper's first depth sample.
+ * Create a source-bound market, then fund its separate LP vault in a second transaction.
+ * Listing fees are protocol revenue, never initial market capital.
  */
 export function ListMarketPanel({ markets, className }: { markets: readonly Market[]; className?: string }) {
   const accountId = useAccountId();
   const account = useAccount();
   const listable = useListableMarkets();
   const list = useListMarket();
+  const fund = useDepositVault();
+  const vaults = useVaults();
+  const { config } = useNear();
   const queryClient = useQueryClient();
   const { track } = useTxToast();
   const [picked, setPicked] = useState<string | null>(null);
+  const [launched, setLaunched] = useState<string | null>(null);
+  const [capitalInput, setCapitalInput] = useState("100");
+  const capital = parseUsdc(capitalInput);
+  const created = markets.find((market) => market.id === launched);
+  const createdVault = vaults.data?.find((vault) => vault.id === created?.vault_id);
+  const creationReceipt = txExplorerUrl(config.network, list.data?.txHash ?? null);
+  const fundingReceipt = txExplorerUrl(config.network, fund.data?.txHash ?? null);
   const assetGroupId = useId();
 
   // The server list is cached for a minute; hide anything the live registry already has.
@@ -69,11 +82,12 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
         }),
       {
         pending: `Listing ${marketName(asset.symbol)}…`,
-        success: `${marketName(asset.symbol)} listed · measuring`,
-        successDescription: () => "It opens after at least $10,000 of measured exit liquidity, sufficient vault backing and a fresh execution price.",
+        success: `${marketName(asset.symbol)} created · isolated vault`,
+        successDescription: () => "Listing confirmed. Fund the dedicated vault separately; price and measured depth still gate trading.",
       },
     );
     if (result) {
+      setLaunched(asset.symbol);
       setPicked(null);
       await queryClient.invalidateQueries({ queryKey: listableMarketsKey });
     }
@@ -85,14 +99,59 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
       data-testid="list-market-panel"
       className={cn("flex min-w-0 flex-col rounded-md border border-border bg-card", className)}
     >
-      <PanelHeading id="list-market-title">List a market</PanelHeading>
+      <PanelHeading id="list-market-title">Launch a market</PanelHeading>
       <div className="flex flex-col gap-4 p-3">
         <p className="text-ui text-muted-foreground">
-          Anyone can add a market for {fee} USDC. Its effective size cap reflects exit liquidity measured on
-          NEAR Intents and available vault backing, like every other market.
+          Create a market with its own LP capital. Pay {fee} USDC to register, then fund its
+          vault separately. No capital is borrowed from Core or Long-tail.
         </p>
 
-        {listable.isPending ? (
+        {launched ? (
+          <div className="flex flex-col gap-4" data-testid="launch-confirmed">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-subtitle">{launched}</h2>
+              <Badge variant={created?.launch_state === "ready" ? "success" : "warning"}>
+                {created?.launch_state ?? "Reading confirmed registry…"}
+              </Badge>
+            </div>
+            {list.data?.txHash ? creationReceipt
+              ? <a href={creationReceipt} target="_blank" rel="noreferrer" className="text-label underline">Creation receipt ↗</a>
+              : <p className="break-all text-label text-muted-foreground">Sandbox creation receipt: {list.data.txHash}</p> : null}
+            <dl className="flex flex-col gap-2">
+              <Row label="Dedicated LP capital">{createdVault ? formatUsd(createdVault.nav) : "Reading…"}</Row>
+              <Row label="Listing fee · not LP capital">{fee} USDC</Row>
+              <Row label="Margin">Isolated only</Row>
+            </dl>
+            {fund.isSuccess && created ? <Link data-primary className={buttonVariants()} href={`/trade?market=${encodeURIComponent(created.id)}`}>
+              {created.is_open ? `Trade ${created.id}` : `Inspect ${created.id} while depth is measured`}
+            </Link> : <>
+            <label className="flex flex-col gap-1 text-label" htmlFor={`${assetGroupId}-fund`}>Your LP deposit · USDC
+              <Input id={`${assetGroupId}-fund`} inputMode="decimal" value={capitalInput} onChange={(event) => setCapitalInput(event.target.value)} />
+            </label>
+            <Button data-primary data-testid="launch-fund" disabled={!created || fund.isPending || !capital || capital < 1_000_000n || balance === undefined || capital > balance}
+              onClick={() => {
+                if (!created || !capital) return;
+                void track(() => fund.mutateAsync({ vaultId: created.vault_id, amount: capital }), {
+                  pending: `Funding ${created.id} isolated vault…`, success: `${created.id} LP deposit confirmed`,
+                });
+              }}>
+              {fund.isPending ? "Confirm LP deposit…" : `Fund ${launched} vault`}
+            </Button>
+            {capital !== null && balance !== undefined && capital > balance ? <FieldMessage tone="error">Deposit exceeds your wallet balance of {formatUsdc(balance)} USDC.</FieldMessage> : null}
+            </>}
+            {fundingReceipt ? <a href={fundingReceipt} target="_blank" rel="noreferrer" className="text-label underline">LP funding receipt ↗</a>
+              : fund.data?.txHash ? <p className="break-all text-label text-muted-foreground">Sandbox funding receipt: {fund.data.txHash}</p> : null}
+            <p className="text-label text-muted-foreground">
+              {created?.launch_state === "ready" ? "Capital, measured depth and a recent stored price are present. Each trade still checks a fresh execution price."
+                : "Trading stays gated until there is dedicated capital, sufficient measured depth and a fresh execution price. Funding does not guarantee that a market will open."}
+            </p>
+            {created?.launch_state !== "ready" ? <p className="text-label text-muted-foreground">Depth runs on a ten-minute keeper schedule; quote processing adds time. Idle prices refresh when you submit a trade, not when you visit this page.</p> : null}
+            {created ? <div className="flex flex-wrap gap-4 text-ui">
+              <Link href={`/vaults/${created.vault_id}`} className="underline">Your shares &amp; withdrawals →</Link>
+            </div> : null}
+            <Button variant="secondary" onClick={() => { setLaunched(null); list.reset(); fund.reset(); }}>Create another market</Button>
+          </div>
+        ) : listable.isPending ? (
           <div aria-busy className="flex flex-col gap-1">
             <Skeleton className="h-row" />
             <Skeleton className="h-row" />
@@ -105,7 +164,7 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
           />
         ) : !asset ? (
           <EmptyState className="px-0 py-2">
-            Every asset with both an oracle price and a NEAR Intents route is already listed.
+            Every currently eligible source-bound asset with an available Intents route is already listed.
           </EmptyState>
         ) : (
           <>
@@ -140,8 +199,8 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
               <Row label={<Term hint="Price delivered onchain by an OutLayer TEE oracle or the pinned multisource worker.">Price source</Term>}>
                 {asset.priceSource === "outlayer_worker" ? "OutLayer worker" : "OutLayer oracle"}
               </Row>
-              <Row label={<Term hint="Newly listed markets are backed by the Long-tail vault, never by Core.">Vault</Term>}>
-                Long-tail
+              <Row label={<Term hint="A new empty vault belongs only to this market. LP deposits are separate from the listing fee.">Vault</Term>}>
+                {asset.symbol} isolated · starts at 0 USDC
               </Row>
               <Row label={<Term hint="Ceiling for this market; the live maximum depends on measured exit liquidity.">Max leverage</Term>}>
                 up to 5×
@@ -149,6 +208,10 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
               <Row label={<Term hint="Paid to the Long-tail vault. Refunded in full if the listing is refused.">Listing fee</Term>}>
                 {fee} USDC
               </Row>
+              <label className="flex flex-col gap-1 text-label" htmlFor={`${assetGroupId}-capital`}>Planned LP capital · separate signature
+                <Input id={`${assetGroupId}-capital`} inputMode="decimal" value={capitalInput} onChange={(event) => setCapitalInput(event.target.value)} />
+              </label>
+              <p className="text-label text-muted-foreground">Only the {fee} USDC fee is charged now. You can fund the vault after creation, or leave it unfunded. LP capital is exposed to trader gains and losses.</p>
             </div>
 
             <details className="text-label text-tertiary">
@@ -161,7 +224,7 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
                 <dt>Oracle</dt>
                 <dd className="truncate font-mono text-muted-foreground">{listable.data?.oracleId}</dd>
               </dl>
-              <p className="mt-2">Reference price from NEAR Intents 1Click; the market itself trades on the oracle price.</p>
+              <p className="mt-2">Reference price from NEAR Intents 1Click{listable.data ? ` · read ${formatUtc(listable.data.fetchedAtMs, true)}` : ""}; execution uses the authenticated oracle, not this reference.</p>
             </details>
 
             {accountId ? (
@@ -173,7 +236,7 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
                   disabled={list.isPending || short || balance === undefined}
                   onClick={() => void submit()}
                 >
-                  {list.isPending ? "Confirm in your wallet…" : `List ${asset.symbol} · ${fee} USDC`}
+                  {list.isPending ? "Confirm in your wallet…" : `Create ${asset.symbol} · ${fee} USDC`}
                 </Button>
                 {short ? (
                   <FieldMessage tone="error">
@@ -193,7 +256,7 @@ export function ListMarketPanel({ markets, className }: { markets: readonly Mark
             <ul className="flex flex-wrap gap-1.5">
               {measuring.slice(0, MEASURING_SHOWN).map((m) => (
                 <li key={m.id}>
-                  <Badge variant="warning">{marketName(m.id)} · measuring</Badge>
+                  <Link href={`/trade?market=${encodeURIComponent(m.id)}`}><Badge variant="warning">{marketName(m.id)} · measuring</Badge></Link>
                 </li>
               ))}
               {measuring.length > MEASURING_SHOWN ? (

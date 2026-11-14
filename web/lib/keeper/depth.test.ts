@@ -33,6 +33,7 @@ function market(index: number): Market {
     measured_cap_is_grid_max: false,
     close_only: false,
     is_open: false,
+    isolated_only: false, launch_state: null,
     funding_rate_per_hour: 0n,
   };
 }

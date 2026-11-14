@@ -6,9 +6,9 @@ import { Check, ChevronDown, Copy, LogOut, Wallet as WalletIcon } from "lucide-r
 import { Skeleton } from "@/components/app/states";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/near-provider";
-import { useAccount, usePositions, useVaultAccount } from "@/hooks/use-ketos-queries";
+import { useAccount, usePositions, useVaultAccounts, useVaults } from "@/hooks/use-ketos-queries";
 import { toNearActionError } from "@/lib/near/errors";
-import { formatUsd } from "@/lib/near/format";
+import { formatUsd, formatVaultName } from "@/lib/near/format";
 import type { WalletOption } from "@/lib/near/wallet";
 import { FundButton, useFundingDialog } from "./funding";
 
@@ -174,8 +174,8 @@ function AccountMenu({ accountId }: { accountId: string }) {
   const wallet = useWallet();
   const account = useAccount();
   const positions = usePositions();
-  const vault = useVaultAccount("core");
-  const longTail = useVaultAccount("long-tail");
+  const vaults = useVaults();
+  const claims = useVaultAccounts(vaults.data?.map((vault) => vault.id) ?? []);
   const funding = useFundingDialog();
   const [open, setOpen] = useState(false);
   const locked = positions.data?.reduce((sum, p) => sum + p.margin, 0n);
@@ -190,11 +190,11 @@ function AccountMenu({ accountId }: { accountId: string }) {
       <Popover.Trigger
         data-testid="wallet-account"
         title={accountId}
-        className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-muted px-3 text-ui text-foreground transition-colors hover:border-tertiary/40 focus-visible:outline-2 focus-visible:outline-ring aria-expanded:border-tertiary/40"
+        className="inline-flex h-8 min-w-0 items-center gap-2 rounded-md border border-border bg-muted px-3 text-ui text-foreground transition-colors hover:border-tertiary/40 focus-visible:outline-2 focus-visible:outline-ring aria-expanded:border-tertiary/40"
       >
-        <span aria-hidden className="size-1.5 rounded-pill bg-success" />
-        <span className="max-w-28 truncate sm:max-w-none">{shortAccount(accountId)}</span>
-        <ChevronDown aria-hidden className="size-3.5 text-tertiary" />
+        <span aria-hidden className="size-1.5 shrink-0 rounded-pill bg-success" />
+        <span className="min-w-0 max-w-28 truncate sm:max-w-none">{shortAccount(accountId)}</span>
+        <ChevronDown aria-hidden className="size-3.5 shrink-0 text-tertiary" />
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="end" sideOffset={8} className="z-50">
@@ -206,14 +206,17 @@ function AccountMenu({ accountId }: { accountId: string }) {
               </span>
               <CopyButton text={accountId} />
             </div>
-            <dl className="flex flex-col gap-2 px-4 py-3">
+            <dl className="flex max-h-80 flex-col gap-2 overflow-y-auto px-4 py-3">
               <BalanceRow label="Wallet USDC" value={account.data?.usdcBalance} />
               <BalanceRow
                 label="Margin"
                 value={account.data && locked !== undefined ? account.data.margin + locked : account.data?.margin}
               />
-              <BalanceRow label="Core vault" value={vault.data?.value} />
-              <BalanceRow label="Long-tail vault" value={longTail.data?.value} />
+              {vaults.data?.map((vault, index) => {
+                const claim = claims[index];
+                if (vault.market_id && claim.isSuccess && claim.data.shares === 0n) return null;
+                return <BalanceRow key={vault.id} label={`${formatVaultName(vault.id, vault.market_id)} vault`} value={claim.isSuccess ? claim.data.value : undefined} />;
+              })}
             </dl>
             <p className="px-4 pb-2 text-label text-tertiary">Advanced margin transfers · trading can use your wallet directly.</p>
             <div className="grid grid-cols-2 gap-2 px-4 pb-3">
@@ -249,7 +252,7 @@ export function WalletControls() {
 
   if (!wallet.accountId) return <ConnectMenu />;
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       {account.data ? <FundButton account={account.data} /> : <Skeleton className="h-8 w-14" />}
       <AccountMenu accountId={wallet.accountId} />
     </div>

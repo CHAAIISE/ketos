@@ -4,7 +4,7 @@ import { formatAge, formatUtc, STALE_AFTER_MS } from "@/components/landing/live-
 import { ImpactChart } from "@/components/liquidity/impact-chart";
 import { formatSizeUsd } from "@/components/liquidity/format";
 import { PanelHeading } from "@/components/vault/panel-heading";
-import { formatUsd, USDC_UNIT } from "@/lib/near/format";
+import { formatUsd, formatVaultName, USDC_UNIT } from "@/lib/near/format";
 import { formatExitCapacity, marketLimitLabel } from "@/lib/near/market-status";
 import { exitCapacityUsd, MIN_OPEN_CAPACITY_USD } from "@/lib/intents/depth";
 import type { DepthRecord, DepthView, Market } from "@/lib/near/types";
@@ -45,7 +45,7 @@ export function CapacityHeatmap({ markets, selected, onSelect, now }: {
                 <span className="break-all text-ui font-medium text-foreground">{market.id}</span>
                 <span className="text-ui tabular-nums">{zeroWithOi ? "Uncovered" : bps === null ? "N/A" : `${market.measured_cap_is_grid_max ? "≤ " : ""}${bps / 100n}.${(bps % 100n).toString().padStart(2, "0")}%`}</span>
               </span>
-              <span className="mt-1 block truncate text-label">{unmeasured ? "Measuring" : stale ? "Stale" : clockUnknown ? "Checking time" : zeroWithOi ? "Uncovered OI" : thin ? "Thin liquidity" : market.vault_id === "core" ? "Core" : "Long-tail"}</span>
+              <span className="mt-1 block truncate text-label">{unmeasured ? "Measuring" : stale ? "Stale" : clockUnknown ? "Checking time" : zeroWithOi ? "Uncovered OI" : thin ? "Thin liquidity" : formatVaultName(market.vault_id, market.id)}</span>
               <span className="mt-2 flex justify-between gap-1 text-label text-muted-foreground"><span>OI</span><span className="truncate tabular-nums text-foreground">{formatUsd(exposure, { maxFractionDigits: 0 })}</span></span>
               <span className="flex flex-wrap justify-between gap-1 text-label text-muted-foreground"><span>Effective cap</span><span className="tabular-nums text-foreground">{formatUsd(market.effective_max_oi_per_side, { maxFractionDigits: 0 })}</span></span>
               <span className="block text-label text-muted-foreground">{marketLimitLabel(market)}</span>

@@ -44,6 +44,7 @@ export const STRESS_MODEL_LIMITATIONS = [
   "Only the selected oracle price is shocked. Exit capacity stays at its last measured value: future quotes, price impact, new accrual, orders and keeper execution are not forecast.",
   "Settlement order is isolated position id, then cross account id; cross legs follow the contract's signed health-ratio/id order and stop on recovery. Actual transaction order can change vault payout caps.",
   "Bad debt is an estimate: isolated negative equity includes unpaid fees, not a booked receivable writeoff. Cross debt is counted only when the final leg exits, by creditor vault; a row's final account writeoff may belong to other vaults. Unpaid positive payouts under vault caps are not included.",
+  "This is trader liquidation stress, not total hedged-vault PnL: external inventory repricing, hedge execution and custody recovery are excluded. Payout caps use vault cash, not external marked assets.",
 ] as const;
 
 interface VaultState {
@@ -164,6 +165,9 @@ export function calculateStress({ markets, positions, crossAccounts, vaults, mar
   for (const row of rows) {
     vaultFor(marketById.get(row.position.market_id)!.vault_id);
     if (row.position.margin_mode !== "cross") continue;
+    if (marketById.get(row.position.market_id)!.vault_id.startsWith("market-")) {
+      throw new Error("An isolated market cannot carry cross-margin debt; refresh the chain snapshot.");
+    }
     const legs = crossRows.get(row.position.account_id);
     if (legs) legs.push(row);
     else crossRows.set(row.position.account_id, [row]);
@@ -196,6 +200,7 @@ export function calculateStress({ markets, positions, crossAccounts, vaults, mar
   }
 
   const badDebtByVault: Record<VaultId, bigint> = { core: 0n, "long-tail": 0n };
+  for (const vault of vaults) badDebtByVault[vault.id] = 0n;
   let liquidatableNotional = 0n;
   for (const row of rows) {
     const position = row.position;
