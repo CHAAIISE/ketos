@@ -16,7 +16,9 @@ fn response(at: u64) -> Value {
 #[test]
 fn quorum_prices_enable_worker_market_trading_only_after_depth() {
     let mut ketos = setup();
-    assert_eq!(deliver(&mut ketos, T0_MS, response(T0_MS)), 2);
+    let mut quotes = response(T0_MS);
+    quotes["prices"]["DOGE"][1] = json!(["coinbase", "bitstamp"]);
+    assert_eq!(deliver(&mut ketos, T0_MS, quotes), 2);
     assert_eq!(stored_price(&ketos, "DOGE"), (8_000_000, T0_MS));
     assert_eq!(stored_price(&ketos, "XRP"), (130_000_000, T0_MS));
     assert!(!ketos.get_market("DOGE".into()).unwrap().is_open);

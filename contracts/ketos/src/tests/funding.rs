@@ -84,8 +84,8 @@ fn assert_ten_hour_funding(long_leverage: u32, short_leverage: u32) {
     }
     let fees = long.close_fee.0 + short.close_fee.0;
     let borrow = vault.borrow_fees_due.0;
-    assert_eq!(ketos.vaults[0].balance, vault.balance.0 + fees + borrow + 500_000);
-    assert_eq!(ketos.vaults[0].balance + payouts, vault.balance.0 + long.margin.0 + short.margin.0);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, vault.balance.0 + fees + borrow + 500_000);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + payouts, vault.balance.0 + long.margin.0 + short.margin.0);
     assert_eq!(ketos.get_vault(VaultId::Core).funding_net_due.0, 0);
 }
 
@@ -182,12 +182,12 @@ fn funding_alone_can_make_a_position_liquidatable() {
     assert!(marked.equity.0 <= marked.maintenance_margin.0 as i128);
     assert!(marked.equity.0 + marked.funding_payment.0 > marked.maintenance_margin.0 as i128);
     assert!(marked.liquidation_price.0 > P4);
-    let vault_before = ketos.vaults[VaultId::Core.index()].balance;
+    let vault_before = ketos.vaults.get(&VaultId::Core).unwrap().balance;
     let record = ketos.liquidate_now(position.id);
     assert_eq!(record.funding_paid.0, 50 * USD);
     assert_eq!(record.funding_payment, marked.funding_payment);
     assert_eq!(record.equity, marked.equity);
-    assert_eq!(ketos.vaults[0].balance + record.reward.0 + record.returned.0, vault_before + position.margin.0);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + record.reward.0 + record.returned.0, vault_before + position.margin.0);
     assert_eq!(ketos.get_vault(VaultId::Core).funding_net_due.0, 0);
 }
 
@@ -205,7 +205,7 @@ fn receivers_are_paid_even_when_payer_is_underwater() {
     assert_eq!(receiver.funding_received.0, 250_000);
     let payout = ketos.close_position_now(short.id).0;
     assert_eq!(payout as i128, receiver.equity.0 - receiver.close_fee.0 as i128);
-    assert_eq!(ketos.vaults[0].balance + payout, 10_000 * USD + 100 * USD + 300_000 + short.margin.0);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + payout, 10_000 * USD + 100 * USD + 300_000 + short.margin.0);
 }
 
 #[test]

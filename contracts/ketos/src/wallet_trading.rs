@@ -7,8 +7,8 @@ use crate::cross::MarginMode;
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::MarketId;
 use crate::math::mul_div_floor;
-use crate::orders::{execution_reward, Brackets, EntryOrder, OrderRequest};
-use crate::position::{Side, MIN_POSITION_MARGIN};
+use crate::orders::{execution_reward, BracketBounds, Brackets, EntryOrder, OrderRequest};
+use crate::position::{ExecutionBounds, Side, MIN_POSITION_MARGIN};
 use crate::pull_prices::PullAction;
 use crate::signed_prices::SignedPrices;
 use crate::Ketos;
@@ -26,6 +26,8 @@ pub struct WalletOpenRequest {
     pub margin_mode: MarginMode,
     pub brackets: Option<Brackets>,
     pub signed_prices: Option<SignedPrices>,
+    pub execution: ExecutionBounds,
+    pub bracket_bounds: Option<BracketBounds>,
 }
 
 #[near(serializers = [json])]
@@ -47,6 +49,8 @@ pub struct WalletOrderRequest {
 
 impl WalletOpenRequest {
     fn collateral(&self, amount: u128, entry_order: bool) -> Result<(u128, u128), String> {
+        self.execution.validate(env::block_timestamp_ms())?;
+        BracketBounds::validate_for(self.brackets.as_ref(), self.bracket_bounds.as_ref(), env::block_timestamp_ms())?;
         let slots = self.brackets.as_ref().map_or(0, Brackets::count) + usize::from(entry_order);
         let margin = if let Some(margin) = self.margin {
             margin.0
@@ -103,7 +107,7 @@ impl Ketos {
         let (margin, _) = request.collateral(amount.0, false)?;
         self.with_transfer_margin(account_id, amount, |this, account_id| {
             this.try_open_position_for(account_id.clone(), request.market_id, request.side, U128(margin),
-                request.leverage, request.brackets, request.margin_mode)?;
+                request.leverage, request.brackets, request.margin_mode, request.execution, request.bracket_bounds)?;
             Ok(())
         })
     }
@@ -123,6 +127,8 @@ impl Ketos {
         let (margin, rewards) = request.entry.collateral(amount.0, true)?;
         let size = margin.checked_mul(u128::from(request.entry.leverage)).ok_or("ERR_OVERFLOW")?;
         let bracket_reserve = rewards - execution_reward(size);
+        let execution = request.entry.execution;
+        let bracket_bounds = request.entry.bracket_bounds;
         let entry = EntryOrder {
             market_id: request.entry.market_id, side: request.entry.side, margin: U128(margin),
             leverage: request.entry.leverage, trigger_price: request.trigger_price,
@@ -134,7 +140,7 @@ impl Ketos {
         };
         // Resting entries reserve funds only; their execution pulls and validates the price.
         self.with_transfer_margin(account_id, amount, |this, account_id| {
-            let order = this.try_place_order_for(account_id.clone(), request)?;
+            let order = this.try_place_order_for(account_id.clone(), request, execution, bracket_bounds)?;
             let order = this.orders.get_mut(&order.id).unwrap();
             order.wallet_funded = true;
             order.bracket_reserve = U128(bracket_reserve);

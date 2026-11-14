@@ -1,0 +1,17 @@
+[package]
+name = "hedge-custody"
+version = "0.1.0"
+description = "Bounded NEAR spot hedge custody for Ketos"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = { workspace = true }
+near-contract-standards = { workspace = true }
+ketos-hedge-common = { path = "../hedge-common" }
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }

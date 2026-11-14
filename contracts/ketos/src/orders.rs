@@ -6,7 +6,7 @@ use crate::cross::MarginMode;
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::{MarketId, MAX_OPEN_PRICE_AGE_MS};
 use crate::math::trade_fee;
-use crate::position::{Position, PositionId, Side, MIN_POSITION_MARGIN};
+use crate::position::{ExecutionBounds, Position, PositionId, Side, MIN_POSITION_MARGIN};
 use crate::market::USD;
 use crate::{emit_event, Ketos, KetosExt};
 
@@ -23,6 +23,29 @@ pub(crate) fn execution_reward(size: u128) -> u128 {
 pub struct Brackets {
     pub take_profit: Option<U128>,
     pub stop_loss: Option<U128>,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BracketBounds {
+    pub take_profit: Option<ExecutionBounds>,
+    pub stop_loss: Option<ExecutionBounds>,
+}
+
+impl BracketBounds {
+    pub(crate) fn validate_for(brackets: Option<&Brackets>, bounds: Option<&Self>, now_ms: u64) -> Result<(), String> {
+        let take_profit = bounds.and_then(|bounds| bounds.take_profit);
+        let stop_loss = bounds.and_then(|bounds| bounds.stop_loss);
+        if brackets.and_then(|brackets| brackets.take_profit).is_some() != take_profit.is_some()
+            || brackets.and_then(|brackets| brackets.stop_loss).is_some() != stop_loss.is_some()
+        {
+            return Err("ERR_BRACKET_EXECUTION_REQUIRED".into());
+        }
+        for bound in [take_profit, stop_loss].into_iter().flatten() {
+            bound.validate(now_ms)?;
+        }
+        Ok(())
+    }
 }
 
 impl Brackets {
@@ -55,6 +78,23 @@ impl Brackets {
         }
         Ok(())
     }
+}
+
+#[near(serializers = [json])]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BracketOrderIds {
+    pub take_profit: Option<OrderId>,
+    pub stop_loss: Option<OrderId>,
+}
+
+#[near(serializers = [json])]
+#[derive(Clone, Debug)]
+pub struct BracketAmendment {
+    pub position_id: PositionId,
+    /// Both identifiers bind the replacement to the state the owner reviewed.
+    pub expected: BracketOrderIds,
+    pub brackets: Brackets,
+    pub execution: BracketBounds,
 }
 
 #[near(serializers = [json, borsh])]
@@ -141,6 +181,9 @@ pub struct Order {
     pub wallet_funded: bool,
     /// Future bracket rewards reserved by wallet-funded entry orders.
     pub bracket_reserve: U128,
+    /// Migrated orders have no invented authorization: they remain cancellable, never executable.
+    pub execution: Option<ExecutionBounds>,
+    pub bracket_bounds: Option<BracketBounds>,
 }
 
 #[near(serializers = [json])]
@@ -162,6 +205,67 @@ pub enum OrderExecution {
 }
 
 impl Ketos {
+    fn amendable_position(&self, account_id: &AccountId, request: &BracketAmendment) -> Result<&Position, String> {
+        let position = self.positions.get(&request.position_id).ok_or("ERR_NO_POSITION")?;
+        if position.account_id != *account_id { return Err("ERR_NOT_OWNER".into()); }
+        if position.take_profit != request.expected.take_profit || position.stop_loss != request.expected.stop_loss {
+            return Err("ERR_BRACKETS_CHANGED".into());
+        }
+        Ok(position)
+    }
+
+    pub(crate) fn try_amend_brackets_for(
+        &mut self, account_id: AccountId, request: BracketAmendment, to_wallet: bool,
+    ) -> Result<PromiseOrValue<U128>, String> {
+        let position = self.amendable_position(&account_id, &request)?;
+        let now_ms = env::block_timestamp_ms();
+        BracketBounds::validate_for(Some(&request.brackets), Some(&request.execution), now_ms)?;
+        let slots = request.brackets.count();
+        if slots > 0 {
+            let market = self.markets.get(&position.market_id).ok_or("ERR_UNKNOWN_MARKET")?;
+            if market.price.0 == 0 { return Err("ERR_NO_PRICE".into()); }
+            if market.price_timestamp_ms > now_ms || now_ms - market.price_timestamp_ms > crate::market::MAX_PRICE_AGE_MS {
+                return Err("ERR_STALE_PRICE".into());
+            }
+            request.brackets.validate(position.side, market.price.0)?;
+        }
+        let previous = [position.take_profit, position.stop_loss];
+        let mut released_rewards = 0u128;
+        for id in previous.into_iter().flatten() {
+            let order = self.orders.get(&id).ok_or("ERR_NO_ORDER")?;
+            released_rewards = released_rewards.checked_add(order.execution_reward.0)
+                .and_then(|value| value.checked_add(order.bracket_reserve.0)).ok_or("ERR_OVERFLOW")?;
+        }
+        let account = self.accounts.get(&account_id).ok_or("ERR_NO_ACCOUNT")?;
+        let old_slots = previous.iter().flatten().count();
+        if account.orders.len() - old_slots + slots > MAX_OPEN_ORDERS {
+            return Err("ERR_TOO_MANY_ORDERS".into());
+        }
+        let required = execution_reward(position.size).checked_mul(slots as u128).ok_or("ERR_OVERFLOW")?;
+        let before = account.margin;
+        if before.checked_add(released_rewards).ok_or("ERR_OVERFLOW")? < required {
+            return Err("ERR_INSUFFICIENT_MARGIN".into());
+        }
+        // No reservation or linked order changes before every validation succeeds.
+        for id in previous.into_iter().flatten() {
+            self.remove_order(id);
+            emit_event("order_cancelled", json!({ "order_id": id, "reason": "brackets_amended" }));
+        }
+        self.attach_brackets(request.position_id, Some(request.brackets), Some(request.execution));
+        let released = U128(self.accounts.get(&account_id).unwrap().margin.saturating_sub(before));
+        let position = self.positions.get(&request.position_id).unwrap();
+        emit_event("position_brackets_amended", json!({
+            "position_id": request.position_id, "account_id": account_id,
+            "previous": request.expected, "take_profit": position.take_profit,
+            "stop_loss": position.stop_loss, "released_rewards": released,
+        }));
+        Ok(if to_wallet && released.0 > 0 {
+            PromiseOrValue::Promise(self.send_margin_to_wallet(account_id, released))
+        } else {
+            PromiseOrValue::Value(released)
+        })
+    }
+
     /// Shared, mutation-free admission check for immediate and triggered entries.
     pub(crate) fn opening_terms(
         &self,
@@ -236,7 +340,9 @@ impl Ketos {
         Ok((market.price.0, size, fee))
     }
 
-    fn insert_order(&mut self, account_id: AccountId, request: OrderRequest) -> Order {
+    fn insert_order(&mut self, account_id: AccountId, request: OrderRequest,
+        execution: ExecutionBounds, bracket_bounds: Option<BracketBounds>,
+    ) -> Order {
         let id = self.next_order_id;
         let size = request.entry().map_or_else(
             || self.positions.get(&request.position_id().unwrap()).unwrap().size,
@@ -252,6 +358,8 @@ impl Ketos {
             execution_reward: U128(reward),
             wallet_funded: false,
             bracket_reserve: U128(0),
+            execution: Some(execution),
+            bracket_bounds,
         };
         let account = self.accounts.get_mut(&account_id).unwrap();
         require!(account.margin >= reward, "ERR_INSUFFICIENT_MARGIN");
@@ -313,6 +421,34 @@ impl Ketos {
         }
     }
 
+    /// A smaller position cannot increase its reserved rewards. New IDs invalidate stale reviews.
+    pub(crate) fn resize_position_orders(&mut self, position_id: PositionId) {
+        let position = self.positions.get(&position_id).unwrap();
+        let ids = [position.take_profit, position.stop_loss];
+        let reward = execution_reward(position.size);
+        for previous_id in ids.into_iter().flatten() {
+            let mut order = self.remove_order(previous_id).expect("linked exit order");
+            order.id = self.next_order_id;
+            self.next_order_id += 1;
+            order.created_at_ms = env::block_timestamp_ms();
+            order.execution_reward.0 = order.execution_reward.0.min(reward);
+            let reserved = order.execution_reward.0 + order.bracket_reserve.0;
+            let account = self.accounts.get_mut(&order.account_id).unwrap();
+            account.margin -= reserved;
+            account.reserved_margin += reserved;
+            account.orders.push(order.id);
+            let position = self.positions.get_mut(&position_id).unwrap();
+            if order.request.is_take_profit() {
+                position.take_profit = Some(order.id);
+            } else {
+                position.stop_loss = Some(order.id);
+            }
+            emit_event("order_cancelled", json!({ "order_id": previous_id, "reason": "position_reduced" }));
+            emit_event("order_placed", json!(order));
+            self.orders.insert(order.id, order);
+        }
+    }
+
     fn refund_rejected_wallet_order(&mut self, order: &Order) {
         if order.wallet_funded {
             let released = order.execution_reward.0 + order.bracket_reserve.0
@@ -323,7 +459,16 @@ impl Ketos {
         }
     }
 
-    pub(crate) fn attach_brackets(&mut self, position_id: PositionId, brackets: Option<Brackets>) {
+    fn reject_order(&mut self, id: OrderId, reason: String) -> OrderExecution {
+        let order = self.remove_order(id).unwrap();
+        self.refund_rejected_wallet_order(&order);
+        emit_event("order_rejected", json!({ "order_id": id, "reason": reason }));
+        OrderExecution::Rejected { order_id: id, reason }
+    }
+
+    pub(crate) fn attach_brackets(&mut self, position_id: PositionId, brackets: Option<Brackets>,
+        bounds: Option<BracketBounds>,
+    ) {
         let Some(brackets) = brackets else {
             return;
         };
@@ -335,6 +480,7 @@ impl Ketos {
                     position_id,
                     trigger_price,
                 },
+                bounds.and_then(|bounds| bounds.take_profit).expect("validated bracket bounds"), None,
             );
         }
         if let Some(trigger_price) = brackets.stop_loss {
@@ -344,6 +490,7 @@ impl Ketos {
                     position_id,
                     trigger_price,
                 },
+                bounds.and_then(|bounds| bounds.stop_loss).expect("validated bracket bounds"), None,
             );
         }
     }
@@ -352,27 +499,69 @@ impl Ketos {
 #[near]
 impl Ketos {
     #[payable]
-    pub fn place_order(&mut self, request: OrderRequest, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<Order> {
+    pub fn amend_brackets(
+        &mut self, request: BracketAmendment, to_wallet: Option<bool>,
+        signed_prices: Option<crate::signed_prices::SignedPrices>,
+    ) -> PromiseOrValue<U128> {
         let account_id = env::predecessor_account_id();
-        let ids = request.position_id().map_or_else(Vec::new, |id| self.position_price_market_ids(id));
-        let action = crate::pull_prices::PullAction::PlaceOrder { account_id, request: request.clone() };
-        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
+        self.amendable_position(&account_id, &request).unwrap_or_else(|reason| env::panic_str(&reason));
+        BracketBounds::validate_for(Some(&request.brackets), Some(&request.execution), env::block_timestamp_ms())
+            .unwrap_or_else(|reason| env::panic_str(&reason));
+        let market_ids = if request.brackets.count() == 0 { Vec::new() }
+            else { self.position_price_market_ids(request.position_id) };
+        let action = crate::pull_prices::PullAction::AmendBrackets {
+            account_id: account_id.clone(), request: request.clone(), to_wallet: to_wallet.unwrap_or(true),
+        };
+        if let Some(promise) = self.pull_for_action(action, market_ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
-        PromiseOrValue::Value(self.place_order_now(request))
-    }
-
-    pub(crate) fn place_order_now(&mut self, request: OrderRequest) -> Order {
-        self.try_place_order_for(env::predecessor_account_id(), request)
+        self.try_amend_brackets_for(account_id, request, to_wallet.unwrap_or(true))
             .unwrap_or_else(|reason| env::panic_str(&reason))
     }
 
-    pub(crate) fn try_place_order_for(&mut self, account_id: AccountId, request: OrderRequest) -> Result<Order, String> {
+    #[payable]
+    pub fn place_order(&mut self, request: OrderRequest, signed_prices: Option<crate::signed_prices::SignedPrices>,
+        execution: ExecutionBounds, bracket_bounds: Option<BracketBounds>,
+    ) -> PromiseOrValue<Order> {
+        let account_id = env::predecessor_account_id();
+        execution.validate(env::block_timestamp_ms()).unwrap_or_else(|reason| env::panic_str(&reason));
+        BracketBounds::validate_for(request.entry().and_then(|entry| entry.brackets.as_ref()),
+            bracket_bounds.as_ref(), env::block_timestamp_ms()).unwrap_or_else(|reason| env::panic_str(&reason));
+        let ids = request.position_id().map_or_else(Vec::new, |id| self.position_price_market_ids(id));
+        let action = crate::pull_prices::PullAction::PlaceOrder { account_id, request: request.clone(), execution, bracket_bounds };
+        if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
+            return PromiseOrValue::Promise(promise);
+        }
+        PromiseOrValue::Value(self.try_place_order_for(env::predecessor_account_id(), request, execution, bracket_bounds)
+            .unwrap_or_else(|reason| env::panic_str(&reason)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn place_order_now(&mut self, request: OrderRequest) -> Order {
+        let (side, closing) = request.entry().map_or_else(
+            || (self.positions.get(&request.position_id().unwrap()).unwrap().side, true),
+            |entry| (entry.side, false),
+        );
+        let execution = crate::tests::execution_for_test(side, closing, request.trigger_price());
+        let bracket_bounds = crate::tests::bracket_execution(side, request.entry().and_then(|entry| entry.brackets.as_ref()));
+        self.try_place_order_for(env::predecessor_account_id(), request, execution, bracket_bounds)
+            .unwrap_or_else(|reason| env::panic_str(&reason))
+    }
+
+    pub(crate) fn try_place_order_for(&mut self, account_id: AccountId, request: OrderRequest,
+        execution: ExecutionBounds, bracket_bounds: Option<BracketBounds>,
+    ) -> Result<Order, String> {
+        execution.validate(env::block_timestamp_ms())?;
+        BracketBounds::validate_for(request.entry().and_then(|entry| entry.brackets.as_ref()),
+            bracket_bounds.as_ref(), env::block_timestamp_ms())?;
         let account = self.accounts.get(&account_id).ok_or("ERR_NO_ACCOUNT")?;
         if account.orders.len() >= MAX_OPEN_ORDERS { return Err("ERR_TOO_MANY_ORDERS".into()); }
         if request.trigger_price() == 0 { return Err("ERR_ZERO_TRIGGER_PRICE".into()); }
         if let Some(entry) = request.entry() {
             let market = self.markets.get(&entry.market_id).ok_or("ERR_UNKNOWN_MARKET")?;
+            if entry.margin_mode == crate::cross::MarginMode::Cross && market.vault_id.is_market() {
+                return Err("ERR_ISOLATED_MARKET_CROSS".into());
+            }
             if entry.margin.0 < MIN_POSITION_MARGIN { return Err("ERR_MIN_POSITION_MARGIN: 1 USDC".into()); }
             if !(1..=market.max_leverage_cap).contains(&entry.leverage) { return Err("ERR_INVALID_LEVERAGE".into()); }
             let size = entry.margin.0.checked_mul(u128::from(entry.leverage)).ok_or("ERR_OVERFLOW")?;
@@ -399,7 +588,7 @@ impl Ketos {
             };
             brackets.validate(position.side, market.price.0)?;
         }
-        Ok(self.insert_order(account_id, request))
+        Ok(self.insert_order(account_id, request, execution, bracket_bounds))
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId, to_wallet: Option<bool>) -> PromiseOrValue<U128> {
@@ -447,6 +636,10 @@ impl Ketos {
         ids.into_iter().map(|id| {
             let skipped = OrderExecution::Skipped { order_id: id };
             let Some(order) = self.orders.get(&id) else { return skipped; };
+            let Some(execution) = order.execution else { return skipped; };
+            if let Err(reason) = execution.validate(now_ms) {
+                return self.reject_order(id, reason);
+            }
             let (market_id, side) = if let Some(entry) = order.request.entry() {
                 (&entry.market_id, entry.side)
             } else {
@@ -456,11 +649,7 @@ impl Ketos {
             let market = self.markets.get(market_id)
                 .filter(|market| order.created_at_ms >= market.created_at_ms);
             let Some(market) = market else {
-                let order = self.remove_order(id).unwrap();
-                self.refund_rejected_wallet_order(&order);
-                let reason = "ERR_MARKET_DELISTED".to_string();
-                emit_event("order_rejected", json!({ "order_id": id, "reason": reason }));
-                return OrderExecution::Rejected { order_id: id, reason };
+                return self.reject_order(id, "ERR_MARKET_DELISTED".into());
             };
             if market.price.0 == 0 {
                 return skipped;
@@ -482,6 +671,9 @@ impl Ketos {
                 price
             };
             if order.request.entry().is_some() && !order.request.triggered(side, price) { return skipped; }
+            if let Err(reason) = execution.check(side, order.request.entry().is_none(), price, now_ms) {
+                return self.reject_order(id, reason);
+            }
             let fill_market = market_id.clone();
             let fill_size = if let Some(entry) = order.request.entry() {
                 // Opening admission checks overflow before any fill is recorded.
@@ -497,7 +689,8 @@ impl Ketos {
             let wallet_funded = order.wallet_funded;
             let position_id = match order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
-                    match self.try_open_position_for(order.account_id.clone(), entry.market_id, entry.side, entry.margin, entry.leverage, entry.brackets, entry.margin_mode) {
+                    match self.try_open_position_for(order.account_id.clone(), entry.market_id, entry.side,
+                        entry.margin, entry.leverage, entry.brackets, entry.margin_mode, execution, order.bracket_bounds) {
                         Ok(position) => position.id,
                         Err(reason) => {
                             self.accounts.get_mut(&order.account_id).unwrap().margin += reward;

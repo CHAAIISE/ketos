@@ -7,7 +7,7 @@ use crate::funding::side_index;
 use crate::history::{HistoryEvent, HistoryKind};
 use crate::market::{Market, MarketId, USD};
 use crate::math::{borrow_fee, liquidation_price, maintenance_margin, pnl, to_i128, trade_fee};
-use crate::orders::{Brackets, OrderId};
+use crate::orders::{BracketBounds, Brackets, OrderId};
 use crate::{emit_event, Ketos, KetosExt};
 
 /// Smallest collateral a position can be opened with.
@@ -21,6 +21,32 @@ pub type PositionId = u64;
 pub enum Side {
     Long,
     Short,
+}
+
+/// The user's worst acceptable oracle execution price, excluding separately charged fees.
+/// A buy cannot exceed it; a sell cannot fall below it. Equality is executable.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutionBounds {
+    pub limit_price: U128,
+    pub expires_at_ms: u64,
+}
+
+impl ExecutionBounds {
+    pub(crate) fn validate(&self, now_ms: u64) -> Result<(), String> {
+        if self.limit_price.0 == 0 { return Err("ERR_ZERO_EXECUTION_LIMIT".into()); }
+        if now_ms > self.expires_at_ms { return Err("ERR_EXECUTION_EXPIRED".into()); }
+        Ok(())
+    }
+
+    pub(crate) fn check(&self, side: Side, closing: bool, price: u128, now_ms: u64) -> Result<(), String> {
+        self.validate(now_ms)?;
+        let buying = (side == Side::Long) != closing;
+        if (buying && price > self.limit_price.0) || (!buying && price < self.limit_price.0) {
+            return Err("ERR_EXECUTION_PRICE_LIMIT".into());
+        }
+        Ok(())
+    }
 }
 
 #[near(serializers = [borsh])]
@@ -115,27 +141,31 @@ impl Position {
     }
 
     pub(crate) fn mark(&self, market: &Market, price: u128, now_ms: u64) -> Marked {
-        let pnl = pnl(self.is_long(), self.size, self.entry_price, price);
+        self.mark_slice(self.size, self.margin, market, price, now_ms)
+    }
+
+    pub(crate) fn mark_slice(&self, size: u128, margin: u128, market: &Market, price: u128, now_ms: u64) -> Marked {
+        let pnl = pnl(self.is_long(), size, self.entry_price, price);
         let borrow_fee = borrow_fee(
-            self.size,
+            size,
             self.entry_borrow_index,
             market.borrow_index_at(self.side, now_ms),
         );
         let (funding_paid, funding_received) = market.funding_at(now_ms).amounts(
             self.side,
-            self.size,
+            size,
             self.entry_funding_paid_index,
             self.entry_funding_received_index,
         );
         Marked {
             pnl,
             borrow_fee,
-            close_fee: trade_fee(self.size, market.fee_bps),
+            close_fee: trade_fee(size, market.fee_bps),
             funding_paid,
             funding_received,
-            equity: to_i128(self.margin) + pnl - to_i128(borrow_fee)
+            equity: to_i128(margin) + pnl - to_i128(borrow_fee)
                 - to_i128(funding_paid) + to_i128(funding_received),
-            maintenance: maintenance_margin(self.size, self.max_leverage),
+            maintenance: maintenance_margin(size, self.max_leverage),
         }
     }
 
@@ -250,7 +280,7 @@ impl Ketos {
         let owed = marked.equity - to_i128(marked.close_fee);
         let mut payout = u128::try_from(owed.max(0)).unwrap_or(0);
         let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
-        let vault = &self.vaults[vault_id.index()];
+        let vault = self.vaults.get(&vault_id).unwrap();
         let available = vault.balance - vault.cross_receivable + position.margin;
         if payout > available {
             payout = available;
@@ -282,13 +312,20 @@ impl Ketos {
         leverage: u32,
         brackets: Option<Brackets>,
         margin_mode: MarginMode,
+        execution: ExecutionBounds,
+        bracket_bounds: Option<BracketBounds>,
     ) -> Result<PositionView, String> {
         let now_ms = env::block_timestamp_ms();
         let margin = margin.0;
         let (price, size, fee) = self.opening_terms(
             &account_id, &market_id, side, margin, leverage, brackets.as_ref(), now_ms,
         )?;
+        execution.check(side, false, price, now_ms)?;
+        BracketBounds::validate_for(brackets.as_ref(), bracket_bounds.as_ref(), now_ms)?;
         if margin_mode == MarginMode::Cross {
+            if self.markets.get(&market_id).unwrap().vault_id.is_market() {
+                return Err("ERR_ISOLATED_MARKET_CROSS".into());
+            }
             self.cross_admission(&account_id, to_i128(margin - fee), maintenance_margin(size, self.markets.get(&market_id).unwrap().max_leverage), 1)?;
         }
         let market = self.market_mut(&market_id);
@@ -351,7 +388,7 @@ impl Ketos {
         );
         self.record_entry(id, &position, margin, fee);
         self.positions.insert(id, position);
-        self.attach_brackets(id, brackets);
+        self.attach_brackets(id, brackets, bracket_bounds);
         Ok(self.get_position(id).unwrap())
     }
 
@@ -397,29 +434,38 @@ impl Ketos {
         price: u128,
         now_ms: u64,
         to_wallet: bool,
-    ) -> PromiseOrValue<U128> {
+        execution: ExecutionBounds,
+    ) -> Result<PromiseOrValue<U128>, String> {
         let position = self.positions.get(&position_id)
             .unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
         require!(position.account_id == account_id, "ERR_NOT_OWNER");
+        execution.check(position.side, true, price, now_ms)?;
         let before = self.accounts.get(&account_id).unwrap().margin;
         self.close_position_at(position_id, price, now_ms);
         // Cross settlements retain cash behind surviving legs. Only the last leg
         // releases it to free margin; bracket reward refunds are also included.
         let released = U128(self.accounts.get(&account_id).unwrap().margin - before);
-        if to_wallet && released.0 > 0 {
+        Ok(if to_wallet && released.0 > 0 {
             PromiseOrValue::Promise(self.send_margin_to_wallet(account_id, released))
         } else {
             PromiseOrValue::Value(released)
-        }
+        })
     }
 }
 
 impl Ketos {
+    #[cfg(test)]
     pub(crate) fn open_position_now(
         &mut self, market_id: MarketId, side: Side, margin: U128, leverage: u32,
         brackets: Option<Brackets>, margin_mode: Option<MarginMode>,
     ) -> PositionView {
-        self.try_open_position_for(env::predecessor_account_id(), market_id, side, margin, leverage, brackets, margin_mode.unwrap_or_default())
+        let execution = ExecutionBounds {
+            limit_price: U128(self.markets.get(&market_id).map_or(1, |market| market.price.0.max(1))),
+            expires_at_ms: env::block_timestamp_ms(),
+        };
+        let bracket_bounds = crate::tests::bracket_execution(side, brackets.as_ref());
+        self.try_open_position_for(env::predecessor_account_id(), market_id, side, margin, leverage,
+            brackets, margin_mode.unwrap_or_default(), execution, bracket_bounds)
             .unwrap_or_else(|reason| env::panic_str(&reason))
     }
 
@@ -432,7 +478,8 @@ impl Ketos {
             .closing_price(now_ms).unwrap_or_else(|reason| env::panic_str(reason));
         let PromiseOrValue::Value(released) = self.close_position_for(
             env::predecessor_account_id(), position_id, price, now_ms, false,
-        ) else {
+            ExecutionBounds { limit_price: U128(price), expires_at_ms: now_ms },
+        ).unwrap() else {
             unreachable!("retained settlement cannot create a transfer");
         };
         released
@@ -446,27 +493,38 @@ impl Ketos {
         &mut self, market_id: MarketId, side: Side, margin: U128, leverage: u32,
         brackets: Option<Brackets>, margin_mode: Option<MarginMode>,
         signed_prices: Option<crate::signed_prices::SignedPrices>,
+        execution: ExecutionBounds,
+        bracket_bounds: Option<BracketBounds>,
     ) -> PromiseOrValue<PositionView> {
         let account_id = env::predecessor_account_id();
+        execution.validate(env::block_timestamp_ms()).unwrap_or_else(|reason| env::panic_str(&reason));
+        BracketBounds::validate_for(brackets.as_ref(), bracket_bounds.as_ref(), env::block_timestamp_ms())
+            .unwrap_or_else(|reason| env::panic_str(&reason));
         let ids = self.open_price_market_ids(&market_id, &account_id, margin_mode.unwrap_or_default());
         let action = crate::pull_prices::PullAction::Open {
             account_id, market_id: market_id.clone(), side, margin, leverage,
             brackets: brackets.clone(), margin_mode: margin_mode.unwrap_or_default(),
+            execution, bracket_bounds,
         };
         if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
-        PromiseOrValue::Value(self.open_position_now(market_id, side, margin, leverage, brackets, margin_mode))
+        PromiseOrValue::Value(self.try_open_position_for(env::predecessor_account_id(), market_id,
+            side, margin, leverage, brackets, margin_mode.unwrap_or_default(), execution, bracket_bounds)
+            .unwrap_or_else(|reason| env::panic_str(&reason)))
     }
 
     #[payable]
-    pub fn close_position(&mut self, position_id: PositionId, to_wallet: Option<bool>, signed_prices: Option<crate::signed_prices::SignedPrices>) -> PromiseOrValue<U128> {
+    pub fn close_position(&mut self, position_id: PositionId, to_wallet: Option<bool>,
+        signed_prices: Option<crate::signed_prices::SignedPrices>, execution: ExecutionBounds,
+    ) -> PromiseOrValue<U128> {
         let position = self.positions.get(&position_id).unwrap_or_else(|| env::panic_str("ERR_NO_POSITION"));
         let account_id = env::predecessor_account_id();
         require!(position.account_id == account_id, "ERR_NOT_OWNER");
+        execution.validate(env::block_timestamp_ms()).unwrap_or_else(|reason| env::panic_str(&reason));
         let ids = vec![position.market_id.clone()];
         let to_wallet = to_wallet.unwrap_or(true);
-        let action = crate::pull_prices::PullAction::Close { account_id: account_id.clone(), position_id, to_wallet };
+        let action = crate::pull_prices::PullAction::Close { account_id: account_id.clone(), position_id, to_wallet, execution };
         if let Some(promise) = self.pull_for_action(action, ids, signed_prices) {
             return PromiseOrValue::Promise(promise);
         }
@@ -474,7 +532,8 @@ impl Ketos {
         let position = self.positions.get(&position_id).unwrap();
         let price = self.markets.get(&position.market_id).unwrap()
             .closing_price(now_ms).unwrap_or_else(|reason| env::panic_str(reason));
-        self.close_position_for(account_id, position_id, price, now_ms, to_wallet)
+        self.close_position_for(account_id, position_id, price, now_ms, to_wallet, execution)
+            .unwrap_or_else(|reason| env::panic_str(&reason))
     }
 
     pub fn get_position(&self, position_id: PositionId) -> Option<PositionView> {

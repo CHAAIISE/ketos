@@ -41,12 +41,64 @@ pub enum PriceSource {
     OutlayerWorker,
 }
 
-#[near(serializers = [json, borsh])]
-#[serde(rename_all = "kebab-case")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[near(serializers = [borsh])]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VaultId {
     Core,
     LongTail,
+    Market(u32),
+}
+
+impl std::fmt::Display for VaultId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Core => formatter.write_str("core"),
+            Self::LongTail => formatter.write_str("long-tail"),
+            Self::Market(index) => write!(formatter, "market-{index}"),
+        }
+    }
+}
+
+impl std::str::FromStr for VaultId {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "core" => Ok(Self::Core),
+            "long-tail" => Ok(Self::LongTail),
+            _ => {
+                let index = value.strip_prefix("market-").ok_or("ERR_UNKNOWN_VAULT")?;
+                if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit())
+                    || (index.len() > 1 && index.starts_with('0'))
+                {
+                    return Err("ERR_UNKNOWN_VAULT");
+                }
+                index.parse().map(Self::Market).map_err(|_| "ERR_UNKNOWN_VAULT")
+            }
+        }
+    }
+}
+
+impl near_sdk::serde::Serialize for VaultId {
+    fn serialize<S: near_sdk::serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> near_sdk::serde::Deserialize<'de> for VaultId {
+    fn deserialize<D: near_sdk::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl near_sdk::serde::de::Visitor<'_> for Visitor {
+            type Value = VaultId;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("core, long-tail, or market-N")
+            }
+            fn visit_str<E: near_sdk::serde::de::Error>(self, value: &str) -> Result<VaultId, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+        deserializer.deserialize_str(Visitor)
+    }
 }
 
 #[near(serializers = [json])]
@@ -114,12 +166,23 @@ fn side_index(side: Side) -> usize {
     }
 }
 
+#[near(serializers = [json])]
+#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchState {
+    Measuring,
+    Funded,
+    Ready,
+}
+
 /// Market with the limits derived from its latest depth sample at the current block time.
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarketView {
     #[serde(flatten)]
     pub market: Market,
+    pub isolated_only: bool,
+    pub launch_state: Option<LaunchState>,
     pub max_oi_per_side: U128,
     /// Capital-backed total per-side ceiling, in micro-USDC like `exit_capacity`.
     pub vault_backed_cap_usd: U128,
@@ -227,6 +290,8 @@ impl Market {
         let effective_cap = self.max_oi_per_side().min(vault_backed_cap);
         MarketView {
             market: self.clone(),
+            isolated_only: self.vault_id.is_market(),
+            launch_state: None,
             max_oi_per_side: U128(self.max_oi_per_side()),
             vault_backed_cap_usd: U128(vault_backed_cap),
             effective_max_oi_per_side: U128(effective_cap),
@@ -374,8 +439,12 @@ fn worker_markets() -> impl Iterator<Item = MarketConfig> {
 impl Ketos {
     /// Conservative cash-backed NAV budget and current largest-side vault exposure.
     pub(crate) fn vault_capital_limits(&self, vault_id: VaultId) -> (u128, u128) {
+        let vault = self.get_vault(vault_id);
         (
-            self.get_vault(vault_id).nav.0.saturating_mul(vault_id.oi_multiplier()),
+            if vault.hedge_valuation_ready {
+                vault.nav.0.saturating_sub(vault.hedge_assets.0)
+                    .saturating_mul(vault_id.oi_multiplier())
+            } else { 0 },
             self.vault_exposure(vault_id),
         )
     }
@@ -404,7 +473,19 @@ impl Ketos {
                         sample.size_usd == crate::depth::exit_capacity_usd(&record.samples)
                     })
             });
-        market.view(now_ms, cap, exposure <= limit, grid_max)
+        let mut view = market.view(now_ms, cap, exposure <= limit, grid_max);
+        if market.vault_id.is_market() {
+            view.launch_state = Some(if limit == 0 {
+                LaunchState::Measuring
+            } else if view.is_open && market.price.0 > 0 && market.price_timestamp_ms <= now_ms
+                && now_ms - market.price_timestamp_ms <= MAX_OPEN_PRICE_AGE_MS
+            {
+                LaunchState::Ready
+            } else {
+                LaunchState::Funded
+            });
+        }
+        view
     }
 
     /// Shared insertion path; no privileged endpoint can change a live market's terms.
@@ -501,16 +582,21 @@ impl Ketos {
     /// At most 100 markets per page, in listing order.
     pub fn get_markets(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<MarketView> {
         let now_ms = env::block_timestamp_ms();
-        // NAV marks positions, so compute it once per vault rather than once per market.
-        let limits = [
-            self.vault_capital_limits(VaultId::Core),
-            self.vault_capital_limits(VaultId::LongTail),
-        ];
+        // Shared pools reuse one valuation; each market vault has exactly one assigned market.
+        let mut shared_limits = [None, None];
         self.markets
             .values()
             .skip(from_index.unwrap_or(0) as usize)
             .take(limit.unwrap_or(50).min(100) as usize)
-            .map(|m| self.market_view(m, now_ms, limits[m.vault_id.index()]))
+            .map(|market| {
+                let limits = if market.vault_id.is_market() {
+                    self.vault_capital_limits(market.vault_id)
+                } else {
+                    *shared_limits[market.vault_id.shared_index()]
+                        .get_or_insert_with(|| self.vault_capital_limits(market.vault_id))
+                };
+                self.market_view(market, now_ms, limits)
+            })
             .collect()
     }
 

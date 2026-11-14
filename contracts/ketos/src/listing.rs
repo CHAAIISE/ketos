@@ -46,8 +46,10 @@ impl Ketos {
         );
         match request.price_source {
             PriceSource::Tee => require!(
-                request.oracle_asset_id.parse::<AccountId>().is_ok()
-                    && request.intents_asset_id.strip_prefix("nep141:") == Some(request.oracle_asset_id.as_str()),
+                crate::market::TEE_MARKETS.iter().any(|(symbol, oracle, route, _)| {
+                    request.symbol == *symbol && request.oracle_asset_id == *oracle
+                        && request.intents_asset_id.strip_prefix("nep141:") == Some(*route)
+                }),
                 "ERR_ASSET_MISMATCH"
             ),
             PriceSource::OutlayerWorker => require!(
@@ -58,12 +60,15 @@ impl Ketos {
             ),
             PriceSource::Signed => env::panic_str("ERR_UNSUPPORTED_PRICE_SOURCE"),
         }
+        // Vaults are retained after delisting, so a symbol can never revive old LP claims.
+        let vault_id = VaultId::Market(self.vaults.len().checked_sub(2).unwrap());
+        let market_vault = crate::vault::Vault::new(vault_id, Some(request.symbol.clone()));
         let config = MarketConfig {
             symbol: request.symbol,
             oracle_asset_id: request.oracle_asset_id,
             intents_asset_id: request.intents_asset_id,
             price_source: request.price_source,
-            vault_id: VaultId::LongTail,
+            vault_id,
             hard_cap: U128(DEFAULT_HARD_CAP),
             fee_bps: 10,
             max_leverage_cap: 5,
@@ -75,7 +80,8 @@ impl Ketos {
             "timestamp_ms": env::block_timestamp_ms(),
         });
         self.register_market(config);
-        let vault = &mut self.vaults[VaultId::LongTail.index()];
+        self.vaults.insert(vault_id, market_vault);
+        let vault = self.vaults.get_mut(&VaultId::LongTail).unwrap();
         vault.balance += amount;
         vault.revenue.listing.0 += amount;
         vault.fee_log.record(env::block_timestamp_ms(), amount);

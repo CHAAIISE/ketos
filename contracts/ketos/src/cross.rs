@@ -7,6 +7,7 @@ use crate::liquidation::{split_equity, LiquidationRecord};
 use crate::market::MAX_PRICE_AGE_MS;
 use crate::math::{mul_div_floor, to_i128};
 use crate::position::{PositionId, PositionView};
+use crate::vault::SHARED_VAULT_IDS;
 use crate::{emit_event, Ketos, KetosExt};
 
 pub const MAX_CROSS_POSITIONS: u32 = 16;
@@ -68,7 +69,7 @@ impl Ketos {
     }
 
     /// Receivables preserve the original vault's claim without treating borrowed cash as liquidity.
-    fn credit_cross_cash(&mut self, account_id: &AccountId, amount: i128, vault_index: usize) {
+    pub(crate) fn credit_cross_cash(&mut self, account_id: &AccountId, amount: i128, vault_index: usize) {
         let account = self.accounts.get_mut(account_id).unwrap();
         let old_debt = account.cross_cash.min(0).unsigned_abs();
         account.cross_cash += amount;
@@ -76,14 +77,14 @@ impl Ketos {
         if new_debt > old_debt {
             let added = new_debt - old_debt;
             account.cross_debt[vault_index] += added;
-            self.vaults[vault_index].cross_receivable += added;
+            self.vaults.get_mut(&SHARED_VAULT_IDS[vault_index]).unwrap().cross_receivable += added;
         } else {
             let mut repaid = old_debt - new_debt;
             for index in [vault_index, 1 - vault_index] {
                 let debt = &mut account.cross_debt[index];
                 let paid = repaid.min(*debt);
                 *debt -= paid;
-                self.vaults[index].cross_receivable -= paid;
+                self.vaults.get_mut(&SHARED_VAULT_IDS[index]).unwrap().cross_receivable -= paid;
                 repaid -= paid;
             }
             debug_assert_eq!(repaid, 0);
@@ -98,7 +99,7 @@ impl Ketos {
         }
         let forgiven = account.cross_cash.min(0).unsigned_abs();
         for (index, debt) in account.cross_debt.iter_mut().enumerate() {
-            let vault = &mut self.vaults[index];
+            let vault = self.vaults.get_mut(&SHARED_VAULT_IDS[index]).unwrap();
             vault.balance -= *debt;
             vault.cross_receivable -= *debt;
             vault.revenue.trader_pnl.0 -= to_i128(*debt);
@@ -128,11 +129,10 @@ impl Ketos {
             .get(&position.market_id)
             .unwrap()
             .vault_id
-            .index();
+            .shared_index();
         let own_claim = self.accounts.get(&position.account_id).unwrap().cross_debt[index];
-        let cash_available = self.vaults[index].balance - self.vaults[index].cross_receivable
-            + position.margin
-            + own_claim;
+        let vault = self.vaults.get(&SHARED_VAULT_IDS[index]).unwrap();
+        let cash_available = vault.balance - vault.cross_receivable + position.margin + own_claim;
         let payout = (marked.equity - to_i128(marked.close_fee)).min(to_i128(cash_available));
         let fees = marked.borrow_fee + marked.close_fee;
         self.record_signed_settlement(
@@ -159,7 +159,7 @@ impl Ketos {
         U128(payout.max(0) as u128)
     }
 
-    fn record_signed_settlement(
+    pub(crate) fn record_signed_settlement(
         &mut self,
         index: usize,
         collateral: u128,
@@ -168,7 +168,7 @@ impl Ketos {
         funding: i128,
         penalty: u128,
     ) {
-        let vault = &mut self.vaults[index];
+        let vault = self.vaults.get_mut(&SHARED_VAULT_IDS[index]).unwrap();
         let delta = to_i128(collateral) - payout;
         vault.balance = u128::try_from(to_i128(vault.balance) + delta).unwrap();
         vault.revenue.fees.0 += fees;
@@ -195,9 +195,9 @@ impl Ketos {
             .get(&position.market_id)
             .unwrap()
             .vault_id
-            .index();
-        let available =
-            self.vaults[index].balance - self.vaults[index].cross_receivable + position.margin;
+            .shared_index();
+        let vault = self.vaults.get(&SHARED_VAULT_IDS[index]).unwrap();
+        let available = vault.balance - vault.cross_receivable + position.margin;
         let (reward, penalty, _) = split_equity(equity.min(to_i128(available)), position.size);
         let own_claim = self.accounts.get(&position.account_id).unwrap().cross_debt[index];
         let payout = (marked.equity - to_i128(reward + penalty))
@@ -341,6 +341,7 @@ impl Ketos {
             "ERR_ALREADY_CROSS"
         );
         let market = self.markets.get(&position.market_id).unwrap();
+        require!(!market.vault_id.is_market(), "ERR_ISOLATED_MARKET_CROSS");
         let now_ms = env::block_timestamp_ms();
         let marked = position.mark(market, market.fresh_price(now_ms), now_ms);
         self.cross_admission(&position.account_id, marked.equity, marked.maintenance, 1)

@@ -21,6 +21,7 @@ pub enum HistoryKind {
     Funding,
     Deposit,
     Withdrawal,
+    Reduce,
 }
 
 #[near(serializers = [json, borsh])]

@@ -55,6 +55,16 @@ impl Ketos {
     pub fn get_price_signer(&self) -> Option<PublicKey> {
         self.price_signer.clone()
     }
+
+    /// A verified observation only: no adapter request, trade, or contract-funded work.
+    pub fn submit_signed_prices(&mut self, market_ids: Vec<MarketId>, signed_prices: SignedPrices) -> u32 {
+        require!(!market_ids.is_empty() && market_ids.len() <= MAX_SIGNED_MARKETS, "ERR_INVALID_MARKETS");
+        let mut market_ids = market_ids;
+        market_ids.sort_unstable();
+        require!(market_ids.windows(2).all(|ids| ids[0] != ids[1]), "ERR_INVALID_MARKETS");
+        require!(self.apply_signed_prices(Some(&signed_prices), &market_ids), "ERR_INVALID_SIGNED_PRICES");
+        market_ids.len() as u32
+    }
 }
 
 impl Ketos {
@@ -129,6 +139,7 @@ impl Ketos {
                     "coinbase" => 1,
                     "kraken" => 2,
                     "binance" => 4,
+                    "bitstamp" => 8,
                     _ => return None,
                 };
                 if seen & bit != 0 { return None; }

@@ -60,10 +60,11 @@ fn retained_state(ketos: &Ketos) -> Value {
         "orders": ketos.orders.values().collect::<Vec<_>>(),
         "next_position_id": ketos.next_position_id,
         "next_order_id": ketos.next_order_id,
-        "vaults": near_sdk::borsh::to_vec(&ketos.vaults).unwrap(),
+        "vaults": ketos.vaults.iter().map(|(id, vault)|
+            (id, near_sdk::borsh::to_vec(vault).unwrap())).collect::<Vec<_>>(),
         "shares": [
-            near_sdk::borsh::to_vec(&ketos.vault_shares[0].get(&id("lp.test"))).unwrap(),
-            near_sdk::borsh::to_vec(&ketos.vault_shares[1].get(&id("lp.test"))).unwrap(),
+            near_sdk::borsh::to_vec(&ketos.vaults.get(&VaultId::Core).unwrap().shares.get(&id("lp.test"))).unwrap(),
+            near_sdk::borsh::to_vec(&ketos.vaults.get(&VaultId::LongTail).unwrap().shares.get(&id("lp.test"))).unwrap(),
         ],
         "vault_history": [ketos.get_vault_history(VaultId::Core), ketos.get_vault_history(VaultId::LongTail)],
         "history": ketos.get_history(id("alice.test"), None, None),
@@ -210,12 +211,10 @@ fn paid_listing_cannot_restore_retired_symbols_or_alias_their_assets() {
 }
 
 #[test]
-fn pre_upgrade_pending_token_actions_refund_without_resurrecting_retired_markets() {
+fn pending_token_actions_refund_without_resurrecting_retired_markets() {
     let mut ketos = populated();
-    // Receipts are external to contract state. Simulate callbacks scheduled by the
-    // previous code, both when the retired market was stale and when only ZEC was.
+    // A retired market may appear in the action or only in its price dependencies.
     ketos.retire_unsupported_markets();
-    let before = registry_state(&ketos);
     let requested_at = T0_MS - 1;
     for symbol in UNSUPPORTED_MARKETS {
         for requests in [vec![(symbol.into(), 0)], vec![("ZEC".into(), 0)]] {
@@ -223,16 +222,21 @@ fn pre_upgrade_pending_token_actions_refund_without_resurrecting_retired_markets
                 account_id: id("alice.test"), amount: U128(25 * USD),
                 request: WalletOpenRequest { market_id: symbol.into(), side: Side::Long,
                     margin: None, leverage: 2, margin_mode: MarginMode::Isolated,
-                    brackets: None, signed_prices: None },
+                    brackets: None, signed_prices: None,
+                    execution: execution_for_test(Side::Long, false, P4), bracket_bounds: None },
             };
-            let result = ketos.on_action_prices(action, requests, requested_at, Ok(json!(true)));
+            let action_id = ketos.reserve_price_action();
+            let before = registry_state(&ketos);
+            let result = ketos.on_action_prices(action_id, action, requests, requested_at, Ok(json!(true)));
             let PromiseOrValue::Value(refund) = result else { panic!("expected settled token action"); };
             assert_eq!(refund, json!((25 * USD).to_string()));
             assert_eq!(registry_state(&ketos), before);
         }
         let action = PullAction::DepositVault { account_id: id("alice.test"),
             vault_id: VaultId::LongTail, amount: U128(25 * USD) };
-        let result = ketos.on_action_prices(action, vec![(symbol.into(), 0)], requested_at, Ok(json!(true)));
+        let action_id = ketos.reserve_price_action();
+        let before = registry_state(&ketos);
+        let result = ketos.on_action_prices(action_id, action, vec![(symbol.into(), 0)], requested_at, Ok(json!(true)));
         let PromiseOrValue::Value(refund) = result else { panic!("expected settled token action"); };
         assert_eq!(refund, json!((25 * USD).to_string()));
         assert_eq!(registry_state(&ketos), before);

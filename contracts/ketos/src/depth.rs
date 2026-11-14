@@ -360,6 +360,7 @@ mod tests {
             "oracle.test".parse().unwrap(),
             "keeper.test".parse().unwrap(),
             "outlayer.test".parse().unwrap(),
+            None,
         );
         let market_id = "NEAR".to_string();
         assert_eq!(contract.impact_fee(&market_id, 100 * USD), USD);

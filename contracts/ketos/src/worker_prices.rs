@@ -7,7 +7,7 @@ use crate::{Ketos, KetosExt};
 
 pub const WORKER_PROJECT: &str = "ketos.testnet/ketos-prices";
 pub const WORKER_WASM_HASH: &str =
-    "5d9c5db362f2900c04cd7af58b68330153688e76a120195d96b22d0ef3790d92";
+    "cb7881555d790224f06738cd0c95aeb8798b1acd99548affcd4ea737e71aa07f";
 pub const WORKER_ASSETS: [&str; 19] = [
     "BTC", "ETH", "NEAR", "ZEC", "SOL", "DOGE", "XRP", "LTC", "ADA", "SUI",
     "TRX", "BNB", "AVAX", "LINK", "UNI", "AAVE", "BCH", "APT", "ARB",
@@ -86,7 +86,7 @@ impl Ketos {
             return 0;
         }
         if requested_at_ms.is_some_and(|requested| {
-            timestamp_ms < requested || now_ms - timestamp_ms > crate::market::MAX_OPEN_PRICE_AGE_MS
+            requested > now_ms || now_ms - timestamp_ms > crate::market::MAX_OPEN_PRICE_AGE_MS
         }) {
             return 0;
         }
@@ -144,6 +144,7 @@ fn validated_price(entry: &Value) -> Option<u128> {
             "coinbase" => 1,
             "kraken" => 2,
             "binance" => 4,
+            "bitstamp" => 8,
             _ => return None,
         };
         if seen & bit != 0 {

@@ -1,15 +1,16 @@
-//! Isolated Core and Long-tail LP vaults. Each market settles only against its assigned
-//! vault; shares and withdrawal reserves never cross that boundary.
+//! Vault-local capital, claims and history. Existing shared pools retain their identities;
+//! each new market owns an independent isolated-margin vault.
 
 use near_sdk::json_types::{I128, U128};
 use near_sdk::serde_json::json;
+use near_sdk::store::{LookupMap, Vector};
 use near_sdk::{
     env, log, near, require, AccountId, Gas, NearToken, Promise, PromiseError,
 };
 
-use crate::market::{VaultId, USD};
+use crate::market::{MarketId, VaultId, USD};
 use crate::math::{mul_div_ceil, mul_div_floor, to_i128, BPS};
-use crate::{emit_event, Ketos, KetosExt};
+use crate::{emit_event, Ketos, KetosExt, StorageKey};
 
 pub const MIN_VAULT_DEPOSIT: u128 = USD;
 pub const SNAPSHOT_INTERVAL_MS: u64 = 3_600_000;
@@ -19,20 +20,25 @@ const APR_WINDOW_DAYS: u64 = 7;
 const GAS_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
 
-pub const VAULT_IDS: [VaultId; 2] = [VaultId::Core, VaultId::LongTail];
+pub const SHARED_VAULT_IDS: [VaultId; 2] = [VaultId::Core, VaultId::LongTail];
 
 impl VaultId {
-    pub(crate) fn index(self) -> usize {
+    pub(crate) fn shared_index(self) -> usize {
         match self {
             Self::Core => 0,
             Self::LongTail => 1,
+            Self::Market(_) => env::panic_str("ERR_ISOLATED_MARKET_CROSS"),
         }
+    }
+
+    pub(crate) fn is_market(self) -> bool {
+        matches!(self, Self::Market(_))
     }
 
     pub(crate) fn oi_multiplier(self) -> u128 {
         match self {
             Self::Core => 2,
-            Self::LongTail => 1,
+            Self::LongTail | Self::Market(_) => 1,
         }
     }
 }
@@ -50,7 +56,6 @@ pub struct Revenue {
 }
 
 #[near(serializers = [borsh])]
-#[derive(Default)]
 pub(crate) struct Vault {
     pub balance: u128,
     /// Cross settlement claims are included in balance but cannot fund withdrawals or gains.
@@ -59,6 +64,32 @@ pub(crate) struct Vault {
     pub share_epoch: u64,
     pub revenue: Revenue,
     pub fee_log: FeeLog,
+    pub market_id: Option<MarketId>,
+    pub created_at_ms: Option<u64>,
+    /// Epoch tagging prevents wiped-out claims from reviving after recapitalization.
+    pub shares: LookupMap<AccountId, (u64, u128)>,
+    pub history: Vector<VaultSnapshot>,
+    pub snapshot_count: u64,
+    pub last_snapshot_at_ms: Option<u64>,
+}
+
+impl Vault {
+    pub(crate) fn new(vault_id: VaultId, market_id: Option<MarketId>) -> Self {
+        Self {
+            balance: 0,
+            cross_receivable: 0,
+            total_shares: 0,
+            share_epoch: 0,
+            revenue: Revenue::default(),
+            fee_log: FeeLog::default(),
+            created_at_ms: market_id.as_ref().map(|_| env::block_timestamp_ms()),
+            market_id,
+            shares: LookupMap::new(StorageKey::VaultShares { vault_id }),
+            history: Vector::new(StorageKey::VaultHistory { vault_id }),
+            snapshot_count: 0,
+            last_snapshot_at_ms: None,
+        }
+    }
 }
 
 /// Fee income (trading, borrow, liquidation penalties, listing) per UTC day, oldest first.
@@ -95,10 +126,16 @@ impl FeeLog {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VaultView {
     pub id: VaultId,
+    /// None identifies an existing shared pool; market vaults retain their original symbol.
+    pub market_id: Option<MarketId>,
+    pub created_at_ms: Option<u64>,
+    pub last_snapshot_at_ms: Option<u64>,
     /// Accounting assets, including cross receivables; cash is balance minus cross_receivable.
     pub balance: U128,
-    /// Cash-backed NAV with per-position collectible losses, borrow and funding capped to margin.
+    /// NAV includes confirmed external assets, conservatively marked; these are not local cash.
     pub nav: U128,
+    pub hedge_assets: U128,
+    pub hedge_valuation_ready: bool,
     pub total_shares: U128,
     pub share_price: U128,
     pub reserved: U128,
@@ -135,7 +172,7 @@ pub struct VaultSnapshot {
 
 impl Ketos {
     pub(crate) fn record_opening_fee(&mut self, vault_id: VaultId, now_ms: u64, amount: u128) {
-        let vault = &mut self.vaults[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).unwrap();
         vault.balance += amount;
         vault.revenue.fees.0 += amount;
         vault.fee_log.record(now_ms, amount);
@@ -152,7 +189,7 @@ impl Ketos {
         funding: i128,
         penalty: u128,
     ) {
-        let vault = &mut self.vaults[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).unwrap();
         vault.balance = vault.balance + collateral - paid_out;
         let delta = to_i128(collateral) - to_i128(paid_out);
         vault.revenue.fees.0 += fees;
@@ -173,30 +210,35 @@ impl Ketos {
     }
 
     pub(crate) fn require_fresh_vault_prices(&self, vault_id: VaultId) {
+        require!(self.vaults.contains_key(&vault_id), "ERR_UNKNOWN_VAULT");
+        require!(self.hedge_valuation(vault_id).1, "ERR_HEDGE_VALUATION_UNCERTAIN");
         let now_ms = env::block_timestamp_ms();
         for market in self.markets.values().filter(|market| market.vault_id == vault_id) {
+            if matches!(vault_id, VaultId::Market(_)) && market.oi_long.0 == 0 && market.oi_short.0 == 0 {
+                continue;
+            }
             market.fresh_price(now_ms);
         }
     }
 
     pub(crate) fn vault_shares_held(&self, vault_id: VaultId, account_id: &AccountId) -> u128 {
-        self.vault_shares[vault_id.index()]
-            .get(account_id)
-            .filter(|(epoch, _)| *epoch == self.vaults[vault_id.index()].share_epoch)
+        let vault = self.vaults.get(&vault_id).expect("ERR_UNKNOWN_VAULT");
+        vault.shares.get(account_id)
+            .filter(|(epoch, _)| *epoch == vault.share_epoch)
             .map_or(0, |(_, shares)| *shares)
     }
 
     fn set_vault_shares(&mut self, vault_id: VaultId, account_id: &AccountId, shares: u128) {
-        let held = &mut self.vault_shares[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).expect("ERR_UNKNOWN_VAULT");
         if shares == 0 {
-            held.remove(account_id);
+            vault.shares.remove(account_id);
         } else {
-            held.insert(account_id.clone(), (self.vaults[vault_id.index()].share_epoch, shares));
+            vault.shares.insert(account_id.clone(), (vault.share_epoch, shares));
         }
     }
 
     fn reset_vault_shares(&mut self, vault_id: VaultId, nav: u128) {
-        let vault = &mut self.vaults[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).unwrap();
         vault.share_epoch = vault.share_epoch.checked_add(1).expect("ERR_SHARE_EPOCH_OVERFLOW");
         vault.total_shares = nav;
         if nav > 0 {
@@ -213,12 +255,16 @@ impl Ketos {
         amount: u128,
     ) {
         require!(amount >= MIN_VAULT_DEPOSIT, "ERR_MIN_VAULT_DEPOSIT: 1 USDC");
+        if let Some(market_id) = &self.vaults.get(&vault_id).expect("ERR_UNKNOWN_VAULT").market_id {
+            require!(self.markets.get(market_id).is_some_and(|market| market.vault_id == vault_id),
+                "ERR_MARKET_RETIRED");
+        }
         self.require_fresh_vault_prices(vault_id);
         let view = self.get_vault(vault_id);
         if view.nav.0 == 0 || view.total_shares.0 == 0 {
             self.reset_vault_shares(vault_id, view.nav.0);
         }
-        let total_shares = self.vaults[vault_id.index()].total_shares;
+        let total_shares = self.vaults.get(&vault_id).unwrap().total_shares;
         let shares = if total_shares == 0 {
             amount
         } else {
@@ -227,7 +273,7 @@ impl Ketos {
         require!(shares > 0, "ERR_ZERO_SHARES");
         let held = self.vault_shares_held(vault_id, account_id);
         self.set_vault_shares(vault_id, account_id, held + shares);
-        let vault = &mut self.vaults[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).unwrap();
         vault.total_shares += shares;
         vault.balance += amount;
         emit_event(
@@ -277,7 +323,7 @@ impl Ketos {
             ));
         }
         self.set_vault_shares(vault_id, &account_id, held - shares);
-        let vault = &mut self.vaults[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).unwrap();
         vault.total_shares -= shares;
         vault.balance -= amount;
         let share_epoch = vault.share_epoch;
@@ -317,8 +363,8 @@ impl Ketos {
         if result.is_ok() {
             return amount;
         }
-        if self.vaults[vault_id.index()].share_epoch == share_epoch
-            && self.vaults[vault_id.index()].total_shares == 0
+        if self.vaults.get(&vault_id).unwrap().share_epoch == share_epoch
+            && self.vaults.get(&vault_id).unwrap().total_shares == 0
         {
             let nav = self.get_vault(vault_id).nav.0;
             if nav > 0 {
@@ -327,7 +373,7 @@ impl Ketos {
                 self.reset_vault_shares(vault_id, nav);
             }
         }
-        if self.vaults[vault_id.index()].share_epoch != share_epoch {
+        if self.vaults.get(&vault_id).unwrap().share_epoch != share_epoch {
             // The transfer was already debited before the wipeout. Return its real cash
             // claim as free margin without reviving a claim on the recapitalized vault.
             self.accounts.entry(account_id.clone()).or_default().margin += amount.0;
@@ -341,7 +387,7 @@ impl Ketos {
         }
         let held = self.vault_shares_held(vault_id, &account_id);
         self.set_vault_shares(vault_id, &account_id, held + shares.0);
-        let vault = &mut self.vaults[vault_id.index()];
+        let vault = self.vaults.get_mut(&vault_id).unwrap();
         vault.total_shares += shares.0;
         vault.balance += amount.0;
         log!(
@@ -355,7 +401,7 @@ impl Ketos {
 
     pub fn get_vault(&self, vault_id: VaultId) -> VaultView {
         let now_ms = env::block_timestamp_ms();
-        let vault = &self.vaults[vault_id.index()];
+        let vault = self.vaults.get(&vault_id).unwrap();
         let mut traders_pnl = 0i128;
         let mut borrow = 0u128;
         let mut funding = 0i128;
@@ -394,13 +440,16 @@ impl Ketos {
         // Settled cross debt is not cash and is not guaranteed collectible, even while
         // another cross position remains open. Never sell LP shares against that debt.
         let cash = vault.balance.saturating_sub(vault.cross_receivable);
+        let (hedge_assets, hedge_valuation_ready) = self.hedge_valuation(vault_id);
         let nav = u128::try_from(
-            (to_i128(cash) + to_i128(borrow) + funding - traders_pnl).max(0),
+            (to_i128(cash) + to_i128(hedge_assets) + to_i128(borrow) + funding - traders_pnl).max(0),
         )
         .unwrap();
         let reserved = reserve.min(vault.balance);
         let capital_floor = exposure.div_ceil(vault_id.oi_multiplier());
-        let available = (vault.balance - reserved).min(nav.saturating_sub(capital_floor));
+        let available = if hedge_valuation_ready {
+            (vault.balance - reserved).min(nav.saturating_sub(capital_floor))
+        } else { 0 };
         let fees_7d = vault.fee_log.trailing(now_ms);
         let share_price = if vault.total_shares == 0 {
             USD
@@ -415,8 +464,13 @@ impl Ketos {
         };
         VaultView {
             id: vault_id,
+            market_id: vault.market_id.clone(),
+            created_at_ms: vault.created_at_ms,
+            last_snapshot_at_ms: vault.last_snapshot_at_ms,
             balance: U128(vault.balance),
             nav: U128(nav),
+            hedge_assets: U128(hedge_assets),
+            hedge_valuation_ready,
             total_shares: U128(vault.total_shares),
             share_price: U128(share_price),
             reserved: U128(reserved),
@@ -432,8 +486,13 @@ impl Ketos {
         }
     }
 
-    pub fn get_vaults(&self) -> Vec<VaultView> {
-        VAULT_IDS.into_iter().map(|id| self.get_vault(id)).collect()
+    /// Stable listing order, including retired market vaults whose LP claims still exist.
+    pub fn get_vaults(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<VaultView> {
+        self.vaults.keys()
+            .skip(from_index.unwrap_or(0) as usize)
+            .take(limit.unwrap_or(50).min(100) as usize)
+            .map(|id| self.get_vault(*id))
+            .collect()
     }
 
     pub fn get_vault_account(&self, vault_id: VaultId, account_id: AccountId) -> VaultAccountView {
@@ -452,16 +511,19 @@ impl Ketos {
         }
     }
 
-    /// Permissionless, at least one elapsed hour between writes; missed hours are not backfilled.
-    pub fn snapshot_vaults(&mut self) -> Vec<VaultSnapshot> {
+    /// Independent hourly clocks; callers select at most eight due vaults per transaction.
+    pub fn snapshot_vaults(&mut self, vault_ids: Vec<VaultId>) -> Vec<VaultSnapshot> {
+        require!(!vault_ids.is_empty() && vault_ids.len() <= 8, "ERR_SNAPSHOT_BATCH");
         let now_ms = env::block_timestamp_ms();
-        require!(
-            self.last_snapshot_at_ms
+        for (index, vault_id) in vault_ids.iter().enumerate() {
+            require!(!vault_ids[..index].contains(vault_id), "ERR_DUPLICATE_VAULT");
+            let vault = self.vaults.get(vault_id).expect("ERR_UNKNOWN_VAULT");
+            require!(vault.last_snapshot_at_ms
                 .is_none_or(|last| now_ms.saturating_sub(last) >= SNAPSHOT_INTERVAL_MS),
-            "ERR_SNAPSHOT_TOO_SOON"
-        );
-        let mut snapshots = Vec::with_capacity(2);
-        for vault_id in VAULT_IDS {
+                "ERR_SNAPSHOT_TOO_SOON");
+        }
+        let mut snapshots = Vec::with_capacity(vault_ids.len());
+        for vault_id in vault_ids {
             let view = self.get_vault(vault_id);
             let snapshot = VaultSnapshot {
                 timestamp_ms: now_ms,
@@ -470,29 +532,27 @@ impl Ketos {
                 tvl: view.balance,
                 revenue: view.revenue,
             };
-            let history = &mut self.vault_history[vault_id.index()];
-            let slot = (self.vault_snapshot_count % VAULT_HISTORY_LEN) as u32;
-            if slot < history.len() {
-                history.set(slot, snapshot.clone());
+            let vault = self.vaults.get_mut(&vault_id).unwrap();
+            let slot = (vault.snapshot_count % VAULT_HISTORY_LEN) as u32;
+            if slot < vault.history.len() {
+                vault.history.set(slot, snapshot.clone());
             } else {
-                history.push(snapshot.clone());
+                vault.history.push(snapshot.clone());
             }
-            emit_event(
-                "vault_snapshot",
-                json!({ "vault_id": vault_id, "snapshot": snapshot }),
-            );
+            vault.snapshot_count += 1;
+            vault.last_snapshot_at_ms = Some(now_ms);
+            emit_event("vault_snapshot", json!({ "vault_id": vault_id, "snapshot": snapshot }));
             snapshots.push(snapshot);
         }
-        self.vault_snapshot_count += 1;
-        self.last_snapshot_at_ms = Some(now_ms);
         snapshots
     }
 
     /// Oldest first, at most 168 hourly observations.
     pub fn get_vault_history(&self, vault_id: VaultId) -> Vec<VaultSnapshot> {
-        let history = &self.vault_history[vault_id.index()];
+        let vault = self.vaults.get(&vault_id).expect("ERR_UNKNOWN_VAULT");
+        let history = &vault.history;
         let kept = u64::from(history.len());
-        (self.vault_snapshot_count - kept..self.vault_snapshot_count)
+        (vault.snapshot_count - kept..vault.snapshot_count)
             .map(|index| {
                 history
                     .get((index % VAULT_HISTORY_LEN) as u32)

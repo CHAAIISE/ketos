@@ -88,7 +88,7 @@ fn manual_close_releases_bracket_rewards_without_touching_prior_free_margin() {
         let before = margin(&ketos, "alice.test");
         let expected = 97_500_000;
         ctx_at("alice.test", T0_MS);
-        match ketos.close_position(position.id, to_wallet, None) {
+        match ketos.close_position(position.id, to_wallet, None, close_execution_for_test(&ketos, position.id)) {
             PromiseOrValue::Promise(promise) => {
                 assert_eq!(to_wallet, None);
                 promise.detach();
@@ -121,7 +121,7 @@ fn zero_close_payout_does_not_create_a_token_transfer() {
     let position = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
-    let PromiseOrValue::Value(released) = ketos.close_position(position.id, None, None) else {
+    let PromiseOrValue::Value(released) = ketos.close_position(position.id, None, None, close_execution_for_test(&ketos, position.id)) else {
         panic!("zero settlement must not transfer");
     };
     assert_eq!(released, U128(0));
@@ -178,7 +178,7 @@ fn rejected_wallet_entries_return_all_reservations_not_preexisting_margin() {
 #[test]
 fn entry_reserves_margin_cancellation_releases_it_without_fees_or_oi() {
     let mut ketos = trading_setup();
-    let vault = ketos.vaults[VaultId::Core.index()].balance;
+    let vault = ketos.vaults.get(&VaultId::Core).unwrap().balance;
     let order = place(
         &mut ketos,
         OrderRequest::Limit(entry(Side::Long, 380_000_000, 100 * USD, 5)),
@@ -190,7 +190,7 @@ fn entry_reserves_margin_cancellation_releases_it_without_fees_or_oi() {
     );
     assert_eq!(ketos.get_orders(id("alice.test")), vec![order.clone()]);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
-    assert_eq!(ketos.vaults[0].balance, vault);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, vault);
     let _ = ketos.cancel_order(order.id, Some(false));
     let account = ketos.get_account(id("alice.test")).unwrap();
     assert_eq!(
@@ -198,7 +198,7 @@ fn entry_reserves_margin_cancellation_releases_it_without_fees_or_oi() {
         (200 * USD, 0)
     );
     assert!(ketos.get_orders(id("alice.test")).is_empty());
-    assert_eq!(ketos.vaults[0].balance, vault);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, vault);
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn limit_and_stop_entries_use_inclusive_opposite_triggers_for_both_sides() {
         0
     );
     assert!(ketos.get_positions(id("executor.test")).is_empty());
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD + 240_000);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, 10_000 * USD + 240_000);
 }
 
 #[test]
@@ -386,7 +386,7 @@ fn stale_or_missing_price_never_fills_or_releases_reserved_margin() {
 #[test]
 fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
     let mut ketos = trading_setup();
-    ketos.vaults[VaultId::Core.index()].balance = 60_000 * USD;
+    ketos.vaults.get_mut(&VaultId::Core).unwrap().balance = 60_000 * USD;
     deposit(&mut ketos, "alice.test", 30_000 * USD);
     let first = place(
         &mut ketos,
@@ -419,7 +419,7 @@ fn cap_is_checked_sequentially_at_fill_and_rejection_refunds_only_that_entry() {
             .0,
         0
     );
-    assert_eq!(ketos.vaults[0].balance, 60_000 * USD + 218_700_000);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, 60_000 * USD + 218_700_000);
     assert_eq!(ketos.get_positions(id("alice.test")).len(), 2);
     assert!(ketos.get_orders(id("alice.test")).is_empty());
 }
@@ -460,7 +460,7 @@ fn tightened_leverage_and_stale_depth_reject_and_refund_triggered_entries() {
         }]
     );
     assert_eq!(margin(&ketos, "alice.test"), 201 * USD);
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, 10_000 * USD);
 }
 
 #[test]
@@ -497,7 +497,7 @@ fn long_stop_loss_closes_once_and_cancels_sibling_take_profit() {
     assert_eq!(margin(&ketos, "alice.test"), 171_750_000);
     assert_eq!(ketos.get_market("NEAR".into()).unwrap().market.oi_long.0, 0);
     assert_eq!(
-        ketos.vaults[0].balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"),
+        ketos.vaults.get(&VaultId::Core).unwrap().balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"),
         10_200 * USD
     );
 }
@@ -549,7 +549,7 @@ fn liquidation_cleans_brackets_without_refunding_position_collateral_twice() {
         100 * USD + liquidation.returned.0
     );
     assert_eq!(
-        ketos.vaults[0].balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"),
+        ketos.vaults.get(&VaultId::Core).unwrap().balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"),
         10_200 * USD
     );
     assert_eq!(
@@ -624,7 +624,7 @@ fn gap_past_attached_stop_rejects_entry_atomically_without_charging_fees() {
         }]
     );
     assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
-    assert_eq!(ketos.vaults[0].balance, 10_000 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, 10_000 * USD);
     assert!(ketos.get_positions(id("alice.test")).is_empty());
     assert!(ketos.get_orders(id("alice.test")).is_empty());
 }

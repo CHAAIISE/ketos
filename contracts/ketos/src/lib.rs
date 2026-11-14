@@ -10,6 +10,7 @@ pub mod cross;
 pub mod depth;
 pub mod funding;
 pub mod history;
+pub mod hedge;
 pub mod liquidation;
 pub mod listing;
 pub mod market;
@@ -20,6 +21,7 @@ mod migration;
 pub mod position;
 pub mod pull_prices;
 mod priced_actions;
+pub mod reduction;
 pub mod signed_prices;
 pub mod vault;
 pub mod worker_prices;
@@ -28,7 +30,7 @@ mod wallet_trading;
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::{json, Value};
-use near_sdk::store::{IterableMap, LookupMap, TreeMap, Vector};
+use near_sdk::store::{IterableMap, LookupMap, LookupSet, TreeMap, Vector};
 use near_sdk::{
     env, log, near, require, AccountId, BorshStorageKey, PanicOnDefault, PromiseOrValue,
 };
@@ -40,7 +42,7 @@ use liquidation::LiquidationRecord;
 use market::{default_markets, Market, MarketId, VaultId};
 use orders::{Order, OrderId};
 use position::{Position, PositionId};
-use vault::{Vault, VaultSnapshot};
+use vault::{Vault, SHARED_VAULT_IDS};
 
 pub const MSG_DEPOSIT_MARGIN: &str = "deposit_margin";
 pub const MSG_DEPOSIT_VAULT: &str = "deposit_vault:";
@@ -66,6 +68,10 @@ enum StorageKey {
     V3Markets,
     V3Orders,
     V3VaultShares { vault_id: VaultId },
+    V4Orders,
+    PendingPriceActions,
+    VaultRegistry,
+    HedgeFills,
 }
 
 #[near(serializers = [json])]
@@ -96,12 +102,7 @@ pub struct Ketos {
     /// Ring of the last `LIQUIDATION_HISTORY_LEN` liquidations.
     liquidations: Vector<LiquidationRecord>,
     liquidation_count: u64,
-    vaults: [Vault; 2],
-    /// Epoch-tagged balances prevent wiped-out LP shares from reviving after recapitalization.
-    vault_shares: [LookupMap<AccountId, (u64, u128)>; 2],
-    vault_history: [Vector<VaultSnapshot>; 2],
-    vault_snapshot_count: u64,
-    last_snapshot_at_ms: Option<u64>,
+    vaults: IterableMap<VaultId, Vault>,
     account_stats: LookupMap<AccountId, AccountStats>,
     account_history: LookupMap<(AccountId, u16), HistoryEvent>,
     active_traders: TreeMap<(u64, AccountId), ()>,
@@ -113,6 +114,10 @@ pub struct Ketos {
     price_deposits: LookupMap<AccountId, u128>,
     price_deposits_total: u128,
     price_signer: Option<near_sdk::PublicKey>,
+    pending_price_actions: LookupSet<u64>,
+    next_price_action_id: u64,
+    schema_version: u32,
+    hedge: Option<hedge::HedgeState>,
 }
 
 #[near]
@@ -123,6 +128,7 @@ impl Ketos {
         oracle_id: AccountId,
         keeper_id: AccountId,
         outlayer_id: AccountId,
+        hedge_config: Option<hedge::HedgeConfig>,
     ) -> Self {
         let mut contract = Self {
             usdc_id,
@@ -134,22 +140,12 @@ impl Ketos {
             accounts: LookupMap::new(StorageKey::Accounts),
             positions: IterableMap::new(StorageKey::Positions),
             next_position_id: 0,
-            orders: IterableMap::new(StorageKey::Orders),
+            orders: IterableMap::new(StorageKey::V4Orders),
             next_order_id: 0,
             depth: LookupMap::new(StorageKey::Depth),
             liquidations: Vector::new(StorageKey::Liquidations),
             liquidation_count: 0,
-            vaults: [Vault::default(), Vault::default()],
-            vault_shares: [
-                LookupMap::new(StorageKey::VaultShares { vault_id: VaultId::Core }),
-                LookupMap::new(StorageKey::VaultShares { vault_id: VaultId::LongTail }),
-            ],
-            vault_history: [
-                Vector::new(StorageKey::VaultHistory { vault_id: VaultId::Core }),
-                Vector::new(StorageKey::VaultHistory { vault_id: VaultId::LongTail }),
-            ],
-            vault_snapshot_count: 0,
-            last_snapshot_at_ms: None,
+            vaults: IterableMap::new(StorageKey::VaultRegistry),
             account_stats: LookupMap::new(StorageKey::AccountStats),
             account_history: LookupMap::new(StorageKey::AccountHistory),
             active_traders: TreeMap::new(StorageKey::ActiveTraders),
@@ -160,7 +156,14 @@ impl Ketos {
             price_deposits: LookupMap::new(StorageKey::PriceDeposits),
             price_deposits_total: 0,
             price_signer: None,
+            pending_price_actions: LookupSet::new(StorageKey::PendingPriceActions),
+            next_price_action_id: 0,
+            schema_version: 6,
+            hedge: hedge_config.map(hedge::HedgeState::new),
         };
+        for vault_id in SHARED_VAULT_IDS {
+            contract.vaults.insert(vault_id, Vault::new(vault_id, None));
+        }
         for config in default_markets() {
             contract.register_market(config);
         }
@@ -178,6 +181,10 @@ impl Ketos {
 
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    pub fn get_schema_version(&self) -> u32 {
+        self.schema_version
     }
 }
 
@@ -205,6 +212,11 @@ impl FungibleTokenReceiver for Ketos {
         require!(amount.0 > 0, "ERR_ZERO_AMOUNT");
         match msg.as_str() {
             MSG_DEPOSIT_MARGIN => self.deposit_margin(&sender_id, amount.0),
+            _ if msg.starts_with(ketos_hedge_common::RETURN_PREFIX) => {
+                let nonce = msg[ketos_hedge_common::RETURN_PREFIX.len()..]
+                    .parse::<u64>().unwrap_or_else(|_| env::panic_str("ERR_HEDGE_NONCE"));
+                return PromiseOrValue::Value(self.receive_hedge_return(&sender_id, amount, nonce));
+            }
             _ if msg.starts_with("open:") => {
                 let request = near_sdk::serde_json::from_str(&msg["open:".len()..])
                     .unwrap_or_else(|_| env::panic_str("ERR_INVALID_WALLET_ENTRY"));
@@ -216,15 +228,14 @@ impl FungibleTokenReceiver for Ketos {
                 return PromiseOrValue::Value(self.receive_wallet_order(sender_id, amount, request));
             }
             _ if msg.starts_with(MSG_DEPOSIT_VAULT) => {
-                let (vault_id, signed_prices) = match &msg[MSG_DEPOSIT_VAULT.len()..] {
-                    "core" => (VaultId::Core, None),
-                    "long-tail" => (VaultId::LongTail, None),
-                    encoded => {
-                        let request: signed_prices::VaultDepositRequest =
-                            near_sdk::serde_json::from_str(encoded)
-                                .unwrap_or_else(|_| env::panic_str("ERR_UNKNOWN_VAULT"));
-                        (request.vault_id, request.signed_prices)
-                    }
+                let encoded = &msg[MSG_DEPOSIT_VAULT.len()..];
+                let (vault_id, signed_prices) = if let Ok(vault_id) = encoded.parse::<VaultId>() {
+                    (vault_id, None)
+                } else {
+                    let request: signed_prices::VaultDepositRequest =
+                        near_sdk::serde_json::from_str(encoded)
+                            .unwrap_or_else(|_| env::panic_str("ERR_UNKNOWN_VAULT"));
+                    (request.vault_id, request.signed_prices)
                 };
                 require!(amount.0 >= vault::MIN_VAULT_DEPOSIT, "ERR_MIN_VAULT_DEPOSIT: 1 USDC");
                 if let Some(request) = self.pull_for_vault_deposit(sender_id.clone(), vault_id, amount, signed_prices) {

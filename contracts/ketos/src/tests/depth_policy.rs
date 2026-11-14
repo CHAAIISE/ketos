@@ -36,7 +36,7 @@ fn cold_start_doubles_per_report_and_leverage_never_banks_hourly_increases() {
 #[test]
 fn submitted_timestamps_cannot_accelerate_the_hour_after_the_first_raise() {
     ctx_at("owner.test", T0_MS);
-    let mut ketos = Ketos::new(id(USDC), id(ORACLE), id("keeper.test"), id("outlayer.test"));
+    let mut ketos = Ketos::new(id(USDC), id(ORACLE), id("keeper.test"), id("outlayer.test"), None);
     for i in 0..8 {
         ctx_at("keeper.test", T0_MS + i);
         ketos.set_depth("NEAR".into(), curve_up_to(1_000_000), T0_MS + i + 60_000);

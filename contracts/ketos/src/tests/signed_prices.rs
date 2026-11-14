@@ -34,7 +34,9 @@ fn valid_signed_price_opens_from_a_cold_cache_with_zero_oracle_deposit() {
     pin(&mut ketos);
     let now = T0_MS + 130_000;
     ctx_at("alice.test", now);
-    let result = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None, Some(sign(payload(now))));
+    let mut prices = payload(now);
+    prices["prices"]["NEAR"]["sources"] = json!(["coinbase", "bitstamp"]);
+    let result = ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None, Some(sign(prices)), execution_for_test(Side::Long, false, P4), None);
     let PromiseOrValue::Value(position) = result else { panic!("signed entry must be synchronous"); };
     assert_eq!(position.entry_price.0, P4 + 1);
     assert_eq!(position.size.0, 100 * USD);
@@ -93,7 +95,8 @@ fn invalid_envelope_uses_original_funded_pull_without_spending_margin() {
     testing_env!(VMContextBuilder::new().current_account_id(id(CONTRACT)).predecessor_account_id(id("alice.test"))
         .block_timestamp(now * 1_000_000).attached_deposit(NearToken::from_yoctonear(cost))
         .prepaid_gas(Gas::from_tgas(300)).build());
-    assert!(matches!(ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None, Some(signed)), PromiseOrValue::Promise(_)));
+    assert!(matches!(ketos.open_position("NEAR".into(), Side::Long, U128(50 * USD), 2, None, None, Some(signed),
+        execution_for_test(Side::Long, false, P4), None), PromiseOrValue::Promise(_)));
     assert_eq!(margin(&ketos, "alice.test"), 200 * USD);
     assert_eq!(stored_price(&ketos, "NEAR"), (P4, T0_MS));
     assert!(ketos.get_positions(id("alice.test")).is_empty());
@@ -119,4 +122,37 @@ fn fifteen_second_boundary_and_asset_identity_are_enforced() {
 #[should_panic(expected = "ERR_PRICE_SIGNER_ALREADY_SET")]
 fn signer_cannot_be_rotated_after_pinning() {
     let mut ketos = trading_setup(); pin(&mut ketos); pin(&mut ketos);
+}
+
+#[test]
+fn permissionless_signed_observation_advances_only_requested_markets_without_funding() {
+    let mut ketos = trading_setup();
+    pin(&mut ketos);
+    let later = T0_MS + 60_000;
+    ctx_at("observer.test", later);
+    let before = stored_price(&ketos, "ETH");
+    assert_eq!(ketos.submit_signed_prices(vec!["NEAR".into()], sign(payload(later))), 1);
+    assert_eq!(stored_price(&ketos, "NEAR"), (P4 + 1, later));
+    assert_eq!(stored_price(&ketos, "ETH"), before);
+    assert!(get_created_receipts().is_empty(), "publication must not buy an adapter request");
+}
+
+#[test]
+#[should_panic(expected = "ERR_INVALID_SIGNED_PRICES")]
+fn standalone_signed_observation_rejects_replay() {
+    let mut ketos = trading_setup();
+    pin(&mut ketos);
+    let later = T0_MS + 60_000;
+    ctx_at("observer.test", later);
+    ketos.submit_signed_prices(vec!["NEAR".into()], sign(payload(later)));
+    ketos.submit_signed_prices(vec!["NEAR".into()], sign(payload(later)));
+}
+
+#[test]
+#[should_panic(expected = "ERR_INVALID_MARKETS")]
+fn standalone_observation_rejects_duplicate_market_coverage() {
+    let mut ketos = trading_setup();
+    pin(&mut ketos);
+    ctx_at("observer.test", T0_MS + 60_000);
+    ketos.submit_signed_prices(vec!["NEAR".into(), "NEAR".into()], sign(payload(T0_MS + 60_000)));
 }

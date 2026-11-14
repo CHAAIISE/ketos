@@ -11,7 +11,14 @@ mod wallet_flow;
 #[path = "migration_flow.rs"]
 mod migration_flow;
 
+#[path = "hedge_flow.rs"]
+mod hedge_flow;
+
 const USD: u128 = 1_000_000;
+
+async fn execution(worker: &Worker<Sandbox>, limit_price: u128, lifetime_ms: u64) -> Result<Value> {
+    Ok(json!({ "limit_price": limit_price.to_string(), "expires_at_ms": now_ms(worker).await? + lifetime_ms }))
+}
 const KEEPER_METHODS: [&str; 7] = [
     "refresh_prices",
     "set_depth",
@@ -297,7 +304,7 @@ async fn assert_economics(ketos: &Contract, account: &Account, collateral: i128)
         .filter(|event| {
             matches!(
                 event["kind"].as_str(),
-                Some("open" | "close" | "liquidation" | "order_fill")
+                Some("open" | "close" | "reduce" | "liquidation" | "order_fill")
             )
         })
         .map(|event| integer(&event["realized_pnl"]))
@@ -396,7 +403,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     ok(ketos
         .call("new")
         .args_json(
-            json!({ "usdc_id": usdc.id(), "oracle_id": oracle.id(), "outlayer_id": oracle.id(), "keeper_id": keeper.id() }),
+            json!({ "usdc_id": usdc.id(), "oracle_id": oracle.id(), "outlayer_id": oracle.id(), "keeper_id": keeper.id(), "hedge_config": null }),
         )
         .transact()
         .await?);
@@ -591,13 +598,15 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &trader,
         &ketos,
         "open_position",
-        json!({ "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 5 }),
+        json!({ "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 5,
+            "execution": execution(&worker, 400_000_000, 120_000).await? }),
     )
     .await?;
     assert_eq!(long["size"], (500 * USD).to_string());
     assert_eq!(long["entry_price"], "400000000");
     assert_eq!(integer(&long["margin"]), (100 * USD - 500 * USD * 35 / 10_000) as i128);
-    let refused_args = json!({ "market_id": "ZEC", "side": "short", "margin": (25_000 * USD).to_string(), "leverage": 5 });
+    let refused_args = json!({ "market_id": "ZEC", "side": "short", "margin": (25_000 * USD).to_string(), "leverage": 5,
+        "execution": execution(&worker, 120_660_966_700, 120_000).await? });
     let refused_deposit = price_request_deposit(&trader, &ketos, "open_position", &refused_args).await?;
     let refused = err(trader
         .call(ketos.id(), "open_position")
@@ -615,7 +624,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &trader,
         &ketos,
         "open_position",
-        json!({ "market_id": "NEAR", "side": "short", "margin": (50 * USD).to_string(), "leverage": 2 }),
+        json!({ "market_id": "NEAR", "side": "short", "margin": (50 * USD).to_string(), "leverage": 2,
+            "execution": execution(&worker, 400_000_000, 120_000).await? }),
     )
     .await?;
     assert_eq!(integer(&short["margin"]), (50 * USD - 100 * USD * 35 / 10_000) as i128);
@@ -646,7 +656,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     );
 
     // The winning short is closed, then all free margin goes back to the wallet.
-    let payout: u128 = call(&trader, &ketos, "close_position", json!({ "position_id": short["id"], "to_wallet": false }))
+    let payout: u128 = call(&trader, &ketos, "close_position", json!({ "position_id": short["id"], "to_wallet": false,
+        "execution": execution(&worker, 350_000_000, 120_000).await? }))
     .await?
     .as_str()
     .unwrap()
@@ -811,7 +822,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .await?);
     refresh(&worker, &bot, &ketos).await?;
     transfer_call(&lp, &usdc, &ketos, 10_000 * USD, "deposit_vault:long-tail").await?;
-    let tail_seed = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
+    let mut tail_seed = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
     assert_eq!(integer(&tail_seed["balance"]), (10_000 * USD) as i128);
     assert_eq!(integer(&tail_seed["nav"]), (10_000 * USD) as i128);
     assert_eq!(integer(&tail_seed["reserved"]), 0);
@@ -834,7 +845,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &ketos,
         "open_position",
         json!({
-            "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 4
+            "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 4,
+            "execution": execution(&worker, 400_000_000, 120_000).await?
         }),
     )
     .await?;
@@ -843,13 +855,16 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &ketos,
         "open_position",
         json!({
-            "market_id": "NEAR", "side": "short", "margin": (50 * USD).to_string(), "leverage": 2
+            "market_id": "NEAR", "side": "short", "margin": (50 * USD).to_string(), "leverage": 2,
+            "execution": execution(&worker, 400_000_000, 120_000).await?
         }),
     )
     .await?;
-    let initial_snapshots = call(&bot, &ketos, "snapshot_vaults", json!({})).await?;
+    let initial_snapshots = call(&bot, &ketos, "snapshot_vaults", json!({"vault_ids": ["core", "long-tail"]})).await?;
     assert_eq!(initial_snapshots.as_array().unwrap().len(), 2);
-    let too_soon = err(bot.call(ketos.id(), "snapshot_vaults").transact().await);
+    tail_seed["last_snapshot_at_ms"] = initial_snapshots[1]["timestamp_ms"].clone();
+    let too_soon = err(bot.call(ketos.id(), "snapshot_vaults")
+        .args_json(json!({"vault_ids": ["core", "long-tail"]})).transact().await);
     assert!(too_soon.contains("ERR_SNAPSHOT_TOO_SOON"), "{too_soon}");
     let initial_time = initial_snapshots[0]["timestamp_ms"].as_u64().unwrap();
     while now_ms(&worker).await? < initial_time + 3_600_000 {
@@ -909,7 +924,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             &v2,
             &ketos,
             "close_position",
-            json!({ "position_id": position["id"], "to_wallet": false }),
+            json!({ "position_id": position["id"], "to_wallet": false,
+                "execution": execution(&worker, 400_000_000, 120_000).await? }),
         )
         .await?;
     }
@@ -932,7 +948,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         2
     );
     assert_economics(&ketos, &v2, (900 * USD) as i128).await?;
-    let snapshots = call(&bot, &ketos, "snapshot_vaults", json!({})).await?;
+    let snapshots = call(&bot, &ketos, "snapshot_vaults", json!({"vault_ids": ["core", "long-tail"]})).await?;
     for (index, vault_id) in ["core", "long-tail"].into_iter().enumerate() {
         let history = view(&ketos, "get_vault_history", json!({ "vault_id": vault_id })).await?;
         assert_eq!(history.as_array().unwrap().len(), 2);
@@ -957,7 +973,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             "kind": "limit", "market_id": "NEAR", "side": "long",
             "margin": (40 * USD).to_string(), "leverage": 2, "trigger_price": "390000000",
             "brackets": { "take_profit": "420000000", "stop_loss": "370000000" }
-        }}),
+        }, "execution": execution(&worker, 390_000_000, 86_400_000).await?,
+            "bracket_bounds": {
+                "take_profit": execution(&worker, 420_000_000, 86_400_000).await?,
+                "stop_loss": execution(&worker, 370_000_000, 86_400_000).await?
+            } }),
     )
     .await?;
     let entry_reward = integer(&entry["execution_reward"]) as u128;
@@ -1045,7 +1065,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
             "kind": "stop_market", "market_id": "NEAR", "side": "long",
             "margin": (40 * USD).to_string(), "leverage": 2, "trigger_price": "430000000",
             "brackets": { "take_profit": "450000000", "stop_loss": "410000000" }
-        }}),
+        }, "execution": execution(&worker, 430_000_000, 86_400_000).await?,
+            "bracket_bounds": {
+                "take_profit": execution(&worker, 450_000_000, 86_400_000).await?,
+                "stop_loss": execution(&worker, 410_000_000, 86_400_000).await?
+            } }),
     )
     .await?;
     let skipped = call(
@@ -1092,15 +1116,16 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     let listing = format!(
         "list_market:{}",
         json!({
-            "symbol": "TAIL", "oracle_asset_id": "tail.token.near",
-            "intents_asset_id": "nep141:tail.token.near", "price_source": "tee"
+            "symbol": "UNI", "oracle_asset_id": "UNI",
+            "intents_asset_id": "nep141:eth-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984.omft.near",
+            "price_source": "outlayer_worker"
         })
     );
     let core_before_listing = view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?;
     let wallet_before_listing = ft_balance(&usdc, &v2).await?;
     transfer_call(&v2, &usdc, &ketos, 4 * USD, &listing).await?;
     assert_eq!(ft_balance(&usdc, &v2).await?, wallet_before_listing);
-    assert!(view(&ketos, "get_market", json!({ "market_id": "TAIL" }))
+    assert!(view(&ketos, "get_market", json!({ "market_id": "UNI" }))
         .await?
         .is_null());
     transfer_call(&v2, &usdc, &ketos, 25 * USD, &listing).await?;
@@ -1108,8 +1133,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         ft_balance(&usdc, &v2).await?,
         wallet_before_listing - 25 * USD
     );
-    let listed = view(&ketos, "get_market", json!({ "market_id": "TAIL" })).await?;
-    assert_eq!(listed["vault_id"], "long-tail");
+    let listed = view(&ketos, "get_market", json!({ "market_id": "UNI" })).await?;
+    assert_eq!(listed["vault_id"], "market-0");
+    assert_eq!(listed["launch_state"], "measuring");
+    assert_eq!(listed["isolated_only"], true);
+    assert_eq!(view(&ketos, "get_vault", json!({"vault_id":"market-0"})).await?["balance"], "0");
     assert_eq!(listed["is_open"], false);
     assert_eq!(listed["depth_measured_at_ms"], 0);
     let tail_listed = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
@@ -1136,13 +1164,14 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     refresh(&worker, &bot, &ketos).await?;
     let bulk_lease = view(&ketos, "get_last_price_request_ms", json!({})).await?;
     ok(root.call(oracle.id(), "set_price")
-        .args_json(json!({ "asset_id": "tail.token.near", "multiplier": "100000000", "decimals": 8 }))
+        .args_json(json!({ "asset_id": "UNI", "multiplier": "100000000", "decimals": 8 }))
         .transact().await?);
-    let initial_price = call(&v2, &ketos, "pull_market_price", json!({ "market_id": "TAIL" })).await?;
+    let initial_price = call(&v2, &ketos, "pull_market_price", json!({ "market_id": "UNI" })).await?;
     assert_eq!(initial_price, "100000000");
     assert_eq!(view(&ketos, "get_last_price_request_ms", json!({})).await?, bulk_lease);
     let gate_args = json!({
-        "market_id": "TAIL", "side": "long", "margin": (20 * USD).to_string(), "leverage": 2
+        "market_id": "UNI", "side": "long", "margin": (20 * USD).to_string(), "leverage": 2,
+        "execution": execution(&worker, 100_000_000, 120_000).await?
     });
     let gate_deposit = price_request_deposit(&v2, &ketos, "open_position", &gate_args).await?;
     let gate = err(v2
@@ -1159,9 +1188,9 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &ketos,
         "place_order",
         json!({ "request": {
-            "kind": "limit", "market_id": "TAIL", "side": "long",
+            "kind": "limit", "market_id": "UNI", "side": "long",
             "margin": (20 * USD).to_string(), "leverage": 2, "trigger_price": "100000000"
-        }}),
+        }, "execution": execution(&worker, 100_000_000, 86_400_000).await? }),
     )
     .await?;
     let rejected_reward = integer(&gated_order["execution_reward"]) as u128;
@@ -1185,40 +1214,51 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         .as_array()
         .unwrap()
         .is_empty());
-    depth(&worker, &bot, &ketos, "TAIL").await?;
+    transfer_call(&v2, &usdc, &ketos, 50 * USD, "deposit_vault:market-0").await?;
+    assert_eq!(view(&ketos, "get_market", json!({"market_id":"UNI"})).await?["launch_state"], "funded");
+    depth(&worker, &bot, &ketos, "UNI").await?;
     assert_eq!(
-        view(&ketos, "get_market", json!({ "market_id": "TAIL" })).await?["is_open"],
+        view(&ketos, "get_market", json!({ "market_id": "UNI" })).await?["is_open"],
         true
     );
     refresh(&worker, &bot, &ketos).await?;
+    assert_eq!(view(&ketos, "get_market", json!({"market_id":"UNI"})).await?["launch_state"], "ready");
     let tail_position = call(
         &v2,
         &ketos,
         "open_position",
         json!({
-            "market_id": "TAIL", "side": "long", "margin": (20 * USD).to_string(), "leverage": 2
+            "market_id": "UNI", "side": "long", "margin": (20 * USD).to_string(), "leverage": 2,
+            "execution": execution(&worker, 100_000_000, 120_000).await?
         }),
     )
     .await?;
-    let tail_active = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
+    let tail_active = view(&ketos, "get_vault", json!({ "vault_id": "market-0" })).await?;
     assert_eq!(integer(&tail_active["reserved"]), (44 * USD) as i128);
-    assert!(integer(&tail_active["balance"]) > integer(&tail_listed["balance"]));
+    assert!(integer(&tail_active["balance"]) > (50 * USD) as i128);
+    assert_eq!(view(&ketos, "get_vault", json!({"vault_id":"long-tail"})).await?, tail_listed);
     assert_eq!(
         view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?,
         core_before_listing
     );
-    price(&worker, &root, &oracle, &bot, &ketos, "tail.token.near", 110_000_000).await?;
+    price(&worker, &root, &oracle, &bot, &ketos, "UNI", 110_000_000).await?;
     let tail_payout = call(
         &v2,
         &ketos,
         "close_position",
-        json!({ "position_id": tail_position["id"], "to_wallet": false }),
+        json!({ "position_id": tail_position["id"], "to_wallet": false,
+            "execution": execution(&worker, 110_000_000, 120_000).await? }),
     )
     .await?;
     assert!(integer(&tail_payout) > (20 * USD) as i128);
-    let tail_closed = view(&ketos, "get_vault", json!({ "vault_id": "long-tail" })).await?;
+    let tail_closed = view(&ketos, "get_vault", json!({ "vault_id": "market-0" })).await?;
     assert_eq!(integer(&tail_closed["reserved"]), 0);
-    assert!(integer(&tail_closed["balance"]) < integer(&tail_listed["balance"]));
+    assert!(integer(&tail_closed["balance"]) < (50 * USD) as i128);
+    assert_eq!(view(&ketos, "get_vault", json!({"vault_id":"long-tail"})).await?, tail_listed);
+    let lp_wallet_before = ft_balance(&usdc, &v2).await?;
+    call(&v2, &ketos, "withdraw_vault", json!({"vault_id":"market-0","shares":(50 * USD).to_string()})).await?;
+    assert_eq!(ft_balance(&usdc, &v2).await?, lp_wallet_before + integer(&tail_closed["balance"]) as u128);
+    assert_eq!(view(&ketos, "get_vault_account", json!({"vault_id":"market-0","account_id":v2.id()})).await?["shares"], "0");
     assert_eq!(
         view(&ketos, "get_vault", json!({ "vault_id": "core" })).await?,
         core_before_listing
@@ -1236,7 +1276,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &ketos,
         "open_position",
         json!({
-            "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 5
+            "market_id": "NEAR", "side": "long", "margin": (100 * USD).to_string(), "leverage": 5,
+            "execution": execution(&worker, 400_000_000, 120_000).await?
         }),
     )
     .await?;
@@ -1268,7 +1309,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         "open_position",
         json!({
             "market_id": "NEAR", "side": "long", "margin": (20 * USD).to_string(),
-            "leverage": 2, "margin_mode": "cross"
+            "leverage": 2, "margin_mode": "cross",
+            "execution": execution(&worker, 400_000_000, 120_000).await?
         }),
     )
     .await?;
@@ -1380,7 +1422,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &cross,
         &ketos,
         "close_position",
-        json!({ "position_id": survivor["id"], "to_wallet": false }),
+        json!({ "position_id": survivor["id"], "to_wallet": false,
+            "execution": execution(&worker, 330_000_000, 120_000).await? }),
     )
     .await?;
     let recovered = view(
@@ -1464,7 +1507,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &pull_trader,
         &ketos,
         "open_position",
-        json!({ "market_id": "NEAR", "side": "long", "margin": (50 * USD).to_string(), "leverage": 2 }),
+        json!({ "market_id": "NEAR", "side": "long", "margin": (50 * USD).to_string(), "leverage": 2,
+            "execution": execution(&worker, 410_000_000, 120_000).await? }),
     )
     .await?;
     assert_eq!(pulled_position["entry_price"], "410000000");
@@ -1494,10 +1538,11 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &pull_trader,
         &ketos,
         "open_position",
-        json!({ "market_id": "NEAR", "side": "long", "margin": (25 * USD).to_string(), "leverage": 2 }),
+        json!({ "market_id": "NEAR", "side": "long", "margin": (25 * USD).to_string(), "leverage": 2,
+            "execution": execution(&worker, 410_000_000, 120_000).await? }),
     )
     .await?;
-    assert!(canceled.is_null(), "{canceled}");
+    assert_eq!(canceled["error"], "ERR_ACTION_PRICE_UNAVAILABLE");
     assert_eq!(margin(&ketos, &pull_trader).await?, before_failed_margin);
     assert_eq!(ft_balance(&usdc, &pull_trader).await?, before_failed_wallet);
     assert_eq!(ft_balance(&usdc, ketos.as_account()).await?, before_failed_contract);
@@ -1533,7 +1578,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
         &pull_trader,
         &ketos,
         "close_position",
-        json!({ "position_id": pulled_position["id"], "to_wallet": false }),
+        json!({ "position_id": pulled_position["id"], "to_wallet": false,
+            "execution": execution(&worker, 397_700_000, 120_000).await? }),
     )
     .await?;
     assert!(integer(&fallback_payout) > 0);
@@ -1586,8 +1632,9 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     let margin_before = margin(&ketos, &pull_trader).await?;
     let result = call(&pull_trader, &ketos, "open_position", json!({
         "market_id": "NEAR", "side": "long", "margin": (25 * USD).to_string(), "leverage": 2,
+        "execution": execution(&worker, 410_000_000, 120_000).await?,
     })).await?;
-    assert!(result.is_null());
+    assert_eq!(result["error"], "ERR_ACTION_PRICE_UNAVAILABLE");
     assert_eq!(margin(&ketos, &pull_trader).await?, margin_before);
     let bounded = view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?;
     assert!(now_ms(&worker).await? - bounded["price_timestamp_ms"].as_u64().unwrap() >= 300_000);
@@ -1611,6 +1658,7 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     let signature = base64::engine::general_purpose::STANDARD.encode(feed_key.sign(payload.as_bytes()).to_bytes());
     let signed_open = pull_trader.call(ketos.id(), "open_position").args_json(json!({
         "market_id": "NEAR", "side": "long", "margin": (25 * USD).to_string(), "leverage": 2,
+        "execution": execution(&worker, 420_000_000, 120_000).await?,
         "signed_prices": { "payload": payload, "signature": signature, "public_key": public_key },
     })).gas(Gas::from_tgas(100)).transact().await?;
     assert!(signed_open.receipt_failures().is_empty(), "{:?}", signed_open.receipt_failures());
@@ -1622,7 +1670,8 @@ async fn trade_liquidate_and_settle_on_sandbox() -> Result<()> {
     // The keeper key cannot reach anything beyond its seven methods.
     let open = err(bot
         .call(ketos.id(), "open_position")
-        .args_json(json!({ "market_id": "NEAR", "side": "long", "margin": USD.to_string(), "leverage": 2 }))
+        .args_json(json!({ "market_id": "NEAR", "side": "long", "margin": USD.to_string(), "leverage": 2,
+            "execution": execution(&worker, 420_000_000, 120_000).await? }))
         .transact()
         .await);
     assert!(open.contains("MethodNameMismatch"), "{open}");

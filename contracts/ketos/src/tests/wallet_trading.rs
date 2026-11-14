@@ -5,10 +5,15 @@ use near_sdk::serde_json::{json, Value};
 
 fn open_request(margin: Option<u128>) -> Value {
     json!({ "market_id": "NEAR", "side": "long", "leverage": 2,
-        "margin": margin.map(|value| value.to_string()) })
+        "margin": margin.map(|value| value.to_string()),
+        "execution": execution_for_test(Side::Long, false, P4) })
 }
 
-fn receive(ketos: &mut Ketos, trader: &str, amount: u128, prefix: &str, request: Value) -> U128 {
+fn receive(ketos: &mut Ketos, trader: &str, amount: u128, prefix: &str, mut request: Value) -> U128 {
+    if let Some(brackets) = request.get("brackets") {
+        let brackets = near_sdk::serde_json::from_value::<crate::orders::Brackets>(brackets.clone()).unwrap();
+        request["bracket_bounds"] = json!(bracket_execution(Side::Long, Some(&brackets)));
+    }
     ctx_at(USDC, T0_MS);
     match ketos.ft_on_transfer(id(trader), U128(amount), format!("{prefix}:{request}")) {
         PromiseOrValue::Value(unused) => unused,
@@ -76,7 +81,8 @@ fn cold_transfer_is_not_free_margin_and_failed_pull_returns_all_tokens() {
     assert!(ketos.get_account(id("bob.test")).is_none());
     assert_eq!(ketos.get_price_deposit(id("bob.test")).0, 0);
     ctx_at(CONTRACT, now + 1);
-    let result = ketos.on_action_prices(PullAction::WalletOpen {
+    let action_id = ketos.next_price_action_id - 1;
+    let result = ketos.on_action_prices(action_id, PullAction::WalletOpen {
         account_id: id("bob.test"), amount: U128(50 * USD), request,
     }, vec![("NEAR".into(), T0_MS)], now, Err(PromiseError::Failed));
     let PromiseOrValue::Value(unused) = result else { panic!("refund expected"); };
@@ -93,7 +99,8 @@ fn callback_rechecks_caps_and_never_keeps_refunded_usdc_in_margin() {
     ctx_at(CONTRACT, now + 1);
     let action = PullAction::WalletOpen { account_id: id("alice.test"), amount: U128(50 * USD),
         request: near_sdk::serde_json::from_value(open_request(None)).unwrap() };
-    let result = ketos.on_action_prices(action, vec![("NEAR".into(), T0_MS)], now, Ok(json!(true)));
+    let action_id = ketos.reserve_price_action();
+    let result = ketos.on_action_prices(action_id, action, vec![("NEAR".into(), T0_MS)], now, Ok(json!(true)));
     let PromiseOrValue::Value(unused) = result else { panic!("refund expected"); };
     assert_eq!(unused, json!((50 * USD).to_string()));
     assert_eq!(margin(&ketos, "alice.test"), 200 * USD);

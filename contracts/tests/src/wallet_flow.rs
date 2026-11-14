@@ -24,6 +24,7 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     ok(oracle.call("new").args_json(json!({ "owner_id": root.id() })).transact().await?);
     ok(ketos.call("new").args_json(json!({
         "usdc_id": usdc.id(), "oracle_id": oracle.id(), "outlayer_id": oracle.id(), "keeper_id": keeper.id(),
+        "hedge_config": null,
     })).transact().await?);
     ok(root.call(usdc.id(), "storage_deposit").args_json(json!({ "account_id": ketos.id() }))
         .deposit(NearToken::from_millinear(10)).transact().await?);
@@ -45,8 +46,13 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     advance_ms(&worker, 16_000).await?;
     let cached = view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?;
     let before = ft_balance(&usdc, &trader).await?;
-    let open = json!({ "market_id": "NEAR", "side": "long", "margin": (50 * USD).to_string(), "leverage": 2,
-        "brackets": { "take_profit": "500000000", "stop_loss": "300000000" } });
+    let mut open = json!({ "market_id": "NEAR", "side": "long", "margin": (50 * USD).to_string(), "leverage": 2,
+        "brackets": { "take_profit": "500000000", "stop_loss": "300000000" },
+        "execution": execution(&worker, 400_000_000, 120_000).await?,
+        "bracket_bounds": {
+            "take_profit": execution(&worker, 500_000_000, 86_400_000).await?,
+            "stop_loss": execution(&worker, 300_000_000, 86_400_000).await?,
+        } });
     let accepted = wallet_transfer(&trader, &usdc, &ketos, 60 * USD, format!("open:{open}"), funding).await?;
     assert_eq!(integer(&accepted), 50_200_000);
     assert_eq!(ft_balance(&usdc, &trader).await?, before - 50_200_000);
@@ -57,7 +63,8 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     let positions = view(&ketos, "get_positions", json!({ "account_id": trader.id() })).await?;
     assert_eq!(positions.as_array().unwrap().len(), 1);
     let position_id = positions[0]["id"].clone();
-    let payout = call(&trader, &ketos, "close_position", json!({ "position_id": position_id })).await?;
+    let payout = call(&trader, &ketos, "close_position", json!({ "position_id": position_id,
+        "execution": execution(&worker, 400_000_000, 120_000).await? })).await?;
     assert_eq!(ft_balance(&usdc, &trader).await? as i128, before as i128 - 50_200_000 + integer(&payout));
     assert_eq!(margin(&ketos, &trader).await?, 0);
     assert!(view(&ketos, "get_orders", json!({ "account_id": trader.id() })).await?.as_array().unwrap().is_empty());
@@ -67,6 +74,7 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     let mut order = open.clone();
     order["kind"] = json!("limit");
     order["trigger_price"] = json!("390000000");
+    order["execution"] = execution(&worker, 390_000_000, 86_400_000).await?;
     let accepted = wallet_transfer(&trader, &usdc, &ketos, 57 * USD, format!("order:{order}"), 0).await?;
     assert_eq!(integer(&accepted), 50_300_000);
     let orders = view(&ketos, "get_orders", json!({ "account_id": trader.id() })).await?;
@@ -82,7 +90,8 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     let before_refusal = ft_balance(&usdc, &trader).await?;
     let contract_before = ft_balance(&usdc, ketos.as_account()).await?;
     let history_before = view(&ketos, "get_history", json!({ "account_id": trader.id() })).await?;
-    let excessive = json!({ "market_id": "NEAR", "side": "long", "leverage": 2 });
+    let excessive = json!({ "market_id": "NEAR", "side": "long", "leverage": 2,
+        "execution": execution(&worker, 400_000_000, 120_000).await? });
     let accepted = wallet_transfer(&trader, &usdc, &ketos, 11_000 * USD, format!("open:{excessive}"), funding).await?;
     assert_eq!(accepted, "0");
     assert_eq!(ft_balance(&usdc, &trader).await?, before_refusal);
@@ -90,9 +99,30 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     assert_eq!(margin(&ketos, &trader).await?, 0);
     assert_eq!(view(&ketos, "get_history", json!({ "account_id": trader.id() })).await?, history_before);
 
+    // A fresh callback price above the authorization refunds the real NEP-141 transfer.
+    advance_ms(&worker, 16_000).await?;
+    ok(root.call(oracle.id(), "set_price").args_json(json!({
+        "asset_id": "wrap.near", "multiplier": "410000000", "decimals": 8,
+    })).transact().await?);
+    open["execution"] = execution(&worker, 400_000_000, 120_000).await?;
+    let accepted = wallet_transfer(&trader, &usdc, &ketos, 60 * USD, format!("open:{open}"), funding).await?;
+    assert_eq!(accepted, "0");
+    assert_eq!(ft_balance(&usdc, &trader).await?, before_refusal);
+    assert_eq!(ft_balance(&usdc, ketos.as_account()).await?, contract_before);
+    assert_eq!(margin(&ketos, &trader).await?, 0);
+    assert_eq!(view(&ketos, "get_history", json!({ "account_id": trader.id() })).await?, history_before);
+    let rejected_market = view(&ketos, "get_market", json!({ "market_id": "NEAR" })).await?;
+    assert_eq!(rejected_market["price"], "410000000");
+    assert_eq!(rejected_market["oi_long"], "0");
+    assert_eq!(rejected_market["oi_short"], "0");
+    ok(root.call(oracle.id(), "set_price").args_json(json!({
+        "asset_id": "wrap.near", "multiplier": "400000000", "decimals": 8,
+    })).transact().await?);
+
     // A failed cold pull takes no USDC, even though the adapter fee has been spent.
     advance_ms(&worker, 16_000).await?;
     ok(root.call(oracle.id(), "set_tee_failure").args_json(json!({ "fail": true })).transact().await?);
+    open["execution"] = execution(&worker, 400_000_000, 120_000).await?;
     let accepted = wallet_transfer(&trader, &usdc, &ketos, 60 * USD, format!("open:{open}"), funding).await?;
     assert_eq!(accepted, "0");
     assert_eq!(ft_balance(&usdc, &trader).await?, before_refusal);
@@ -110,7 +140,8 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     }}}).to_string();
     let signature = base64::engine::general_purpose::STANDARD.encode(key.sign(payload.as_bytes()).to_bytes());
     let signed = json!({ "market_id": "NEAR", "side": "short", "leverage": 2,
-        "signed_prices": { "payload": payload, "signature": signature, "public_key": public_key } });
+        "signed_prices": { "payload": payload, "signature": signature, "public_key": public_key },
+        "execution": execution(&worker, 400_000_000, 120_000).await? });
     let accepted = wallet_transfer(&trader, &usdc, &ketos, 25 * USD, format!("open:{signed}"), 0).await?;
     assert_eq!(integer(&accepted), (25 * USD) as i128);
     assert_eq!(ft_balance(&usdc, &trader).await?, before_refusal - 25 * USD);
@@ -118,7 +149,8 @@ async fn wallet_funded_trades_and_refunds_on_sandbox() -> Result<()> {
     let positions = view(&ketos, "get_positions", json!({ "account_id": trader.id() })).await?;
     assert_eq!(positions[0]["size"], (50 * USD).to_string());
     assert_eq!(positions[0]["entry_price"], "400000000");
-    let payout = call(&trader, &ketos, "close_position", json!({ "position_id": positions[0]["id"] })).await?;
+    let payout = call(&trader, &ketos, "close_position", json!({ "position_id": positions[0]["id"],
+        "execution": execution(&worker, 400_000_000, 120_000).await? })).await?;
     assert_eq!(ft_balance(&usdc, &trader).await? as i128,
         before_refusal as i128 - (25 * USD) as i128 + integer(&payout));
     assert_eq!(margin(&ketos, &trader).await?, 0);

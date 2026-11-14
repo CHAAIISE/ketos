@@ -226,7 +226,7 @@ fn insolvent_loss_is_capped_at_committed_collateral() {
 #[test]
 fn capped_vault_payout_does_not_report_a_profit_that_was_never_paid() {
     let mut ketos = trading_setup();
-    ketos.vaults[0].balance = 250 * USD;
+    ketos.vaults.get_mut(&VaultId::Core).unwrap().balance = 250 * USD;
     let p = open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     assert_eq!(close_at(&mut ketos, p.id, 800_000_000, T0_MS), 350 * USD);
     let events = history(&ketos, "alice.test");

@@ -18,7 +18,8 @@ fn opening_age_boundary_applies_to_market_cross_and_pending_entries() {
         let p = ketos.open_position_now("NEAR".into(), Side::Long, U128(10 * USD), 2, None, Some(mode));
         assert_eq!(p.entry_price.0, P4);
         ctx_at("alice.test", T0_MS + 30_001);
-        assert_eq!(ketos.try_open_position_for(id("alice.test"), "NEAR".into(), Side::Short, U128(10 * USD), 2, None, mode).unwrap_err(), "ERR_STALE_PRICE");
+        assert_eq!(ketos.try_open_position_for(id("alice.test"), "NEAR".into(), Side::Short, U128(10 * USD), 2, None, mode,
+            execution_for_test(Side::Short, false, P4), None).unwrap_err(), "ERR_STALE_PRICE");
         let order = ketos.place_order_now(limit(10 * USD, 2));
         let reserved = ketos.get_account(id("alice.test")).unwrap().reserved_margin;
         ctx_at("executor.test", T0_MS + 30_001);
@@ -55,14 +56,15 @@ fn stale_owner_closes_settle_isolated_and_cross_with_conservation() {
         let p = ketos.open_position_now("NEAR".into(), Side::Long, U128(100 * USD), 5, None, Some(mode));
         ctx_at("alice.test", T0_MS + 600_001);
         let near_sdk::PromiseOrValue::Value(value) = ketos.execute_priced_action(
-            crate::pull_prices::PullAction::Close { account_id: id("alice.test"), position_id: p.id, to_wallet: false }, true,
+            crate::pull_prices::PullAction::Close { account_id: id("alice.test"), position_id: p.id, to_wallet: false,
+                execution: close_execution_for_test(&ketos, p.id) }, true,
         ).unwrap() else { panic!("close must settle"); };
         let payout: U128 = near_sdk::serde_json::from_value(value).unwrap();
         let payout = payout.0;
         assert!(payout < p.margin.0 - 2_500_000);
         let close = ketos.get_history(id("alice.test"), None, None).into_iter().find(|e| e.kind == HistoryKind::Close).unwrap();
         assert_eq!(close.price.0, 396_000_000);
-        assert_eq!(ketos.vaults[0].balance + margin(&ketos, "alice.test"), 10_200 * USD);
+        assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + margin(&ketos, "alice.test"), 10_200 * USD);
         assert!(ketos.get_position(p.id).is_none());
         drop(ketos);
         near_sdk::mock::with_mocked_blockchain(|b| { b.take_storage(); });
@@ -90,7 +92,7 @@ fn entry_reward_is_reserved_paid_once_and_accounted_without_extra_volume() {
     assert_eq!((stats.volume.0, stats.trades), (500 * USD, 1));
     ctx_at("alice.test", T0_MS);
     ketos.close_position_now(p.id);
-    assert_eq!(ketos.vaults[0].balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"), 10_200 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"), 10_200 * USD);
     let history = ketos.get_history(id("alice.test"), None, None);
     let realized: i128 = history.iter().map(|e| e.realized_pnl.0).sum();
     assert_eq!(ketos.get_account_stats(id("alice.test")).unwrap().realized_pnl.0, realized);
@@ -131,7 +133,7 @@ fn stale_exit_uses_only_last_observed_trigger_and_refunds_sibling_reward() {
     assert!(ketos.get_orders(id("alice.test")).is_empty());
     assert_eq!(ketos.get_account(id("alice.test")).unwrap().reserved_margin.0, 0);
     assert_eq!(margin(&ketos, "executor.test"), 250_000);
-    assert_eq!(ketos.vaults[0].balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"), 10_200 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + margin(&ketos, "alice.test") + margin(&ketos, "executor.test"), 10_200 * USD);
 }
 
 #[test]
@@ -145,8 +147,8 @@ fn latest_curve_charges_both_sides_to_the_assigned_vault_and_close_view() {
     ctx_at("alice.test", T0_MS + 1);
     let payout = ketos.close_position_now(p.id).0;
     assert!(payout <= 94 * USD && payout >= 94 * USD - 2);
-    assert_eq!(ketos.vaults[0].balance + margin(&ketos, "alice.test"), 10_200 * USD);
-    assert_eq!(ketos.vaults[1].balance, 10_000 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance + margin(&ketos, "alice.test"), 10_200 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::LongTail).unwrap().balance, 10_000 * USD);
 }
 
 #[test]
@@ -157,9 +159,7 @@ fn fees_that_consume_the_collateral_reject_before_mutating_cross_or_oi() {
     ketos.markets.get_mut("NEAR").unwrap().fee_bps = 10_000;
     ctx_at("alice.test", T0_MS);
     let before = margin(&ketos, "alice.test");
-    let result = ketos.try_open_position_for(
-        id("alice.test"), "NEAR".into(), Side::Long, U128(USD), 1, None, MarginMode::Cross,
-    );
+    let result = ketos.try_open_position_for(id("alice.test"), "NEAR".into(), Side::Long, U128(USD), 1, None, MarginMode::Cross, execution_for_test(Side::Long, false, P4), None);
     assert_eq!(result.unwrap_err(), "ERR_FEES_EXCEED_MARGIN");
     assert_eq!(margin(&ketos, "alice.test"), before);
     assert_eq!(ketos.get_cross_account(id("alice.test")).position_count, 0);

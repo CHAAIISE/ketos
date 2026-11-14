@@ -4,7 +4,7 @@ use crate::orders::{Brackets, EntryOrder, OrderExecution, OrderRequest};
 
 fn cross_setup() -> Ketos {
     let mut ketos = trading_setup();
-    ketos.vaults[VaultId::LongTail.index()].balance = 10_000 * USD;
+    ketos.vaults.get_mut(&VaultId::LongTail).unwrap().balance = 10_000 * USD;
     ketos
 }
 
@@ -46,7 +46,7 @@ fn assert_backed(ketos: &Ketos, total: u128) {
             );
         }
     }
-    for (index, vault) in ketos.vaults.iter().enumerate() {
+    for (vault_id, vault) in ketos.vaults.iter() {
         liabilities += math::to_i128(vault.balance);
         assert!(vault.cross_receivable <= vault.balance);
         assert_eq!(
@@ -54,7 +54,7 @@ fn assert_backed(ketos: &Ketos, total: u128) {
             accounts
                 .iter()
                 .filter_map(|a| ketos.accounts.get(&id(a)))
-                .map(|a| a.cross_debt[index])
+                .map(|a| if vault_id.is_market() { 0 } else { a.cross_debt[vault_id.shared_index()] })
                 .sum::<u128>()
         );
     }
@@ -73,7 +73,7 @@ fn wallet_cross_close_keeps_partial_cash_and_releases_actual_final_balance() {
             set_price(&mut ketos, "ZEC", P4 / 2, T0_MS);
             let (first, last) = if gain_first { (short.id, long.id) } else { (long.id, short.id) };
             ctx_at("alice.test", T0_MS);
-            let PromiseOrValue::Value(released) = ketos.close_position(first, to_wallet, None) else {
+            let PromiseOrValue::Value(released) = ketos.close_position(first, to_wallet, None, close_execution_for_test(&ketos, first)) else {
                 panic!("cash behind surviving cross positions must not be withdrawn");
             };
             assert_eq!(released, U128(0));
@@ -84,7 +84,7 @@ fn wallet_cross_close_keeps_partial_cash_and_releases_actual_final_balance() {
             assert_backed(&ketos, 20_250 * USD);
 
             ctx_at("alice.test", T0_MS);
-            match ketos.close_position(last, to_wallet, None) {
+            match ketos.close_position(last, to_wallet, None, close_execution_for_test(&ketos, last)) {
                 PromiseOrValue::Promise(promise) => {
                     assert_eq!(to_wallet, None);
                     promise.detach();
@@ -125,7 +125,7 @@ fn partial_cross_wallet_close_returns_only_unused_bracket_rewards() {
     );
     let last = cross_open(&mut ketos, "ZEC", Side::Short, 100 * USD, 5);
     ctx_at("alice.test", T0_MS);
-    assert!(matches!(ketos.close_position(first.id, None, None), PromiseOrValue::Promise(_)));
+    assert!(matches!(ketos.close_position(first.id, None, None, close_execution_for_test(&ketos, first.id)), PromiseOrValue::Promise(_)));
     assert_margin_wallet_transfer(500_000);
     assert_eq!(margin(&ketos, "alice.test"), 500_000);
     assert_eq!(health(&ketos).cash.0, 97 * USD as i128);
@@ -495,7 +495,7 @@ fn same_vault_receivable_is_netted_before_capping_a_cross_gain() {
     let long = cross_open(&mut ketos, "NEAR", Side::Long, 100 * USD, 5);
     let short = cross_open(&mut ketos, "NEAR", Side::Short, 100 * USD, 5);
     // Model a later cash loss while retaining the two already collected opening fees.
-    ketos.vaults[VaultId::Core.index()].balance = 3 * USD;
+    ketos.vaults.get_mut(&VaultId::Core).unwrap().balance = 3 * USD;
     set_price(&mut ketos, "NEAR", P4 / 2, T0_MS);
     ctx_at("alice.test", T0_MS);
     ketos.close_position_now(long.id);

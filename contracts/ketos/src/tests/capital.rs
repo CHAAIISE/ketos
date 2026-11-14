@@ -9,8 +9,8 @@ fn capital_setup(core: u128, tail: u128) -> Ketos {
         market.price_timestamp_ms = T0_MS;
         market.fee_bps = 0;
     }
-    ketos.vaults[VaultId::Core.index()].balance = core;
-    ketos.vaults[VaultId::LongTail.index()].balance = tail;
+    ketos.vaults.get_mut(&VaultId::Core).unwrap().balance = core;
+    ketos.vaults.get_mut(&VaultId::LongTail).unwrap().balance = tail;
     deposit(&mut ketos, "alice.test", 100_000 * USD);
     for market in ["NEAR", "ETH", "ZEC", "DOGE"] {
         seed_depth(&mut ketos, market, measured_curve(), T0_MS);
@@ -28,9 +28,7 @@ fn try_entry(
     mode: MarginMode,
 ) -> Result<PositionView, String> {
     ctx_at("alice.test", T0_MS);
-    ketos.try_open_position_for(
-        id("alice.test"), market.into(), side, U128(collateral), leverage, None, mode,
-    )
+    ketos.try_open_position_for(id("alice.test"), market.into(), side, U128(collateral), leverage, None, mode, execution_for_test(side, false, P4), None)
 }
 
 fn assert_capital_error(result: Result<PositionView, String>, room: u128) {
@@ -41,7 +39,7 @@ fn assert_capital_error(result: Result<PositionView, String>, room: u128) {
 fn empty_and_small_vaults_reject_even_with_deep_exit_liquidity() {
     let mut ketos = capital_setup(0, 0);
     for capital in [0, 49 * USD] {
-        ketos.vaults[VaultId::Core.index()].balance = capital;
+        ketos.vaults.get_mut(&VaultId::Core).unwrap().balance = capital;
         let before_margin = margin(&ketos, "alice.test");
         let market = ketos.get_market("NEAR".into()).unwrap();
         assert_eq!(market.max_oi_per_side.0, 100_000 * USD);
@@ -66,13 +64,13 @@ fn exact_cap_boundary_is_inclusive_without_crediting_the_upcoming_fee() {
         try_entry(&mut ketos, "NEAR", Side::Long, 100 * USD + 1, 1, MarginMode::Isolated),
         100 * USD,
     );
-    assert_eq!(ketos.vaults[VaultId::Core.index()].balance, 50 * USD);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, 50 * USD);
     let position = try_entry(
         &mut ketos, "NEAR", Side::Long, 50 * USD, 2, MarginMode::Isolated,
     ).unwrap();
     assert_eq!(position.size.0, 100 * USD);
     assert_eq!(ketos.vault_exposure(VaultId::Core), 100 * USD);
-    assert_eq!(ketos.vaults[VaultId::Core.index()].balance, 50 * USD + 300_000);
+    assert_eq!(ketos.vaults.get(&VaultId::Core).unwrap().balance, 50 * USD + 300_000);
 }
 
 #[test]
@@ -221,7 +219,7 @@ fn every_market_view_reports_identical_caps_and_latest_grid_censoring() {
 #[test]
 fn receivables_are_excluded_once_from_the_nav_backing_cap() {
     let mut ketos = capital_setup(1_000 * USD, 0);
-    ketos.vaults[VaultId::Core.index()].cross_receivable = 400 * USD;
+    ketos.vaults.get_mut(&VaultId::Core).unwrap().cross_receivable = 400 * USD;
     assert_eq!(ketos.get_vault(VaultId::Core).nav.0, 600 * USD);
     let market = ketos.get_market("NEAR".into()).unwrap();
     assert_eq!(market.vault_backed_cap_usd.0, 1_200 * USD);

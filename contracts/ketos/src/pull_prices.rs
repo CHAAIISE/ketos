@@ -10,8 +10,8 @@ use near_sdk::{
 use crate::cross::MarginMode;
 use crate::market::{MarketId, PriceSource, VaultId, MAX_OPEN_PRICE_AGE_MS};
 use crate::oracle::ORACLE_CALL_DEPOSIT;
-use crate::orders::{Brackets, OrderRequest};
-use crate::position::Side;
+use crate::orders::{BracketBounds, Brackets, OrderRequest};
+use crate::position::{ExecutionBounds, Side};
 use crate::worker_prices::{WORKER_BATCH_SIZE, WORKER_DEPOSIT};
 use crate::{Ketos, KetosExt};
 
@@ -37,6 +37,8 @@ pub enum PullAction {
         leverage: u32,
         brackets: Option<Brackets>,
         margin_mode: MarginMode,
+        execution: ExecutionBounds,
+        bracket_bounds: Option<BracketBounds>,
     },
     WalletOpen {
         account_id: AccountId,
@@ -47,10 +49,24 @@ pub enum PullAction {
         account_id: AccountId,
         position_id: u64,
         to_wallet: bool,
+        execution: ExecutionBounds,
+    },
+    Reduce {
+        account_id: AccountId,
+        request: crate::reduction::ReductionRequest,
+        to_wallet: bool,
+        execution: ExecutionBounds,
     },
     PlaceOrder {
         account_id: AccountId,
         request: OrderRequest,
+        execution: ExecutionBounds,
+        bracket_bounds: Option<BracketBounds>,
+    },
+    AmendBrackets {
+        account_id: AccountId,
+        request: crate::orders::BracketAmendment,
+        to_wallet: bool,
     },
     ExecuteOrders {
         executor: AccountId,
@@ -152,9 +168,11 @@ impl Ketos {
     }
 
     pub(crate) fn vault_price_market_ids(&self, vault_id: VaultId) -> Vec<MarketId> {
+        require!(self.vaults.contains_key(&vault_id), "ERR_UNKNOWN_VAULT");
         self.markets
             .values()
-            .filter(|market| market.vault_id == vault_id)
+            .filter(|market| market.vault_id == vault_id
+                && (!vault_id.is_market() || market.oi_long.0 > 0 || market.oi_short.0 > 0))
             .map(|market| market.id.clone())
             .collect()
     }
@@ -185,6 +203,9 @@ impl Ketos {
             let Some(order) = self.orders.get(id) else {
                 continue;
             };
+            if order.execution.is_none_or(|bounds| bounds.expires_at_ms < env::block_timestamp_ms()) {
+                continue;
+            }
             match &order.request {
                 OrderRequest::Limit(entry) | OrderRequest::StopMarket(entry) => {
                     if !self.markets.get(&entry.market_id)
@@ -289,8 +310,15 @@ impl Ketos {
         }
     }
 
+    pub(crate) fn reserve_price_action(&mut self) -> u64 {
+        let id = self.next_price_action_id;
+        self.next_price_action_id = id.checked_add(1).expect("ERR_PRICE_ACTION_ID_OVERFLOW");
+        self.pending_price_actions.insert(id);
+        id
+    }
+
     fn schedule_action_prices(
-        &self,
+        &mut self,
         action: PullAction,
         requests: Vec<(MarketId, u64)>,
     ) -> Option<Promise> {
@@ -331,6 +359,7 @@ impl Ketos {
             });
         }
         joint.map(|request| {
+            let action_id = self.reserve_price_action();
             request
                 .then(
                     Self::ext(env::current_account_id())
@@ -342,7 +371,7 @@ impl Ketos {
                     Self::ext(env::current_account_id())
                         .with_static_gas(ACTION_CALLBACK_GAS)
                         .with_unused_gas_weight(0)
-                        .on_action_prices(action, requests, requested_at_ms),
+                        .on_action_prices(action_id, action, requests, requested_at_ms),
                 )
         })
     }
@@ -365,37 +394,41 @@ impl Ketos {
     #[private]
     pub fn on_action_prices(
         &mut self,
+        action_id: u64,
         action: PullAction,
         requests: Vec<(MarketId, u64)>,
         requested_at_ms: u64,
         #[callback_result] result: Result<Value, PromiseError>,
     ) -> PromiseOrValue<Value> {
+        let refunds_tokens = matches!(&action, PullAction::DepositVault { .. } | PullAction::WalletOpen { .. });
+        if !self.pending_price_actions.remove(&action_id) {
+            log!("price action cancelled: ERR_ACTION_ALREADY_SETTLED");
+            return PromiseOrValue::Value(if refunds_tokens { json!(U128(0)) }
+                else { json!({ "error": "ERR_ACTION_ALREADY_SETTLED" }) });
+        }
         let now_ms = env::block_timestamp_ms();
-        let prices_received = matches!(result, Ok(Value::Bool(true)))
+        let prices_received = requested_at_ms <= now_ms && matches!(result, Ok(Value::Bool(true)))
             && !requests.is_empty()
             && requests.iter().all(|(id, previous_timestamp)| {
                 self.markets.get(id).is_some_and(|market| {
                     market.price.0 > 0
                         && market.price_timestamp_ms > *previous_timestamp
-                        && market.price_timestamp_ms >= requested_at_ms
                         && market.price_timestamp_ms <= now_ms
                         && now_ms - market.price_timestamp_ms <= MAX_OPEN_PRICE_AGE_MS
                 })
             });
         let cancelled = action.cancelled_value();
-        let refunds_tokens = matches!(&action, PullAction::DepositVault { .. } | PullAction::WalletOpen { .. });
+        let rejected = |reason: &str| PromiseOrValue::Value(if refunds_tokens { cancelled }
+            else { json!({ "error": reason }) });
         if !prices_received && !action.permits_failed_pull_exit() {
             log!("price action cancelled: ERR_ACTION_PRICE_UNAVAILABLE");
-            return PromiseOrValue::Value(cancelled);
+            return rejected("ERR_ACTION_PRICE_UNAVAILABLE");
         }
         match self.execute_priced_action(action, !prices_received) {
             Ok(result) => result,
             Err(error) => {
-                if !refunds_tokens {
-                    env::panic_str(&error);
-                }
                 log!("price action cancelled: {}", error);
-                PromiseOrValue::Value(cancelled)
+                rejected(&error)
             }
         }
     }

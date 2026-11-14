@@ -94,7 +94,7 @@ impl Ketos {
 
         let (position, marked) = self.remove_position(position_id, price, now_ms);
         let vault_id = self.markets.get(&position.market_id).unwrap().vault_id;
-        let vault = &self.vaults[vault_id.index()];
+        let vault = self.vaults.get(&vault_id).unwrap();
         let available = vault.balance - vault.cross_receivable + position.margin;
         let (reward, penalty, returned) = split_equity(marked.equity.min(crate::math::to_i128(available)), position.size);
         let borrow_paid = fees_covered(&position, &marked, marked.borrow_fee);

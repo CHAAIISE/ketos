@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 near-sdk = { workspace = true, features = ["unstable"] }
 near-contract-standards = { workspace = true }
+ketos-hedge-common = { path = "../hedge-common" }
 
 [dev-dependencies]
 near-sdk = { workspace = true, features = ["unit-testing"] }
