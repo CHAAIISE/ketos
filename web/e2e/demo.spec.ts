@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { fundTraderMargin, getMarket, mintTraderUsdc, sandboxViews, setOraclePrice, traderAccountId } from "./sandbox";
+import { fundTraderMargin, getMarket, mintTraderUsdc, refreshSandboxPrices, sandboxViews, setOraclePrice, traderAccountId } from "./sandbox";
 import { formatPrice } from "../lib/near/format";
 
 // Local-chain journey with controlled mock prices and an independently running keeper.
@@ -324,11 +324,15 @@ test("demo journey: fund, trade under live caps, list, LP, stress, keeper exits"
     await expect(ticket.getByLabel("Order funding source")).toBeVisible();
     await ticket.getByLabel("Order funding source").selectOption("margin");
     const liquidationLeverage = Math.min(5, (await getMarket("NEAR")).max_leverage);
+    await refreshSandboxPrices();
     await fillMarketOrder(page, ticket, { side: "long", leverage: liquidationLeverage, size: 500 });
-    await page.locator("[data-primary]:visible").click();
+    await expect(page.getByTestId("open-position")).toBeEnabled({ timeout: 30_000 });
+    await page.getByTestId("open-position").click();
     await expectToast(page, new RegExp(`Long NEAR ${liquidationLeverage}× opened · \\$500\\.00`));
+    await refreshSandboxPrices();
     await fillMarketOrder(page, ticket, { side: "long", leverage: 2, size: 400, stopLoss: 3.8 });
-    await page.locator("[data-primary]:visible").click();
+    await expect(page.getByTestId("open-position")).toBeEnabled({ timeout: 30_000 });
+    await page.getByTestId("open-position").click();
     await expectToast(page, /Long NEAR 2× opened · \$400\.00/);
     await page.getByTestId("account-tab-positions").click();
     await expect(positions).toHaveCount(4);
