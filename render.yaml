@@ -1,0 +1,31 @@
+services:
+  - type: worker
+    name: ketos-keeper
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false
+    startCommand: pnpm keeper
+    autoDeploy: false
+    disk:
+      name: keeper-journal
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NEXT_PUBLIC_NEAR_NETWORK
+        value: testnet
+      - key: NEXT_PUBLIC_KETOS_CONTRACT
+        value: ketos.testnet
+      - key: NEXT_PUBLIC_USDC_CONTRACT
+        value: usdc.ketos.testnet
+      - key: KEEPER_HEDGE_JOURNAL
+        value: /var/data/hedge-submissions.json
+      # Restricted function-call key of keeper.ketos.testnet; never a deployment key.
+      - key: KEEPER_PRIVATE_KEY
+        sync: false
+      - key: OUTLAYER_PAYMENT_KEY
+        sync: false
+      - key: ONECLICK_JWT
+        sync: false
