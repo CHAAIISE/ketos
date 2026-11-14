@@ -303,7 +303,8 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
             <span className="w-10 text-right text-label tabular-nums text-tertiary">{percent}%</span></div>
         </div>
         {sizeError ? <FieldMessage tone="error" role="status">{sizeError}</FieldMessage> : null}
-        <BracketFields enabled={bracketsOn} onToggle={(v) => { setBracketsOn(v); resetResult(); }} side={side} reference={entryPrice} size={preview.size}
+        {/* Percent ↔ price uses the latest known mark even before a fresh signed price; submission revalidates against the fresh entry. */}
+        <BracketFields enabled={bracketsOn} onToggle={(v) => { setBracketsOn(v); resetResult(); }} side={side} reference={isMarket ? reference.price : entryPrice} size={preview.size}
           takeProfit={takeProfit} stopLoss={stopLoss} onTakeProfit={(v) => { setTakeProfit(v); resetResult(); }} onStopLoss={(v) => { setStopLoss(v); resetResult(); }} />
         {kind !== "limit" || bracketsOn ? <label className="flex items-center justify-between text-label text-tertiary">Price tolerance
           <select aria-label="Price tolerance" value={toleranceBps} onChange={(event) => { setToleranceBps(Number(event.target.value)); resetResult(); }} className="rounded-md border border-border bg-input px-2 py-1 text-foreground">
