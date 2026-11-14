@@ -31,6 +31,22 @@ function Row({ label, children, tone }: { label: ReactNode; children: ReactNode;
   </div>;
 }
 
+/** Slider presets at their linear positions, dropping any that would overlap its left neighbour. */
+function leveragePresets(max: number): { n: number; pct: number }[] {
+  const presets: { n: number; pct: number }[] = [];
+  for (const n of [...new Set([1, ...[2, 5, 10].filter((value) => value < max), max])]) {
+    const pct = max > 1 ? ((n - 1) / (max - 1)) * 100 : 0;
+    const previous = presets.at(-1);
+    if (previous && pct - previous.pct < 12) {
+      // The live maximum always stays; it displaces an intermediate neighbour instead.
+      if (n !== max) continue;
+      if (presets.length > 1) presets.pop();
+    }
+    presets.push({ n, pct });
+  }
+  return presets;
+}
+
 const ENTRY_TABS = [
   { id: "market", label: "Market", testId: "order-type-market" },
   { id: "limit", label: "Limit", testId: "order-type-limit" },
@@ -252,10 +268,10 @@ export function OrderTicket({ market, step, account, side, onSideChange, classNa
           onChange={(event) => { setLeverageChoice(Number(event.target.value)); resetResult(); }} className="h-5 w-full accent-foreground" />
         {/* Presets sit where the linear slider puts them; the inset matches the thumb's travel. */}
         <div className="relative mx-2 h-4 text-label text-tertiary">
-          {[...new Set([1, ...[2, 5, 10].filter((n) => n < market.max_leverage), market.max_leverage])].map((n) => <button type="button" key={n}
+          {leveragePresets(market.max_leverage).map(({ n, pct }, index, all) => <button type="button" key={n}
             onClick={() => { setLeverageChoice(n); resetResult(); }}
-            style={{ left: `${market.max_leverage > 1 ? ((n - 1) / (market.max_leverage - 1)) * 100 : 0}%` }}
-            className={cn("absolute -translate-x-1/2 rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", n === leverage && "text-foreground")}>{n}×</button>)}
+            style={{ left: `${pct}%`, transform: `translateX(${index === 0 ? "-0.5rem" : index === all.length - 1 ? "calc(-100% + 0.5rem)" : "-50%"})` }}
+            className={cn("absolute rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", n === leverage && "text-foreground")}>{n}×</button>)}
         </div>
       </div>
       <dl><Row label={<Term hint="Estimated from the reviewed entry reference and opening fees. Cross liquidation depends on the whole pool, not one price.">Est. Liq. Price</Term>}>
