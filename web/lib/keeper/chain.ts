@@ -189,18 +189,29 @@ export function oneClickDepthSource(jwt: string | undefined): DepthSource {
         const error = `1Click token list unavailable: ${errorMessage(e)}`;
         return markets.map(({ id: market }) => ({ market, error }));
       }
+      // Oldest measurements first, so a provider rate limit cannot starve the same markets every cycle.
+      const ordered = [...markets].sort((a, b) => a.depth_measured_at_ms - b.depth_measured_at_ms);
       const results: (MarketDepth | { market: MarketId; error: string })[] = [];
       let next = 0;
-      await Promise.all(Array.from({ length: Math.min(6, markets.length) }, async () => {
-        while (next < markets.length) {
+      await Promise.all(Array.from({ length: Math.min(3, ordered.length) }, async () => {
+        while (next < ordered.length) {
           const index = next++;
-          const market = markets[index];
-          const measuredAtMs = Date.now();
-          try {
-            const curve = await sampleAsset(market.intents_asset_id, { tokens, jwt, fetchImpl: fetchWithDeadline });
-            results[index] = { market: market.id, samples: curve.samples, measuredAtMs };
-          } catch (e) {
-            results[index] = { market: market.id, error: errorMessage(e) };
+          const market = ordered[index];
+          for (let attempt = 0; ; attempt++) {
+            const measuredAtMs = Date.now();
+            try {
+              const curve = await sampleAsset(market.intents_asset_id, { tokens, jwt, fetchImpl: fetchWithDeadline });
+              results[index] = { market: market.id, samples: curve.samples, measuredAtMs };
+              break;
+            } catch (e) {
+              const error = errorMessage(e);
+              const retryAfter = /retry after (\d+) seconds?/i.exec(error);
+              if (!retryAfter || attempt >= 2) {
+                results[index] = { market: market.id, error };
+                break;
+              }
+              await new Promise<void>((resolve) => setTimeout(resolve, (Math.min(Number(retryAfter[1]), 60) + 1) * 1000));
+            }
           }
         }
       }));

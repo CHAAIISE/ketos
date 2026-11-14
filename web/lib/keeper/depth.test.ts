@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 describe("1Click keeper depth source", () => {
-  it.each([0, 1, 6, 7, 15])("samples all %i markets with at most six simultaneous asset samplers", async (count) => {
+  it.each([0, 1, 3, 4, 15])("samples all %i markets with at most three simultaneous asset samplers", async (count) => {
     const markets = Array.from({ length: count }, (_, index) => market(index));
     const gates = new Map(markets.map((m) => [m.intents_asset_id, gate()]));
     const started: string[] = [];
@@ -95,16 +95,16 @@ describe("1Click keeper depth source", () => {
     });
     vi.stubGlobal("fetch", fetchImpl);
     const pending = oneClickDepthSource(undefined).sample(markets);
-    const slots = Math.min(6, count);
+    const slots = Math.min(3, count);
     await vi.waitFor(() => expect(started).toEqual(markets.slice(0, slots).map((m) => m.intents_asset_id)));
     expect(maxActive).toBe(slots);
-    if (count > 6) {
+    if (count > 3) {
       now += 1_000;
-      gates.get(markets[5].intents_asset_id)!.release();
-      await vi.waitFor(() => expect(started).toHaveLength(7));
-      expect(started[6]).toBe(markets[6].intents_asset_id);
+      gates.get(markets[2].intents_asset_id)!.release();
+      await vi.waitFor(() => expect(started).toHaveLength(4));
+      expect(started[3]).toBe(markets[3].intents_asset_id);
       expect(activeAssets.has(markets[0].intents_asset_id)).toBe(true);
-      expect(maxActive).toBe(6);
+      expect(maxActive).toBe(3);
     }
     now += 1_000;
     for (const held of gates.values()) held.release();
@@ -119,7 +119,7 @@ describe("1Click keeper depth source", () => {
       expect(result).toEqual({
         market: markets[index].id,
         samples: SAMPLE_SIZES_USD.map((size_usd) => ({ size_usd, impact_bps: 125 })),
-        measuredAtMs: index < 6 ? 1_800_000_000_000 : index === 6 ? 1_800_000_001_000 : now,
+        measuredAtMs: index < 3 ? 1_800_000_000_000 : index === 3 ? 1_800_000_001_000 : now,
       });
     }
   });
@@ -150,6 +150,30 @@ describe("1Click keeper depth source", () => {
       expect(result).toMatchObject({ samples: SAMPLE_SIZES_USD.map((size_usd) => ({ size_usd, impact_bps: 125 })) });
     }
     expect(markets.map((m) => attempts.get(m.intents_asset_id) ?? 0)).toEqual([2, 14, 2, 0, 8, 7, 7, 7, 7]);
+  });
+
+  it("samples the stalest markets first and waits out a rate limit instead of skipping the market", async () => {
+    vi.useFakeTimers();
+    const markets = [{ ...market(0), depth_measured_at_ms: 3 }, { ...market(1), depth_measured_at_ms: 1 }, { ...market(2), depth_measured_at_ms: 2 }];
+    const order: string[] = [];
+    let limited = false;
+    const fetchImpl = vi.fn<FetchImpl>(async (url, init) => {
+      if (String(url).endsWith("/tokens")) return Response.json(tokenList(markets));
+      const { originAsset, amount } = JSON.parse(String(init?.body)) as { originAsset: string; amount: string };
+      if (Number(amount) === 1_000_000_000 && !order.includes(originAsset)) order.push(originAsset);
+      if (originAsset === markets[1].intents_asset_id && !limited) {
+        limited = true;
+        return Response.json({ message: "Rate limit exceeded, retry after 2 seconds" }, { status: 429 });
+      }
+      return quoteResponse(Number(amount) / 1_000_000);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    const pending = oneClickDepthSource(undefined).sample(markets);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const results = await pending;
+    vi.useRealTimers();
+    expect(order.slice(0, 3)).toEqual([markets[1], markets[2], markets[0]].map((m) => m.intents_asset_id));
+    for (const result of results) expect(result).toHaveProperty("samples");
   });
 
   it("returns an explicit token-list error for every market without issuing quotes", async () => {
