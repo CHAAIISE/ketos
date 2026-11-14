@@ -7,6 +7,7 @@ import {
   createChart,
   HistogramSeries,
   LineStyle,
+  type AutoscaleInfo,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
@@ -58,6 +59,8 @@ export function PriceChart({ market, className }: { market: Market; className?: 
   const orders = useOrders();
   const [editing, setEditing] = useState<{ position: Position; proposal: BracketProposal } | null>(null);
   const oraclePrice = market.price > 0n ? Number(market.price) / 10 ** PRICE_DECIMALS : null;
+  // Position levels (entry, liquidation, TP/SL) must stay visible even far from recent candles.
+  const levels = useRef<number[]>([]);
 
   useEffect(() => {
     const el = container.current;
@@ -77,6 +80,14 @@ export function PriceChart({ market, className }: { market: Market; className?: 
       crosshair: { vertLine: { color: "#7A7A7A" }, horzLine: { color: "#7A7A7A" } },
     });
     const candleSeries = chart.addSeries(CandlestickSeries, {
+      autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+        const base = original();
+        if (!base?.priceRange || levels.current.length === 0) return base;
+        return { ...base, priceRange: {
+          minValue: Math.min(base.priceRange.minValue, ...levels.current),
+          maxValue: Math.max(base.priceRange.maxValue, ...levels.current),
+        } };
+      },
       title: "Spot",
       upColor: UP,
       downColor: DOWN,
@@ -168,7 +179,7 @@ export function PriceChart({ market, className }: { market: Market; className?: 
       if (position.market_id !== market.id) continue;
       addLine(position.entry_price, `Entry #${position.id}`, "#B6BBC7");
       if (position.margin_mode === "isolated" && position.liquidation_price > 0n) {
-        addLine(position.liquidation_price, `Liq #${position.id}`, "#F5B83D");
+        addLine(position.liquidation_price, `Liq #${position.id}`, "#FB923C");
       }
       for (const [kind, id] of [["takeProfit", position.take_profit], ["stopLoss", position.stop_loss]] as const) {
         const order = orders.data?.find((order) => order.id === id);
@@ -176,6 +187,8 @@ export function PriceChart({ market, className }: { market: Market; className?: 
         exits.push({ ...addLine(order.request.trigger_price, `${kind === "takeProfit" ? "TP" : "SL"} #${position.id}`, kind === "takeProfit" ? UP : DOWN), position, kind });
       }
     }
+    levels.current = lines.map((line) => line.options().price);
+    h.candles.priceScale().applyOptions({ autoScale: true });
     let drag: { exit: typeof exits[number]; price: number; pointerId: number } | null = null;
     const nearest = (event: PointerEvent) => {
       const bounds = el.getBoundingClientRect();
