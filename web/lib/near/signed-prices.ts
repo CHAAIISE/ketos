@@ -130,8 +130,8 @@ export type SignedPriceLoader = (assets: string[], signer: string) => Promise<Si
 
 /** Upper bound for one browser acquisition, including provider queueing. */
 export const SIGNED_PRICE_WAIT_MS = 180_000;
-/** A reviewed batch is reused only while it leaves time to sign inside the contract's 15 s window. */
-export const SIGNED_PRICE_REUSE_MS = 8_000;
+/** A reviewed batch is reused while it leaves ~3 s to sign and land inside the contract's 15 s window. */
+export const SIGNED_PRICE_REUSE_MS = 12_000;
 const pendingSchema = z.object({ status: z.literal("pending"), callId: z.string() });
 const recent = new Map<string, SignedPrices>();
 

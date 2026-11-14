@@ -112,7 +112,7 @@ describe("signed envelope verification", () => {
     const calls = fetchMock.mock.calls.length;
     expect(await signedPricesFor(contracts, request)).toEqual(prices);
     expect(fetchMock).toHaveBeenCalledTimes(calls);
-    vi.setSystemTime(Date.now() + 8_000);
+    vi.setSystemTime(Date.now() + 12_000);
     prices = envelope(["ETH"], -60_000);
     const stale = signedPricesFor(contracts, request);
     await vi.advanceTimersByTimeAsync(2_000);
